@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>Flightdeck</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="layout">
+    <!-- Linke Seitenleiste: Sessions -->
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <span class="app-name">Flightdeck</span>
+        <div class="header-actions">
+          <button id="btn-grid" class="icon-btn" title="Grid-Übersicht aller Sessions (Strg+G)" aria-label="Grid-Übersicht">⊞</button>
+          <button id="btn-claude-sessions" class="icon-btn" title="Claude-Sessions durchsuchen &amp; fortsetzen" aria-label="Claude-Sessions">⟲</button>
+          <div class="new-session-wrap">
+            <button id="btn-new" title="Neue Session (Standard-Shell)" aria-label="Neue Session">+</button>
+            <button id="btn-new-menu" title="Shell auswählen" aria-label="Shell auswählen">▾</button>
+            <div id="shell-menu" class="menu hidden"></div>
+          </div>
+        </div>
+      </div>
+      <div id="session-list"></div>
+    </aside>
+    <div class="divider" id="divider-left"></div>
+
+    <!-- Mitte: Terminals -->
+    <main id="terminal-area">
+      <div id="terminals"></div>
+      <div id="empty-state" class="hidden">
+        <p>Keine Session aktiv.</p>
+        <p><kbd>+</kbd> klicken oder <kbd>Strg</kbd>+<kbd>T</kbd> drücken.</p>
+      </div>
+      <!-- Grid-Übersicht: alle Sessions als Live-Kacheln -->
+      <div id="grid-view" class="hidden">
+        <div id="grid-container"></div>
+      </div>
+    </main>
+    <div class="divider" id="divider-right"></div>
+
+    <!-- Rechtes Panel: Git-Kontext, Verlauf und Notizen als Tabs -->
+    <aside id="context-panel">
+      <nav id="panel-tabs">
+        <button class="panel-tab active" data-tab="git">Git<span class="tab-badge hidden" id="badge-git"></span></button>
+        <button class="panel-tab" data-tab="report">Report</button>
+        <button class="panel-tab" data-tab="history">Verlauf<span class="tab-badge hidden" id="badge-history"></span></button>
+        <button class="panel-tab" data-tab="todos">Notizen<span class="tab-badge hidden" id="badge-todos"></span></button>
+      </nav>
+      <div class="panel-page" id="page-git">
+        <section id="pr-section">
+          <h2>Pull Request</h2>
+          <div id="pr-card"><div class="muted">Keine Session ausgewählt</div></div>
+          <div id="pr-extra"></div>
+        </section>
+        <section id="files-section">
+          <h2>Geänderte Dateien</h2>
+          <div id="file-list"></div>
+        </section>
+      </div>
+      <div class="panel-page hidden" id="page-report">
+        <div id="report-content"><div class="muted">—</div></div>
+      </div>
+      <div class="panel-page hidden" id="page-history">
+        <div id="history-list"></div>
+      </div>
+      <div class="panel-page hidden" id="page-todos">
+        <div id="todo-list"></div>
+        <input id="todo-input" type="text" placeholder="Neue Notiz… (Enter)" />
+      </div>
+    </aside>
+  </div>
+
+  <!-- Datei-Vorschau -->
+  <div id="preview-overlay" class="hidden">
+    <div id="preview-window">
+      <div id="preview-header">
+        <span id="preview-title"></span>
+        <button id="preview-close" title="Schließen (Esc)" aria-label="Vorschau schließen">✕</button>
+      </div>
+      <pre id="preview-content"></pre>
+    </div>
+  </div>
+
+  <!-- Claude-Session-Browser -->
+  <div id="sessions-overlay" class="hidden">
+    <div id="sessions-window">
+      <div id="sessions-header">
+        <input id="sessions-search" type="text" placeholder="Sessions durchsuchen (Name, Prompt, Projekt)…" />
+        <button id="sessions-close" title="Schließen (Esc)" aria-label="Session-Browser schließen">✕</button>
+      </div>
+      <div id="sessions-list"></div>
+    </div>
+  </div>
+
+  <!-- Popover: Titel/Label bearbeiten -->
+  <div id="meta-popover" class="hidden">
+    <label>Titel <input id="meta-title" type="text" placeholder="(automatisch)" /></label>
+    <label>Label <input id="meta-label" type="text" placeholder="z. B. Ticket-Nr." /></label>
+    <div class="popover-actions">
+      <button id="meta-save">Speichern</button>
+      <button id="meta-cancel">Abbrechen</button>
+    </div>
+  </div>
+
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
