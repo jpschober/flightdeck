@@ -715,15 +715,6 @@ button:active { transform: translateY(0.5px); }
 /* Agent-Report                                                        */
 /* ------------------------------------------------------------------ */
 #page-report { overflow-y: auto; padding: 12px; }
-.report-head {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 2px 8px;
-  margin-bottom: 6px;
-}
-.report-title { font-weight: 600; font-size: 13px; }
-.report-meta { font-size: 11px; color: var(--text-faint); font-family: var(--mono); grid-column: 1 / -1; }
 
 /* --- Nutzungslimits ------------------------------------------------------ */
 #page-usage { overflow-y: auto; padding: 12px; }
@@ -870,43 +861,7 @@ button:active { transform: translateY(0.5px); }
 }
 .tab-dot.warn { background: var(--yellow); }
 .tab-dot.over { background: var(--red); }
-
-.report-unbound {
-  margin: 0 12px 10px;
-  padding: 7px 9px;
-  border-left: 2px solid var(--warn, #d8a13a);
-  background: rgba(216, 161, 58, 0.09);
-  color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.rep-file {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 6px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 12px;
-  min-width: 0;
-  transition: background var(--speed) var(--ease);
-}
-.rep-file:hover { background: var(--bg-hover); }
 .rep-edits { flex-shrink: 0; color: var(--text-faint); font-size: 10px; }
-
-.cmd-row { padding: 3px 0; min-width: 0; }
-.cmd-row code {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text-dim);
-  display: block;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cmd-desc { display: block; font-size: 11px; color: var(--text); }
 
 #file-list { min-height: 0; }
 

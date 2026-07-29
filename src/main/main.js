@@ -1,7 +1,7 @@
 'use strict';
 const { app, BrowserWindow, ipcMain, shell: electronShell } = require('electron');
 const {
-  listClaudeSessions, getAgentReport,
+  listClaudeSessions,
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
 } = require('./claude-sessions');
 const path = require('path');
@@ -835,11 +835,6 @@ ipcMain.handle('claude:sessions', () => listClaudeSessions());
 
 ipcMain.handle('usage:get', (e, force) => getUsage(Boolean(force)));
 
-ipcMain.handle('claude:report', (e, id) => {
-  const s = sessions.get(id);
-  if (!s) return { found: false };
-  return getAgentReport(s.cwd, s.gitRoot, s.claudeSessionId, s.bindingExact);
-});
 
 ipcMain.on('app:focus', () => {
   if (win && !win.isDestroyed()) {

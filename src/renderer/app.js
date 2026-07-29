@@ -203,7 +203,6 @@ function setActive(id) {
   const active = id ? sessions.get(id) : null;
   renderHistory(active);
   loadTodosFor(active);
-  if (activePanelTab === 'report') loadReport();
 }
 
 async function closeSession(id) {
@@ -571,99 +570,6 @@ window.api.onTodosChanged((key, todos) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// Agent-Report: strukturierte Sicht auf das Claude-Transcript der Session
-// ---------------------------------------------------------------------------
-const reportContentEl = $('#report-content');
-
-async function loadReport() {
-  const s = activeId && sessions.get(activeId);
-  if (!s) {
-    reportContentEl.innerHTML = '<div class="muted">Keine Session ausgewählt</div>';
-    return;
-  }
-  reportContentEl.innerHTML = '<div class="muted">Lade Report…</div>';
-  const res = await window.api.getReport(s.id);
-  if (s.id !== activeId || activePanelTab !== 'report') return; // inzwischen weitergeklickt
-  if (!res.found) {
-    reportContentEl.innerHTML = `
-      <div class="muted">Keine Claude-Session zu diesem Projekt gefunden.</div>
-      <div class="muted" style="margin-top:6px">Der Report entsteht automatisch, sobald in dieser
-      Session <code>claude</code> gearbeitet hat.</div>`;
-    return;
-  }
-  const r = res.report;
-  const fmt = (ts) => ts ? new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?';
-
-  reportContentEl.innerHTML = '';
-  const frag = document.createDocumentFragment();
-
-  const head = document.createElement('div');
-  head.className = 'report-head';
-  head.innerHTML = `
-    <div class="report-title">${escapeHtml(r.slug || 'Claude-Session')}</div>
-    <button id="report-refresh" class="icon-btn" title="Report aktualisieren" aria-label="Aktualisieren">↻</button>
-    <div class="report-meta">${fmt(r.firstTs)} – ${fmt(r.lastTs)} · ${r.turns} Turns${r.truncated ? ' · (Anfang gekürzt)' : ''}</div>`;
-  frag.appendChild(head);
-
-  // Ohne Bindung an ein Transcript ist der Report nur die zuletzt geschriebene
-  // Datei des Projekts - bei mehreren Chats im selben Repo womoeglich ein
-  // fremder. Das darf nicht wie ein sicheres Ergebnis aussehen.
-  if (!res.bound) {
-    const warn = document.createElement('div');
-    warn.className = 'report-unbound';
-    warn.textContent = 'Nicht sicher dieser Session zugeordnet – über '
-      + 'Zeitstempel ermittelt, das kann bei parallelen Chats im selben '
-      + 'Projekt danebengreifen. Eindeutig wird es, sobald claude in diesem '
-      + 'Tab gestartet wird.';
-    frag.appendChild(warn);
-  }
-
-  if (r.summary) {
-    const d = buildDetails('rep-summary', 'Zusammenfassung des Agenten', `<div class="md">${mdToHtml(r.summary)}</div>`);
-    d.open = true;
-    frag.appendChild(d);
-  }
-
-  if (r.files.length) {
-    const rows = r.files.map((f) =>
-      `<div class="rep-file" data-path="${escapeHtml(f.path)}">
-         <span class="file-path">&lrm;${escapeHtml(f.path)}&lrm;</span>
-         <span class="rep-edits">${f.edits}×</span>
-       </div>`).join('');
-    const d = buildDetails('rep-files', `Bearbeitete Dateien (${r.files.length})`, rows);
-    d.open = true;
-    d.addEventListener('click', (e) => {
-      const row = e.target.closest('.rep-file');
-      if (row) openPreview(activeId, row.dataset.path, 'wt');
-    });
-    frag.appendChild(d);
-  }
-
-  if (r.commits.length) {
-    frag.appendChild(buildDetails('rep-commits', `Commits (${r.commits.length})`,
-      r.commits.map((c) => `<div class="commit-row">${escapeHtml(c)}</div>`).join('')));
-  }
-
-  if (r.tests.length) {
-    frag.appendChild(buildDetails('rep-tests', `Testläufe (${r.tests.length})`,
-      r.tests.map((t) => `<div class="cmd-row"><code>${escapeHtml(t.cmd)}</code></div>`).join('')));
-  }
-
-  if (r.commands.length) {
-    frag.appendChild(buildDetails('rep-cmds', `Ausgeführte Kommandos (${r.commands.length})`,
-      r.commands.map((c) =>
-        `<div class="cmd-row">${c.desc ? `<span class="cmd-desc">${escapeHtml(c.desc)}</span>` : ''}<code>${escapeHtml(c.cmd)}</code></div>`).join('')));
-  }
-
-  if (r.questions.length) {
-    frag.appendChild(buildDetails('rep-questions', `Rückfragen des Agenten (${r.questions.length})`,
-      r.questions.map((q) => `<div class="md-p">${escapeHtml(q)}</div>`).join('')));
-  }
-
-  reportContentEl.appendChild(frag);
-  reportContentEl.querySelector('#report-refresh').addEventListener('click', loadReport);
-}
 
 // ---------------------------------------------------------------------------
 // Nutzungslimits des Abos: Ist-Verbrauch, dazu der anteilig erlaubte Stand.
@@ -833,12 +739,10 @@ function setPanelTab(tab) {
     btn.classList.toggle('active', btn.dataset.tab === tab);
   }
   $('#page-git').classList.toggle('hidden', tab !== 'git');
-  $('#page-report').classList.toggle('hidden', tab !== 'report');
   $('#page-history').classList.toggle('hidden', tab !== 'history');
   $('#page-todos').classList.toggle('hidden', tab !== 'todos');
   $('#page-usage').classList.toggle('hidden', tab !== 'usage');
   const s = activeId && sessions.get(activeId);
-  if (tab === 'report') loadReport();
   if (tab === 'usage') loadUsage();
   if (tab === 'history' && s) {
     s.unseenHist = 0;
