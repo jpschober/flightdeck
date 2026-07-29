@@ -803,27 +803,97 @@ const previewOverlay = $('#preview-overlay');
 const previewTitle = $('#preview-title');
 const previewContent = $('#preview-content');
 
+const previewModesEl = $('#preview-modes');
+const MD_EXT = /\.(md|markdown|mdx)$/i;
+let previewState = null; // { sessionId, filePath, source, mode, cache }
+
+function highlightDiff(text) {
+  return text.split('\n').map((line) => {
+    const esc = escapeHtml(line);
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) {
+      return `<span class="dl-meta">${esc}</span>`;
+    }
+    if (line.startsWith('@@')) return `<span class="dl-hunk">${esc}</span>`;
+    if (line.startsWith('+')) return `<span class="dl-add">${esc}</span>`;
+    if (line.startsWith('-')) return `<span class="dl-del">${esc}</span>`;
+    return esc;
+  }).join('\n');
+}
+
+// Holt eine Ansicht und merkt sie sich - der Wechsel zwischen den Modi soll
+// nicht jedes Mal neu über IPC gehen.
+async function fetchPreview(wantContent) {
+  const key = wantContent ? 'content' : 'default';
+  if (previewState.cache[key]) return previewState.cache[key];
+  const res = await window.api.previewFile(
+    previewState.sessionId, previewState.filePath, previewState.source,
+    wantContent ? { content: true } : undefined,
+  );
+  previewState.cache[key] = res;
+  return res;
+}
+
+async function renderPreview() {
+  const st = previewState;
+  // Die formatierte Ansicht braucht den Dateiinhalt, nicht den Diff
+  const res = await fetchPreview(st.mode === 'md');
+  if (previewState !== st) return; // inzwischen andere Datei geöffnet
+
+  if (res.kind === 'error') {
+    previewContent.innerHTML = `<pre class="pv-pre">${escapeHtml(res.text)}</pre>`;
+    return;
+  }
+  if (st.mode === 'md') {
+    previewContent.innerHTML = `<div class="pv-md md">${mdToHtml(res.text)}</div>`;
+  } else if (res.kind === 'diff') {
+    previewContent.innerHTML = `<pre class="pv-pre">${highlightDiff(res.text)}</pre>`;
+  } else {
+    previewContent.innerHTML = `<pre class="pv-pre">${escapeHtml(res.text)}</pre>`;
+  }
+  previewContent.scrollTop = 0;
+}
+
+function renderPreviewModes(hasDiff) {
+  const modes = [];
+  if (hasDiff) modes.push({ id: 'diff', label: 'Diff' });
+  modes.push({ id: 'raw', label: hasDiff ? 'Datei' : 'Quelltext' });
+  if (MD_EXT.test(previewState.filePath)) modes.push({ id: 'md', label: 'Formatiert' });
+
+  previewModesEl.innerHTML = '';
+  if (modes.length < 2) return; // nichts umzuschalten
+  for (const m of modes) {
+    const b = document.createElement('button');
+    b.textContent = m.label;
+    b.className = m.id === previewState.mode ? 'active' : '';
+    b.setAttribute('role', 'tab');
+    b.addEventListener('click', () => {
+      if (previewState.mode === m.id) return;
+      previewState.mode = m.id;
+      renderPreviewModes(hasDiff);
+      renderPreview();
+    });
+    previewModesEl.appendChild(b);
+  }
+}
+
 async function openPreview(sessionId, filePath, source) {
   previewTitle.textContent = filePath + ' (lädt…)';
-  previewContent.textContent = '';
+  previewContent.innerHTML = '';
+  previewModesEl.innerHTML = '';
   previewOverlay.classList.remove('hidden');
 
-  const res = await window.api.previewFile(sessionId, filePath, source);
-  previewTitle.textContent = res.path;
-  if (res.kind === 'diff') {
-    previewContent.innerHTML = res.text.split('\n').map((line) => {
-      const esc = escapeHtml(line);
-      if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) {
-        return `<span class="dl-meta">${esc}</span>`;
-      }
-      if (line.startsWith('@@')) return `<span class="dl-hunk">${esc}</span>`;
-      if (line.startsWith('+')) return `<span class="dl-add">${esc}</span>`;
-      if (line.startsWith('-')) return `<span class="dl-del">${esc}</span>`;
-      return esc;
-    }).join('\n');
-  } else {
-    previewContent.textContent = res.text;
-  }
+  previewState = { sessionId, filePath, source, mode: 'diff', cache: {} };
+  const st = previewState;
+
+  const first = await fetchPreview(false);
+  if (previewState !== st) return;
+  previewTitle.textContent = first.path;
+
+  const hasDiff = first.kind === 'diff';
+  // Markdown ohne Diff gleich formatiert zeigen - dafür öffnet man es meistens
+  st.mode = hasDiff ? 'diff' : (MD_EXT.test(filePath) ? 'md' : 'raw');
+  renderPreviewModes(hasDiff);
+  await renderPreview();
 }
 
 function closePreview() {

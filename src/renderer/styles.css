@@ -1105,8 +1105,55 @@ button:active { transform: translateY(0.5px); }
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.5;
-  white-space: pre;
   tab-size: 4;
+}
+/* Roh- und Diff-Ansicht behalten die Zeilenumbrueche der Datei, die
+   gerenderte Markdown-Ansicht bricht wie Fliesstext um. */
+#preview-content > pre.pv-pre {
+  margin: 0;
+  font: inherit;
+  white-space: pre;
+}
+#preview-content > .pv-md {
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.65;
+  max-width: 78ch;
+}
+/* Die .md-Regeln sind fuer das schmale Panel gedacht; in der breiten Vorschau
+   duerfen Ueberschriften wieder Groessenabstufungen haben. */
+#preview-content .pv-md .md-h { margin: 18px 0 6px; color: var(--text); }
+#preview-content .pv-md h3.md-h { font-size: 18px; }
+#preview-content .pv-md h4.md-h { font-size: 15px; }
+#preview-content .pv-md h5.md-h { font-size: 13px; }
+#preview-content .pv-md .md-p { margin: 8px 0; }
+#preview-content .pv-md .md-list { margin: 8px 0 8px 20px; }
+#preview-content .pv-md .md-code { font-size: 12px; padding: 10px 12px; }
+
+#preview-modes {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 10px;
+  padding: 2px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+}
+#preview-modes button {
+  padding: 3px 9px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+#preview-modes button:hover { color: var(--text); }
+#preview-modes button.active {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+  font-weight: 600;
 }
 #preview-content .dl-add { color: var(--green); background: rgba(78, 201, 122, 0.08); display: inline-block; width: 100%; padding: 0 6px; margin: 0 -6px; border-radius: 3px; }
 #preview-content .dl-del { color: var(--red); background: rgba(224, 95, 106, 0.08); display: inline-block; width: 100%; padding: 0 6px; margin: 0 -6px; border-radius: 3px; }

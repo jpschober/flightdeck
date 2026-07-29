@@ -828,9 +828,24 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 const MAX_PREVIEW = 512 * 1024;
 
-async function previewFile(session, relPath, source) {
+async function previewFile(session, relPath, source, opts = {}) {
   const root = session.gitRoot || session.cwd;
   const abs = path.resolve(root, relPath);
+
+  // Die Vorschau kann den Dateiinhalt statt des Diffs anfordern - fuer die
+  // gerenderte Markdown-Ansicht, die auf dem Diff nichts anzeigen koennte.
+  if (opts.content) {
+    try {
+      const stat = fs.statSync(abs);
+      if (stat.isDirectory()) return { kind: 'error', path: relPath, text: 'Das ist ein Verzeichnis.' };
+      if (stat.size > MAX_PREVIEW) {
+        return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n… (gekuerzt)' };
+      }
+      return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
+    } catch (e) {
+      return { kind: 'error', path: relPath, text: 'Datei konnte nicht gelesen werden: ' + e.message };
+    }
+  }
 
   if (source === 'pr' && session.pr && session.pr.baseRefName) {
     const diff = await run('git', ['diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], root);
@@ -912,10 +927,10 @@ ipcMain.handle('session:setMeta', (e, id, meta) => {
   refreshSession(s, true);
 });
 
-ipcMain.handle('file:preview', (e, id, relPath, source) => {
+ipcMain.handle('file:preview', (e, id, relPath, source, opts) => {
   const s = sessions.get(id);
   if (!s) return { kind: 'error', path: relPath, text: 'Session nicht gefunden' };
-  return previewFile(s, relPath, source);
+  return previewFile(s, relPath, source, opts || {});
 });
 
 ipcMain.on('open-external', (e, url) => {
