@@ -21,6 +21,27 @@ const TERM_FONT = [
   '"Noto Sans Mono"', '"Ubuntu Mono"', 'Menlo', 'Consolas', 'monospace',
 ].join(', ');
 
+// Vollbild-Oberflächen wie Claude schalten die Mausmeldung ein; xterm.js gibt
+// Klicks dann an die Anwendung weiter statt zu markieren. Mit gedrückter
+// Umschalttaste bleibt die Markierung möglich - darauf weist der Hinweis unten hin.
+async function copySelection(term) {
+  const text = term.getSelection();
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function pasteInto(sessionId) {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) window.api.input(sessionId, text);
+  } catch { /* Zwischenablage nicht lesbar */ }
+}
+
 const TERM_THEME = {
   background: '#101116',
   foreground: '#d6dae3',
@@ -153,7 +174,18 @@ async function newSession(shellId, opts) {
     const k = ev.key.toLowerCase();
     if (!ev.shiftKey && (k === 't' || k === 'g')) return false;
     if (ev.shiftKey && k === 'w') return false;
+    // Strg+C ist im Terminal SIGINT, kann also nicht kopieren. Strg+Umschalt+C
+    // und Strg+Umschalt+V sind die üblichen Terminal-Entsprechungen.
+    if (ev.shiftKey && k === 'c') { copySelection(term); return false; }
+    if (ev.shiftKey && k === 'v') { pasteInto(meta.id); return false; }
     return true;
+  });
+
+  // Rechtsklick: Auswahl kopieren, sonst einfügen - wie in den meisten Terminals
+  paneEl.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    if (term.hasSelection()) copySelection(term);
+    else pasteInto(meta.id);
   });
 
   const s = {
