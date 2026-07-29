@@ -194,19 +194,15 @@ button:active { transform: translateY(0.5px); }
 .si-status.exited {
   background: var(--text-faint);
 }
+/* Ruhig, nicht pulsierend: "wartet auf dich" ist ein Zustand, kein Vorgang -
+   eine Animation liest sich, als liefe gerade etwas. */
 .si-status.attention {
   background: var(--accent);
-  box-shadow: 0 0 0 0 rgba(79, 140, 255, 0.7);
-  animation: attn-pulse 1.4s ease-out infinite;
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.18);
 }
 @keyframes busy-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.35; transform: scale(0.75); }
-}
-@keyframes attn-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(79, 140, 255, 0.7); }
-  70% { box-shadow: 0 0 0 6px rgba(79, 140, 255, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(79, 140, 255, 0); }
 }
 
 .si-title {

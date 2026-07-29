@@ -343,6 +343,16 @@ function setState(session, state) {
   if (win && !win.isDestroyed()) win.webContents.send('session:state', session.id, state);
 }
 
+// "Wartet auf dich" gilt erst, nachdem der Agent ueberhaupt einen Auftrag
+// bekommen hat. Direkt nach `claude` steht er per Definition am Prompt - das
+// als Aufmerksamkeitsmeldung zu verschicken, waere jedes Mal ein Fehlalarm.
+function setAttention(session) {
+  if (!session.agentPrompted) return false;
+  if (session.state === 'idle') return false;
+  setState(session, 'attention');
+  return true;
+}
+
 // Wertet OSC 133/7770 im Datenstrom aus; Matches, die komplett im bereits
 // verarbeiteten Tail liegen, werden uebersprungen (keine Doppelverarbeitung).
 function applyStateFromData(session, text, tailLen, rawData) {
@@ -356,7 +366,13 @@ function applyStateFromData(session, text, tailLen, rawData) {
     try { cmd = Buffer.from(m[1], 'base64').toString('utf8'); } catch { /* egal */ }
     session.currentCmd = cmd;
     session.cmdWatched = WATCHED_CMD_RE.test(cmd);
-    if (session.cmdWatched) beginAgentBinding(session, cmd);
+    if (session.cmdWatched) {
+      beginAgentBinding(session, cmd);
+      // Frisch gestartet: der Agent zeigt seine Oberflaeche und wartet auf den
+      // ersten Prompt. Das ist kein "braucht dich", sondern der Normalzustand -
+      // erst ab dem ersten Prompt sind Aufmerksamkeitsmeldungen sinnvoll.
+      session.agentPrompted = false;
+    }
     addHistory(session, cmd, 'shell');
   }
 
@@ -403,7 +419,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
     } else if (first === '✳') {                  // Stern: Eingabe erwartet
       session.hasClaudeOsc = true;
       clearTimeout(session.attnTimer);
-      if (session.state !== 'idle') setState(session, 'attention');
+      setAttention(session);
     }
   }
 
@@ -422,8 +438,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
       continue;
     }
     // Explizite Meldung ("Claude needs your attention", Permission-Anfrage, ...)
-    if (session.state !== 'idle') setState(session, 'attention');
-    if (win && !win.isDestroyed()) {
+    if (setAttention(session) && win && !win.isDestroyed()) {
       win.webContents.send('session:notify', session.id, payload.slice(0, 200));
     }
   }
@@ -447,7 +462,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
     const visible = rawData.replace(OSC_ANY_RE, '');
     if (visible.includes('\x07')) {
       // Terminal-Bell: Claude meldet Fertigstellung/Rueckfrage
-      setState(session, 'attention');
+      setAttention(session);
       clearTimeout(session.attnTimer);
     } else {
       // Echo des eigenen Tippens (Claude rendert die Eingabezeile) zaehlt nicht
@@ -456,7 +471,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
       clearTimeout(session.attnTimer);
       session.attnTimer = setTimeout(() => {
         if (!session.exited && session.state === 'busy' && session.cmdWatched) {
-          setState(session, 'attention');
+          setAttention(session);
         }
       }, ATTENTION_QUIET_MS);
     }
@@ -560,7 +575,10 @@ function feedInputRecon(session, data) {
     if (ch === '\r') {
       const text = buf; buf = '';
       // Shell-Kommandos kommen exakt ueber OSC 7770 - hier nur Agent-Prompts
-      if (session.cmdWatched) addHistory(session, text, 'agent');
+      if (session.cmdWatched) {
+        session.agentPrompted = true;
+        addHistory(session, text, 'agent');
+      }
     } else if (ch === '\x7f' || ch === '\b') {
       buf = buf.slice(0, -1);
     } else if (ch === '\x03' || ch === '\x15') { // Ctrl+C / Ctrl+U: Zeile verwerfen
