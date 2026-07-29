@@ -666,7 +666,161 @@ async function loadReport() {
 }
 
 // ---------------------------------------------------------------------------
-// Panel-Tabs (Git / Report / Verlauf / Notizen) mit Badges
+// Nutzungslimits des Abos: Ist-Verbrauch, dazu der anteilig erlaubte Stand.
+// Nach 3 von 7 Tagen sind 3/7 = 42,9 % das Soll - wer darueber liegt, reisst
+// das Limit, wenn das Tempo bleibt.
+// ---------------------------------------------------------------------------
+const usageContentEl = $('#usage-content');
+const dotUsageEl = $('#dot-usage');
+let usageTimer = null;
+
+const STATUS_LABEL = {
+  ok: 'im Rahmen',
+  warn: 'knapp drüber',
+  over: 'Limit wird gerissen',
+  early: 'zu früh im Fenster',
+  unknown: 'keine Daten',
+};
+
+function fmtPct(n) {
+  if (typeof n !== 'number') return '–';
+  return (Math.round(n * 10) / 10).toLocaleString('de-DE') + ' %';
+}
+
+// "in 1 h 47" bzw. "in 3 Tagen 5 h"
+function fmtUntil(ts) {
+  if (!ts) return '';
+  let ms = ts - Date.now();
+  if (ms <= 0) return 'jetzt';
+  const days = Math.floor(ms / 86400000); ms -= days * 86400000;
+  const hours = Math.floor(ms / 3600000); ms -= hours * 3600000;
+  const mins = Math.floor(ms / 60000);
+  if (days) return `in ${days} ${days === 1 ? 'Tag' : 'Tagen'} ${hours} h`;
+  if (hours) return `in ${hours} h ${String(mins).padStart(2, '0')}`;
+  return `in ${mins} min`;
+}
+
+function fmtReset(ts) {
+  if (!ts) return 'unbekannt';
+  return new Date(ts).toLocaleString('de-DE',
+    { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderLimit(title, limit, opts = {}) {
+  if (!limit) return '';
+  const status = limit.status || 'unknown';
+  const used = typeof limit.used === 'number' ? limit.used : 0;
+  const budget = typeof limit.budget === 'number' ? limit.budget : null;
+  // Soll-Marke nur zeigen, wo sie etwas aussagt (nicht am Fensterrand)
+  const showMark = budget !== null && budget > 1 && budget < 99 && !opts.hideMark;
+
+  let verdict = '';
+  if (status === 'unknown') {
+    verdict = '<div class="uz-note">Keine Daten für dieses Limit.</div>';
+  } else if (status === 'early') {
+    verdict = `<div class="uz-note">Noch zu früh im Fenster für eine Hochrechnung.
+      Erlaubt wären bis jetzt <strong>${fmtPct(budget)}</strong>.</div>`;
+  } else {
+    const over = used - budget;
+    verdict = `<div class="uz-verdict ${status}">
+      <span class="uz-target">Erlaubt bis jetzt: <strong>${fmtPct(budget)}</strong></span>
+      <span class="uz-delta">${over > 0
+        ? `${fmtPct(over)} darüber`
+        : `${fmtPct(-over)} Luft`}</span>
+      <span class="uz-proj">Hochrechnung Fensterende: <strong>${fmtPct(limit.projected)}</strong></span>
+    </div>`;
+  }
+
+  return `
+    <section class="uz-card ${status}">
+      <header class="uz-head">
+        <span class="uz-dot ${status}"></span>
+        <span class="uz-title">${escapeHtml(title)}</span>
+        <span class="uz-status">${STATUS_LABEL[status]}</span>
+      </header>
+      <div class="uz-bar" role="img" aria-label="${fmtPct(used)} verbraucht">
+        <div class="uz-fill ${status}" style="width:${Math.min(used, 100)}%"></div>
+        ${showMark ? `<div class="uz-mark" style="left:${budget}%" title="Soll: ${fmtPct(budget)}"></div>` : ''}
+      </div>
+      <div class="uz-meta">
+        <span class="uz-used">${fmtPct(used)} verbraucht</span>
+        <span class="uz-reset">Reset ${fmtReset(limit.resetsAt)} · ${fmtUntil(limit.resetsAt)}</span>
+      </div>
+      ${verdict}
+    </section>`;
+}
+
+// Schlechtester Status gewinnt - der Punkt am Tab soll das knappste Limit zeigen
+const SEVERITY = { unknown: 0, early: 0, ok: 1, warn: 2, over: 3 };
+
+function worstStatus(data) {
+  let worst = 'unknown';
+  for (const l of [data.fiveHour, data.sevenDay, data.sevenDayOpus]) {
+    if (l && SEVERITY[l.status] > SEVERITY[worst]) worst = l.status;
+  }
+  return worst;
+}
+
+async function loadUsage(force = false) {
+  // Bewusst ohne Sichtbarkeitspruefung: der Punkt am Tab soll auch dann
+  // stimmen, wenn der Tab zu ist. In eine versteckte Seite zu rendern kostet
+  // nichts.
+  const data = await window.api.getUsage(force);
+
+  if (data.error && !data.stale) {
+    usageContentEl.innerHTML = `
+      <div class="uz-error">${escapeHtml(data.error)}</div>
+      <div class="muted" style="margin-top:8px">Die Zahlen stammen aus deinem
+      Claude-Abo (derselbe Stand wie <code>/usage</code>).</div>`;
+    dotUsageEl.classList.add('hidden');
+    return;
+  }
+
+  const parts = [
+    renderLimit('5-Stunden-Fenster', data.fiveHour),
+    renderLimit('7-Tage-Fenster', data.sevenDay),
+    renderLimit('7 Tage · Opus', data.sevenDayOpus),
+  ].filter(Boolean);
+
+  if (!parts.length) {
+    usageContentEl.innerHTML = '<div class="muted">Keine Limits gemeldet.</div>';
+    dotUsageEl.classList.add('hidden');
+    return;
+  }
+
+  const stamp = new Date(data.fetchedAt).toLocaleTimeString('de-DE',
+    { hour: '2-digit', minute: '2-digit' });
+  usageContentEl.innerHTML = `
+    <div class="uz-top">
+      ${data.plan ? `<span class="uz-plan">${escapeHtml(data.plan)}</span>` : '<span></span>'}
+      <button id="usage-refresh" class="icon-btn" title="Jetzt aktualisieren" aria-label="Aktualisieren">↻</button>
+      <span class="uz-stamp">Stand ${stamp}${data.stale ? ' · veraltet' : ''}</span>
+    </div>
+    ${data.stale ? `<div class="uz-error">${escapeHtml(data.error)}</div>` : ''}
+    ${parts.join('')}
+    <div class="uz-legend">Der Strich in der Leiste markiert, wie viel zum
+    jetzigen Zeitpunkt verbraucht sein dürfte, wenn das Kontingent gleichmäßig
+    über das Fenster reichen soll.</div>`;
+  usageContentEl.querySelector('#usage-refresh')
+    .addEventListener('click', () => loadUsage(true));
+
+  const worst = worstStatus(data);
+  dotUsageEl.className = 'tab-dot ' + worst;
+  dotUsageEl.classList.toggle('hidden', worst !== 'warn' && worst !== 'over');
+}
+
+// Im Hintergrund mitlaufen, damit der Punkt am Tab stimmt, ohne dass man
+// den Tab offen haben muss
+function startUsagePolling() {
+  loadUsage(true).catch(() => { /* offline o. ae. */ });
+  clearInterval(usageTimer);
+  usageTimer = setInterval(() => {
+    loadUsage().catch(() => { /* egal */ });
+  }, 120_000);
+}
+
+// ---------------------------------------------------------------------------
+// Panel-Tabs (Git / Report / Nutzung / Verlauf / Notizen) mit Badges
 // ---------------------------------------------------------------------------
 const badgeGit = $('#badge-git');
 const badgeHistory = $('#badge-history');
@@ -682,8 +836,10 @@ function setPanelTab(tab) {
   $('#page-report').classList.toggle('hidden', tab !== 'report');
   $('#page-history').classList.toggle('hidden', tab !== 'history');
   $('#page-todos').classList.toggle('hidden', tab !== 'todos');
+  $('#page-usage').classList.toggle('hidden', tab !== 'usage');
   const s = activeId && sessions.get(activeId);
   if (tab === 'report') loadReport();
+  if (tab === 'usage') loadUsage();
   if (tab === 'history' && s) {
     s.unseenHist = 0;
     renderHistory(s);
@@ -1103,4 +1259,5 @@ window.addEventListener('keydown', (e) => {
   shells = await window.api.listShells();
   buildShellMenu();
   await newSession(shells[0] && shells[0].id);
+  startUsagePolling();
 })();

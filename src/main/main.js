@@ -9,6 +9,7 @@ const os = require('os');
 const fs = require('fs');
 const pty = require('@lydell/node-pty');
 const { getGitInfo, getPrInfo, run } = require('./gitinfo');
+const { getUsage } = require('./usage');
 
 let win = null;
 const sessions = new Map(); // id -> session
@@ -831,6 +832,8 @@ ipcMain.handle('session:buffer', (e, id) => {
 });
 
 ipcMain.handle('claude:sessions', () => listClaudeSessions());
+
+ipcMain.handle('usage:get', (e, force) => getUsage(Boolean(force)));
 
 ipcMain.handle('claude:report', (e, id) => {
   const s = sessions.get(id);

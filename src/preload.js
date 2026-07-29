@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('api', {
   getHistory: (id) => ipcRenderer.invoke('history:get', id),
   getTodos: (id) => ipcRenderer.invoke('todos:get', id),
   setTodos: (id, todos) => ipcRenderer.invoke('todos:set', id, todos),
+  getUsage: (force) => ipcRenderer.invoke('usage:get', force),
 
   onData: (cb) => ipcRenderer.on('session:data', (e, id, data) => cb(id, data)),
   onState: (cb) => ipcRenderer.on('session:state', (e, id, state) => cb(id, state)),
