@@ -12,6 +12,15 @@ const emptyStateEl = $('#empty-state');
 const prCardEl = $('#pr-card');
 const fileListEl = $('#file-list');
 
+// Erster Treffer gewinnt. Ohne die Linux-/macOS-Schriften fiel die Liste auf
+// das generische `monospace` zurueck - zusammen mit lineHeight 1.25 ergab das
+// die zu grossen Zeilenabstaende.
+const TERM_FONT = [
+  '"Cascadia Code"', '"Cascadia Mono"', '"JetBrains Mono"', '"Fira Code"',
+  '"Hack"', '"Source Code Pro"', '"DejaVu Sans Mono"', '"Liberation Mono"',
+  '"Noto Sans Mono"', '"Ubuntu Mono"', 'Menlo', 'Consolas', 'monospace',
+].join(', ');
+
 const TERM_THEME = {
   background: '#101116',
   foreground: '#d6dae3',
@@ -123,9 +132,9 @@ async function newSession(shellId, opts) {
   terminalsEl.appendChild(paneEl);
 
   const term = new Terminal({
-    fontFamily: '"Cascadia Code", "Cascadia Mono", Consolas, monospace',
+    fontFamily: TERM_FONT,
     fontSize: 14,
-    lineHeight: 1.25,
+    lineHeight: 1.0,
     cursorBlink: true,
     allowProposedApi: true,
     scrollback: 8000,
@@ -816,7 +825,8 @@ function openGrid() {
       cols: s.term.cols,
       rows: s.term.rows,
       fontSize: 7,
-      fontFamily: '"Cascadia Code", "Cascadia Mono", Consolas, monospace',
+      fontFamily: TERM_FONT,
+      lineHeight: 1.0,
       theme: TERM_THEME,
       disableStdin: true,
       cursorBlink: false,
