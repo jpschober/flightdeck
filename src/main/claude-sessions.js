@@ -8,6 +8,11 @@ const os = require('os');
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const cache = new Map(); // filePath -> { mtime, data }
 
+// Claude leitet den Verzeichnisnamen aus dem cwd ab: alles ausser [A-Za-z0-9]
+// wird zu '-'. Ein Worktree unterhalb des Repos landet daher in einem eigenen
+// Verzeichnis, dessen Name mit dem des Repos beginnt.
+function encodeProjectDir(p) { return (p || '').replace(/[^a-zA-Z0-9]/g, '-'); }
+
 // Kopf der Datei lesen: cwd, Slug und erste Nutzer-Nachricht als Vorschau.
 // file-history-snapshot-Zeilen koennen riesig sein und werden uebersprungen.
 function readHeadSignals(filePath) {
@@ -229,14 +234,138 @@ function findSessionFile(cwds) {
   return candidates.sort((a, b) => b.mtime - a.mtime)[0].file;
 }
 
-function getAgentReport(cwd, gitRoot) {
+function getAgentReport(cwd, gitRoot, sessionId, exact) {
   try {
-    const file = findSessionFile([cwd, gitRoot]);
+    // Ist das Transcript der Session bekannt, gewinnt es immer. Sonst bleibt
+    // nur "juengste Datei im Projektverzeichnis" - bei mehreren parallelen
+    // Chats im selben Repo ist das Raten.
+    const file = (sessionId && findTranscriptById(sessionId)) || findSessionFile([cwd, gitRoot]);
     if (!file) return { found: false };
-    return { found: true, file, report: buildReport(file) };
+    const matches = Boolean(sessionId && file.endsWith(sessionId + '.jsonl'));
+    return {
+      found: true,
+      file,
+      bound: matches && Boolean(exact),
+      report: buildReport(file),
+    };
   } catch (err) {
     return { found: false, error: err.message };
   }
 }
 
-module.exports = { listClaudeSessions, getAgentReport };
+// ---------------------------------------------------------------------------
+// Transcript-Bindung: welche Claude-Session laeuft in diesem Terminal?
+//
+// Das Transcript ist die einzige Quelle, die verraet, wo der Agent wirklich
+// arbeitet - wechselt er in einen Worktree, bleibt der cwd der Shell stehen.
+// Gebunden wird ueber die Session-ID (UUID), nicht ueber den Dateipfad: beim
+// Wechsel in einen Worktree wandert die Datei in ein anderes Projektverzeichnis.
+// ---------------------------------------------------------------------------
+
+// Projektverzeichnisse zu einem cwd: das eigene plus alle Worktrees darunter
+function projectDirsFor(cwd) {
+  const prefix = encodeProjectDir(cwd);
+  if (!prefix) return [];
+  let dirs = [];
+  try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { return []; }
+  return dirs
+    .filter((d) => d === prefix || d.startsWith(prefix + '-'))
+    .map((d) => path.join(PROJECTS_DIR, d));
+}
+
+function eachTranscript(cwd, fn) {
+  for (const dir of projectDirsFor(cwd)) {
+    let files;
+    try { files = fs.readdirSync(dir); } catch { continue; }
+    for (const f of files) {
+      if (!f.endsWith('.jsonl')) continue;
+      let stat;
+      try { stat = fs.statSync(path.join(dir, f)); } catch { continue; }
+      fn(path.basename(f, '.jsonl'), stat, path.join(dir, f));
+    }
+  }
+}
+
+// Zustand vor dem Start von `claude` festhalten
+function snapshotTranscripts(cwd) {
+  const seen = new Map(); // sessionId -> mtimeMs
+  eachTranscript(cwd, (id, stat) => seen.set(id, stat.mtimeMs));
+  return seen;
+}
+
+// Nach dem Start: das Transcript, das seither entstanden ist bzw. als erstes
+// geschrieben wurde. Eine neu angelegte Datei ist ein sicheres Signal und
+// schlaegt daher jede bereits vorhandene.
+function detectTranscript(cwd, snapshot, startedAt) {
+  let best = null;
+  eachTranscript(cwd, (id, stat) => {
+    if (stat.size < 200 || stat.mtimeMs < startedAt) return;
+    const before = snapshot.get(id);
+    if (before !== undefined && stat.mtimeMs <= before) return; // unveraendert
+    const fresh = before === undefined;
+    if (!best || (fresh && !best.fresh)
+        || (fresh === best.fresh && stat.mtimeMs < best.mtime)) {
+      best = { id, fresh, mtime: stat.mtimeMs };
+    }
+  });
+  return best ? best.id : null;
+}
+
+// Zuletzt benutzte Session eines Verzeichnisses - das ist die Auswahlregel
+// von `claude --continue`. `before` blendet Schreibvorgaenge aus, die erst
+// nach dem Start passiert sind (etwa die neue Session selbst).
+function newestTranscript(cwd, before) {
+  let best = null;
+  eachTranscript(cwd, (id, stat) => {
+    if (stat.size < 200) return;
+    if (before && stat.mtimeMs > before) return;
+    if (!best || stat.mtimeMs > best.mtime) best = { id, mtime: stat.mtimeMs };
+  });
+  return best ? best.id : null;
+}
+
+function findTranscriptById(sessionId) {
+  if (!sessionId) return null;
+  let dirs;
+  try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { return null; }
+  for (const d of dirs) {
+    const fp = path.join(PROJECTS_DIR, d, sessionId + '.jsonl');
+    try { if (fs.statSync(fp).size > 0) return fp; } catch { /* nicht hier */ }
+  }
+  return null;
+}
+
+// Letztes im Transcript vermerktes cwd = aktuelles Arbeitsverzeichnis des
+// Agenten (bei Worktree-Wechsel zieht es mitten in der Datei um).
+const CWD_RE = /"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+
+function readAgentCwd(sessionId) {
+  const file = findTranscriptById(sessionId);
+  if (!file) return null;
+  try {
+    const size = fs.statSync(file).size;
+    const readSize = Math.min(size, 131072);
+    const buf = Buffer.alloc(readSize);
+    const fd = fs.openSync(file, 'r');
+    fs.readSync(fd, buf, 0, readSize, size - readSize);
+    fs.closeSync(fd);
+    const text = buf.toString('utf8');
+    let last = null; let m;
+    CWD_RE.lastIndex = 0;
+    while ((m = CWD_RE.exec(text)) !== null) last = m[1];
+    if (!last) return null;
+    try { return JSON.parse('"' + last + '"'); } catch { return last; }
+  } catch {
+    return null;
+  }
+}
+
+module.exports = {
+  listClaudeSessions,
+  getAgentReport,
+  snapshotTranscripts,
+  detectTranscript,
+  newestTranscript,
+  findTranscriptById,
+  readAgentCwd,
+};

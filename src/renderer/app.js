@@ -168,6 +168,8 @@ async function newSession(shellId, opts) {
     exited: false,
     state: 'idle',
     gitRoot: null,
+    agentCwd: null,
+    worktree: null,
     history: [],
     unseenHist: 0,
     todoKey: null,
@@ -282,12 +284,26 @@ function updateSessionItem(s) {
 // ---------------------------------------------------------------------------
 function renderContextPanel() {
   const s = activeId ? sessions.get(activeId) : null;
+  const wtBannerEl = $('#wt-banner');
   if (!s) {
     prCardEl.innerHTML = '<div class="muted">Keine Session ausgewählt</div>';
     $('#pr-extra').innerHTML = '';
     fileListEl.innerHTML = '';
+    wtBannerEl.classList.add('hidden');
     updateBadges(null);
     return;
+  }
+
+  // --- Worktree-Hinweis ---
+  // Branch und Dateien stammen dann aus dem Verzeichnis des Agenten, nicht
+  // aus dem der Shell - ohne Hinweis waere das nicht nachvollziehbar.
+  wtBannerEl.classList.toggle('hidden', !s.worktree);
+  if (s.worktree) {
+    wtBannerEl.innerHTML = `
+      <span class="wt-icon">⑂</span>
+      <span class="wt-text">Agent arbeitet im Worktree
+        <code>${escapeHtml(s.worktree)}</code></span>
+      <span class="wt-sub" title="${escapeHtml(s.agentCwd || '')}">Shell: ${escapeHtml(s.cwd)}</span>`;
   }
 
   // --- PR-Karte ---
@@ -589,6 +605,19 @@ async function loadReport() {
     <button id="report-refresh" class="icon-btn" title="Report aktualisieren" aria-label="Aktualisieren">↻</button>
     <div class="report-meta">${fmt(r.firstTs)} – ${fmt(r.lastTs)} · ${r.turns} Turns${r.truncated ? ' · (Anfang gekürzt)' : ''}</div>`;
   frag.appendChild(head);
+
+  // Ohne Bindung an ein Transcript ist der Report nur die zuletzt geschriebene
+  // Datei des Projekts - bei mehreren Chats im selben Repo womoeglich ein
+  // fremder. Das darf nicht wie ein sicheres Ergebnis aussehen.
+  if (!res.bound) {
+    const warn = document.createElement('div');
+    warn.className = 'report-unbound';
+    warn.textContent = 'Nicht sicher dieser Session zugeordnet – über '
+      + 'Zeitstempel ermittelt, das kann bei parallelen Chats im selben '
+      + 'Projekt danebengreifen. Eindeutig wird es, sobald claude in diesem '
+      + 'Tab gestartet wird.';
+    frag.appendChild(warn);
+  }
 
   if (r.summary) {
     const d = buildDetails('rep-summary', 'Zusammenfassung des Agenten', `<div class="md">${mdToHtml(r.summary)}</div>`);
@@ -1001,6 +1030,8 @@ window.api.onInfo((info) => {
     cwd: info.cwd,
     branch: info.branch,
     gitRoot: info.gitRoot,
+    agentCwd: info.agentCwd,
+    worktree: info.worktree,
     files: info.files,
     pr: info.pr,
     title: info.title,

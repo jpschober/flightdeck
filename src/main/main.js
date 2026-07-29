@@ -1,6 +1,9 @@
 'use strict';
 const { app, BrowserWindow, ipcMain, shell: electronShell } = require('electron');
-const { listClaudeSessions, getAgentReport } = require('./claude-sessions');
+const {
+  listClaudeSessions, getAgentReport,
+  snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
+} = require('./claude-sessions');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -297,6 +300,7 @@ const OSC7_RE = /\x1b\]7;file:\/\/[^/\x07\x1b]*([^\x07\x1b]+)(?:\x07|\x1b\\)/g;
 const OSC99_RE = /\x1b\]9;9;"?([^"\x07\x1b]+)"?(?:\x07|\x1b\\)/g;
 const OSC133_RE = /\x1b\]133;([A-D])[^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const OSCCMD_RE = /\x1b\]7770;cmd;([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)/g;
+const OSCSESS_RE = /\x1b\]7771;([a-z]+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
 const OSC_ANY_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // Claude Code (als iTerm angesprochen): OSC 0/2 = Titel, OSC 9 = Notification
 const OSC_TITLE_RE = /\x1b\](?:0|2);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
@@ -351,7 +355,17 @@ function applyStateFromData(session, text, tailLen, rawData) {
     try { cmd = Buffer.from(m[1], 'base64').toString('utf8'); } catch { /* egal */ }
     session.currentCmd = cmd;
     session.cmdWatched = WATCHED_CMD_RE.test(cmd);
+    if (session.cmdWatched) beginAgentBinding(session, cmd);
     addHistory(session, cmd, 'shell');
+  }
+
+  // Meldung des claude-Wrappers - muss nach OSC 7770 ausgewertet werden,
+  // weil beginAgentBinding() die Bindung zuruecksetzt.
+  OSCSESS_RE.lastIndex = 0;
+  while ((m = OSCSESS_RE.exec(text)) !== null) {
+    if (m.index + m[0].length <= tailLen) continue;
+    if (m[1] === 'session' && m[2]) bindAgentSession(session, m[2], true);
+    else if (m[1] === 'continue') bindContinuedSession(session);
   }
 
   OSC133_RE.lastIndex = 0;
@@ -445,6 +459,79 @@ function applyStateFromData(session, text, tailLen, rawData) {
         }
       }, ATTENTION_QUIET_MS);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agent-Bindung: welches Claude-Transcript gehoert zu dieser Session?
+//
+// Ohne diese Bindung raet die App ueber "juengste Datei im Projektverzeichnis"
+// - laufen mehrere Chats im selben Repo, zeigt der Report den falschen an, und
+// ein Worktree-Wechsel des Agenten bleibt unsichtbar.
+// ---------------------------------------------------------------------------
+const RESUME_RE = /(?:--resume|--session-id|(?:^|\s)-r)[= ]+([0-9a-f-]{36})/i;
+
+function bindAgentSession(session, sessionId, exact) {
+  session.claudeSessionId = sessionId;
+  session.bindingExact = exact;
+  session.transcriptSnapshot = null;
+}
+
+// `claude --continue` setzt die zuletzt benutzte Session des Verzeichnisses
+// fort. Dieselbe Regel wenden wir im Moment des Starts an - das ist keine
+// Heuristik, sondern die Auswahl, die Claude selbst trifft.
+function bindContinuedSession(session) {
+  const id = newestTranscript(session.cwd, session.claudeStartedAt);
+  if (id) bindAgentSession(session, id, true);
+}
+
+function beginAgentBinding(session, cmd) {
+  session.claudeSessionId = null;
+  session.bindingExact = false;
+  session.agentCwd = null;
+  session.transcriptSnapshot = snapshotTranscripts(session.cwd);
+  session.claudeStartedAt = Date.now() - 1000; // Uhrendrift/mtime-Granularitaet
+  session.bindingBase = session.cwd;
+
+  // Nennt die Kommandozeile die ID selbst, ist nichts weiter zu tun. Bei
+  // --fork-session entsteht dagegen eine neue ID - dann greift der Wrapper.
+  const m = RESUME_RE.exec(cmd);
+  if (m && !/--fork-session/.test(cmd)) bindAgentSession(session, m[1], true);
+}
+
+function updateAgentBinding(session) {
+  if (!session.bindingBase) return;
+  // Verlaesst die Shell das Verzeichnis, in dem `claude` gestartet wurde,
+  // passt die Bindung nicht mehr.
+  if (session.cwd !== session.bindingBase) {
+    session.claudeSessionId = null;
+    session.bindingExact = false;
+    session.agentCwd = null;
+    session.bindingBase = null;
+    session.transcriptSnapshot = null;
+    return;
+  }
+  // Notnagel fuer Faelle ohne Wrapper-Meldung (`command claude`, npx, eine
+  // Shell ohne Integration): ueber Zeitstempel raten. Das kann danebengehen,
+  // wenn zeitgleich in einem anderen Fenster gearbeitet wird - deshalb bleibt
+  // die Bindung als unsicher markiert und der Report weist darauf hin.
+  if (!session.claudeSessionId && session.transcriptSnapshot) {
+    const id = detectTranscript(
+      session.bindingBase, session.transcriptSnapshot, session.claudeStartedAt,
+    );
+    if (id) bindAgentSession(session, id, false);
+  }
+  if (!session.claudeSessionId) return;
+
+  const agentCwd = readAgentCwd(session.claudeSessionId);
+  // Nur uebernehmen, wenn es unterhalb des Shell-Verzeichnisses liegt (also
+  // ein Worktree o. ae.) - alles andere waere ein fremdes Transcript.
+  if (agentCwd && agentCwd !== session.cwd
+      && agentCwd.startsWith(session.cwd.replace(/[\\/]+$/, '') + path.sep)
+      && fs.existsSync(agentCwd)) {
+    session.agentCwd = agentCwd;
+  } else {
+    session.agentCwd = null;
   }
 }
 
@@ -568,6 +655,12 @@ function createSession(shellId, opts = {}) {
     gitRoot: null,
     files: [],
     pr: null,
+    claudeSessionId: null,   // Transcript der laufenden Claude-Session
+    bindingExact: false,     // ID vom Wrapper gemeldet statt ueber Zeitstempel
+    agentCwd: null,          // Arbeitsverzeichnis des Agenten (ggf. Worktree)
+    bindingBase: null,
+    transcriptSnapshot: null,
+    claudeStartedAt: 0,
     exited: false,
     refreshing: false,
     refreshQueued: false,
@@ -655,12 +748,16 @@ async function refreshSession(session, force = false) {
 }
 
 async function doRefresh(session, force, cwdAtStart) {
-  const git = await getGitInfo(cwdAtStart);
+  updateAgentBinding(session);
+  // Arbeitet der Agent in einem Worktree, zaehlt dessen Branch - nicht der
+  // der Shell, die im Repo stehen geblieben ist.
+  const gitCwd = session.agentCwd || cwdAtStart;
+  const git = await getGitInfo(gitCwd);
   if (session.cwd !== cwdAtStart || session.exited) return; // veraltet -> verwerfen
   session.branch = git ? git.branch : null;
   session.gitRoot = git ? git.root : null;
   session.files = git ? git.files : [];
-  const pr = git ? await getPrInfo(cwdAtStart, git.root, git.branch, force) : null;
+  const pr = git ? await getPrInfo(gitCwd, git.root, git.branch, force) : null;
   if (session.cwd !== cwdAtStart || session.exited) return; // waehrenddessen cd -> verwerfen
   session.pr = pr;
 
@@ -672,6 +769,8 @@ async function doRefresh(session, force, cwdAtStart) {
     label: session.label,
     branch: session.branch,
     gitRoot: session.gitRoot,
+    agentCwd: session.agentCwd,
+    worktree: session.agentCwd ? path.basename(session.agentCwd) : null,
     files: session.files,
     pr: session.pr,
     exited: session.exited,
@@ -736,7 +835,7 @@ ipcMain.handle('claude:sessions', () => listClaudeSessions());
 ipcMain.handle('claude:report', (e, id) => {
   const s = sessions.get(id);
   if (!s) return { found: false };
-  return getAgentReport(s.cwd, s.gitRoot);
+  return getAgentReport(s.cwd, s.gitRoot, s.claudeSessionId, s.bindingExact);
 });
 
 ipcMain.on('app:focus', () => {

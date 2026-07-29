@@ -546,6 +546,32 @@ button:active { transform: translateY(0.5px); }
 #pr-section { border-bottom: 1px solid var(--border); flex-shrink: 0; }
 #files-section { flex-shrink: 0; }
 
+/* Worktree-Hinweis: Branch/Dateien kommen nicht aus dem Shell-Verzeichnis */
+#wt-banner {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: baseline;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(79, 140, 255, 0.08);
+  font-size: 12px;
+}
+#wt-banner .wt-icon { color: var(--accent); grid-row: span 2; font-size: 14px; }
+#wt-banner .wt-text { color: var(--text-dim); }
+#wt-banner .wt-text code {
+  color: var(--text);
+  font-family: inherit;
+  font-weight: 600;
+}
+#wt-banner .wt-sub {
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 #context-panel h2 {
   font-size: 11px;
   text-transform: uppercase;
