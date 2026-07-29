@@ -39,14 +39,50 @@ function detectShells() {
       shells.push({ id: 'wsl', name: 'WSL', file: 'wsl.exe' });
     }
   } else {
-    const bash = firstExisting(['/bin/bash', '/usr/bin/bash']);
-    if (bash) shells.push({ id: 'bash', name: 'Bash', file: bash });
-    const zsh = firstExisting(['/bin/zsh', '/usr/bin/zsh']);
-    if (zsh) shells.push({ id: 'zsh', name: 'Zsh', file: zsh });
+    // Was das System als Login-Shell anbietet, plus die eigene Standard-Shell.
+    // /etc/shells listet oft mehrere Pfade auf dieselbe Binary (/bin/fish und
+    // /usr/bin/fish) - die id entscheidet, jede Shell kommt nur einmal vor.
+    const candidates = [];
+    try {
+      for (const line of fs.readFileSync('/etc/shells', 'utf8').split('\n')) {
+        const p = line.trim();
+        if (p && !p.startsWith('#')) candidates.push(p);
+      }
+    } catch { /* kein /etc/shells (z. B. minimaler Container) */ }
+    candidates.push(process.env.SHELL || '');
+    for (const name of ['bash', 'zsh', 'fish', 'nu', 'elvish', 'xonsh', 'ksh', 'tcsh', 'dash']) {
+      candidates.push('/usr/bin/' + name, '/bin/' + name, '/usr/local/bin/' + name);
+    }
+
+    for (const file of candidates) {
+      if (!file || !firstExisting([file])) continue;
+      const base = path.basename(file);
+      if (SHELL_BLOCKLIST.has(base)) continue;
+      const id = base === 'nu' ? 'nushell' : base;
+      if (shells.some((s) => s.id === id)) continue;
+      shells.push({ id, name: SHELL_NAMES[id] || base, file });
+    }
     if (!shells.length) shells.push({ id: 'sh', name: 'sh', file: '/bin/sh' });
+
+    // Standard-Shell des Nutzers nach vorn - sie ist die neue Session
+    const preferred = path.basename(process.env.SHELL || '');
+    const idx = shells.findIndex((s) => path.basename(s.file) === preferred);
+    if (idx > 0) shells.unshift(shells.splice(idx, 1)[0]);
   }
   return shells;
 }
+
+// Shells, die als interaktives Terminal nichts taugen bzw. keine Shell sind
+const SHELL_BLOCKLIST = new Set([
+  'nologin', 'false', 'sync', 'git-shell', 'rbash',
+  'systemd-home-fallback-shell', 'screen', 'tmux',
+]);
+
+const SHELL_NAMES = {
+  bash: 'Bash', zsh: 'Zsh', fish: 'Fish', nushell: 'Nushell',
+  elvish: 'Elvish', xonsh: 'Xonsh', ksh: 'Ksh', tcsh: 'Tcsh',
+  dash: 'Dash', sh: 'sh',
+};
 const availableShells = detectShells();
 
 // ---------------------------------------------------------------------------
@@ -75,8 +111,44 @@ const PS_INIT = [
 ].join('\n');
 const PS_ENCODED = Buffer.from(PS_INIT, 'utf16le').toString('base64');
 
+// Claude-Wrapper: vergibt die Session-ID selbst und meldet sie, bevor Claude
+// startet. Nur so ist die Zuordnung Terminal -> Transcript eindeutig; ohne sie
+// bliebe nur, ueber Zeitstempel zu raten - und wer zufaellig im selben Moment
+// in einem anderen Fenster arbeitet, bekaeme das falsche Transcript.
+// OSC 7771: session;<uuid> = exakt, continue;= aelteste Session des Ordners.
+const SH_CLAUDE_WRAPPER = `
+__flightdeck_uuid() {
+  if [ -r /proc/sys/kernel/random/uuid ]; then
+    cat /proc/sys/kernel/random/uuid
+  else
+    uuidgen 2>/dev/null | tr 'A-Z' 'a-z'
+  fi
+}
+claude() {
+  __fd_mode=new
+  for __fd_a in "$@"; do
+    case "$__fd_a" in
+      -c|--continue) __fd_mode=continue ;;
+      -r|--resume|--resume=*|--session-id|--session-id=*) __fd_mode=other ;;
+    esac
+  done
+  if [ "$__fd_mode" = new ]; then
+    __fd_id=$(__flightdeck_uuid)
+    if [ -n "$__fd_id" ]; then
+      printf '\\033]7771;session;%s\\007' "$__fd_id"
+      command claude --session-id "$__fd_id" "$@"
+      return $?
+    fi
+  elif [ "$__fd_mode" = continue ]; then
+    printf '\\033]7771;continue;\\007'
+  fi
+  command claude "$@"
+}
+`;
+
 const BASH_RC = `
 [ -f ~/.bashrc ] && source ~/.bashrc
+${SH_CLAUDE_WRAPPER}
 __flightdeck_at_prompt=1
 __flightdeck_prompt() {
   __flightdeck_at_prompt=1
@@ -93,13 +165,98 @@ PROMPT_COMMAND=__flightdeck_prompt
 trap __flightdeck_preexec DEBUG
 `;
 
-let bashRcPath = null;
-function getBashRcPath() {
-  if (!bashRcPath) {
-    bashRcPath = path.join(os.tmpdir(), 'flightdeck-bashrc.sh');
-    fs.writeFileSync(bashRcPath, BASH_RC);
+// Fish kennt kein --rcfile, aber -C fuehrt Kommandos vor der ersten Prompt aus.
+// Die Events fish_prompt/fish_preexec liefern dasselbe wie PROMPT_COMMAND +
+// DEBUG-Trap in Bash.
+const FISH_RC = `
+function __flightdeck_prompt --on-event fish_prompt
+    printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' $hostname $PWD
+end
+function __flightdeck_preexec --on-event fish_preexec
+    printf '\\033]7770;cmd;%s\\007' (printf '%s' $argv[1] | base64 | string join '')
+    printf '\\033]133;C\\007'
+end
+function __flightdeck_uuid
+    if test -r /proc/sys/kernel/random/uuid
+        cat /proc/sys/kernel/random/uuid
+    else
+        uuidgen 2>/dev/null | string lower
+    end
+end
+function claude
+    set -l mode new
+    for a in $argv
+        switch $a
+            case -c --continue
+                set mode continue
+            case -r --resume '--resume=*' --session-id '--session-id=*'
+                set mode other
+        end
+    end
+    if test $mode = new
+        set -l id (__flightdeck_uuid)
+        if test -n "$id"
+            printf '\\033]7771;session;%s\\007' $id
+            command claude --session-id $id $argv
+            return $status
+        end
+    else if test $mode = continue
+        printf '\\033]7771;continue;\\007'
+    end
+    command claude $argv
+end
+`;
+
+// Zsh laedt seine Konfiguration aus $ZDOTDIR. Wir zeigen dorthin auf ein
+// temporaeres Verzeichnis, das erst die echte Konfiguration des Nutzers laedt
+// und danach die Hooks setzt.
+// Wichtig: ZDOTDIR muss nach dem Laden der Nutzer-.zshenv wieder auf unser
+// Verzeichnis zeigen, sonst findet zsh unsere .zshrc im naechsten Schritt nicht.
+const ZSH_ENV = `
+__flightdeck_rcdir="$ZDOTDIR"
+ZDOTDIR="\${FLIGHTDECK_ZDOTDIR:-$HOME}"
+[ -f "$ZDOTDIR/.zshenv" ] && . "$ZDOTDIR/.zshenv"
+ZDOTDIR="$__flightdeck_rcdir"
+unset __flightdeck_rcdir
+`;
+
+const ZSH_RC = `
+ZDOTDIR="\${FLIGHTDECK_ZDOTDIR:-$HOME}"
+[ -f "$ZDOTDIR/.zshrc" ] && . "$ZDOTDIR/.zshrc"
+${SH_CLAUDE_WRAPPER}
+__flightdeck_prompt() {
+  printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' "\${HOST:-localhost}" "$PWD"
+}
+__flightdeck_preexec() {
+  printf '\\033]7770;cmd;%s\\007' "$(printf %s "$1" | base64 2>/dev/null | tr -d '\\n')"
+  printf '\\033]133;C\\007'
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd __flightdeck_prompt
+add-zsh-hook preexec __flightdeck_preexec
+`;
+
+// Integrationsdateien liegen in einem eigenen Verzeichnis unter tmp; zsh
+// braucht ein Verzeichnis (ZDOTDIR), die anderen nur eine Datei.
+let rcDir = null;
+function getRcDir() {
+  if (!rcDir) {
+    rcDir = path.join(os.tmpdir(), 'flightdeck-shell-' + process.pid);
+    fs.mkdirSync(rcDir, { recursive: true });
   }
-  return bashRcPath.replace(/\\/g, '/');
+  return rcDir;
+}
+
+function writeRc(name, content) {
+  const p = path.join(getRcDir(), name);
+  fs.writeFileSync(p, content);
+  return p.replace(/\\/g, '/');
+}
+
+let rcPaths = {};
+function getRc(name, content) {
+  if (!rcPaths[name]) rcPaths[name] = writeRc(name, content);
+  return rcPaths[name];
 }
 
 function spawnArgsFor(shell) {
@@ -109,11 +266,27 @@ function spawnArgsFor(shell) {
       return { file: shell.file, args: ['-NoLogo', '-NoExit', '-EncodedCommand', PS_ENCODED], env: {} };
     case 'gitbash':
     case 'bash':
-      return { file: shell.file, args: ['--rcfile', getBashRcPath(), '-i'], env: {} };
-    case 'zsh':
-      return { file: shell.file, args: ['-i'], env: {} };
+      return { file: shell.file, args: ['--rcfile', getRc('bashrc.sh', BASH_RC), '-i'], env: {} };
+    case 'fish':
+      return {
+        file: shell.file,
+        args: ['-C', 'source ' + getRc('init.fish', FISH_RC), '-i'],
+        env: {},
+      };
+    case 'zsh': {
+      getRc('.zshenv', ZSH_ENV);
+      getRc('.zshrc', ZSH_RC);
+      return {
+        file: shell.file,
+        args: ['-i'],
+        env: {
+          ZDOTDIR: getRcDir(),
+          FLIGHTDECK_ZDOTDIR: process.env.ZDOTDIR || os.homedir(),
+        },
+      };
+    }
     default:
-      return { file: shell.file, args: [], env: {} };
+      return { file: shell.file, args: ['-i'], env: {} };
   }
 }
 
@@ -668,5 +841,6 @@ app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
   for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* egal */ } }
+  if (rcDir) { try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch { /* egal */ } }
   app.quit();
 });
