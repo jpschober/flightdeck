@@ -237,15 +237,26 @@ button:active { transform: translateY(0.5px); }
   font-size: 11px;
   color: var(--text-dim);
   min-width: 0;
+  overflow: hidden;
 }
 .si-cwd {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--mono);
 }
+/* Worktree-Branches werden lang (feature/18-onboarding-start-presets) und
+   schossen ueber den Rahmen der Kachel hinaus. Jetzt kuerzt der Branch selbst,
+   behaelt aber Vorrang vor dem Pfad. */
 .si-branch {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--green);
   font-family: var(--mono);
   font-size: 11px;
@@ -901,6 +912,18 @@ button:active { transform: translateY(0.5px); }
 .file-status.D { color: var(--red); }
 .file-status.R { color: var(--purple); }
 .file-status.U { color: var(--accent); }
+.file-status.C { color: var(--text-faint); }
+
+/* Bereits committet: bleibt in der Liste, tritt aber zurueck */
+.file-item.committed { opacity: 0.6; }
+.file-item.committed:hover { opacity: 1; }
+
+/* Verzeichnisse sind nicht anklickbar - kein Hover, kein Zeiger */
+.file-item.is-dir {
+  cursor: default;
+  color: var(--text-faint);
+}
+.file-item.is-dir:hover { background: none; }
 .file-path {
   white-space: nowrap;
   overflow: hidden;

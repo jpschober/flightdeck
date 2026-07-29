@@ -655,6 +655,7 @@ function createSession(shellId, opts = {}) {
     branch: null,
     gitRoot: null,
     files: [],
+    fileMemory: new Map(),   // Pfad -> Eintrag; ueberlebt Commits
     pr: null,
     claudeSessionId: null,   // Transcript der laufenden Claude-Session
     bindingExact: false,     // ID vom Wrapper gemeldet statt ueber Zeitstempel
@@ -748,6 +749,33 @@ async function refreshSession(session, force = false) {
   }
 }
 
+// Waehrend der Arbeit wird zwischendurch committet - dann verschwinden die
+// Dateien aus `git status` und die Liste springt auf leer. Was einmal drin
+// stand, bleibt deshalb stehen und wird als committet markiert, bis das
+// Verzeichnis wechselt oder ein PR die Liste uebernimmt.
+function mergeFileMemory(session, current) {
+  if (!session.fileMemory) session.fileMemory = new Map();
+  const memory = session.fileMemory;
+  const seen = new Set();
+
+  for (const f of current) {
+    seen.add(f.path);
+    memory.set(f.path, { ...f, committed: false });
+  }
+  for (const [p, entry] of memory) {
+    if (!seen.has(p)) memory.set(p, { ...entry, committed: true });
+  }
+  // Reihenfolge: offene Aenderungen zuerst, committete darunter
+  return [...memory.values()].sort((a, b) => {
+    if (a.committed !== b.committed) return a.committed ? 1 : -1;
+    return a.path.localeCompare(b.path);
+  });
+}
+
+function resetFileMemory(session) {
+  session.fileMemory = new Map();
+}
+
 async function doRefresh(session, force, cwdAtStart) {
   updateAgentBinding(session);
   // Arbeitet der Agent in einem Worktree, zaehlt dessen Branch - nicht der
@@ -755,9 +783,15 @@ async function doRefresh(session, force, cwdAtStart) {
   const gitCwd = session.agentCwd || cwdAtStart;
   const git = await getGitInfo(gitCwd);
   if (session.cwd !== cwdAtStart || session.exited) return; // veraltet -> verwerfen
+  // Wechselt Repo oder Branch, faengt das Gedaechtnis von vorn an - sonst
+  // schleppte man Dateien eines fremden Zweigs mit.
+  if (git && (session.gitRoot !== git.root || session.branch !== git.branch)) {
+    resetFileMemory(session);
+  }
   session.branch = git ? git.branch : null;
   session.gitRoot = git ? git.root : null;
-  session.files = git ? git.files : [];
+  if (!git) resetFileMemory(session);
+  session.files = git ? mergeFileMemory(session, git.files) : [];
   const pr = git ? await getPrInfo(gitCwd, git.root, git.branch, force) : null;
   if (session.cwd !== cwdAtStart || session.exited) return; // waehrenddessen cd -> verwerfen
   session.pr = pr;

@@ -344,21 +344,34 @@ function renderContextPanel() {
   fileListEl.innerHTML = '';
   const frag = document.createDocumentFragment();
 
-  if (s.files.length) {
-    const t = document.createElement('div');
-    t.className = 'file-group-title';
-    t.textContent = 'Arbeitsverzeichnis';
-    frag.appendChild(t);
-    for (const f of s.files) frag.appendChild(buildFileItem(s, f.path, f.untracked ? 'U' : f.status, 'wt'));
-  }
+  // Sobald ein PR existiert, ist dessen Dateiliste die maßgebliche - das
+  // lokale Gedächtnis würde sie nur doppeln.
+  const hasPr = Boolean(s.pr && s.pr.files && s.pr.files.length);
 
-  if (s.pr && s.pr.files && s.pr.files.length) {
+  if (hasPr) {
     const t = document.createElement('div');
     t.className = 'file-group-title';
     t.textContent = `Im Pull Request (${s.pr.files.length})`;
     frag.appendChild(t);
     for (const f of s.pr.files) {
-      frag.appendChild(buildFileItem(s, f.path, 'M', 'pr', f.additions, f.deletions));
+      frag.appendChild(buildFileItem(s, f, 'pr'));
+    }
+  } else if (s.files.length) {
+    const open = s.files.filter((f) => !f.committed);
+    const done = s.files.filter((f) => f.committed);
+    if (open.length) {
+      const t = document.createElement('div');
+      t.className = 'file-group-title';
+      t.textContent = 'Arbeitsverzeichnis';
+      frag.appendChild(t);
+      for (const f of open) frag.appendChild(buildFileItem(s, f, 'wt'));
+    }
+    if (done.length) {
+      const t = document.createElement('div');
+      t.className = 'file-group-title';
+      t.textContent = `Committet (${done.length})`;
+      frag.appendChild(t);
+      for (const f of done) frag.appendChild(buildFileItem(s, f, 'wt'));
     }
   }
 
@@ -429,19 +442,35 @@ function renderPrExtra(container, pr) {
   container.appendChild(frag);
 }
 
-function buildFileItem(s, filePath, status, source, adds, dels) {
+function buildFileItem(s, f, source) {
+  const filePath = f.path;
+  const isDir = Boolean(f.dir);
+  const status = source === 'pr' ? 'M'
+    : f.committed ? 'C'
+      : f.untracked ? 'U' : f.status;
+
   const el = document.createElement('div');
-  el.className = 'file-item';
-  el.title = filePath;
-  const stat = (adds !== undefined || dels !== undefined)
-    ? `<span class="file-diffstat"><span class="add">+${adds ?? 0}</span> <span class="del">−${dels ?? 0}</span></span>`
+  el.className = 'file-item'
+    + (f.committed ? ' committed' : '')
+    + (isDir ? ' is-dir' : '');
+  el.title = isDir
+    ? `${filePath} — Verzeichnis, keine Vorschau`
+    : filePath;
+
+  const stat = (f.additions !== undefined || f.deletions !== undefined)
+    ? `<span class="file-diffstat"><span class="add">+${f.additions ?? 0}</span> <span class="del">−${f.deletions ?? 0}</span></span>`
     : '';
   el.innerHTML = `
     <span class="file-status ${escapeHtml(status)}">${escapeHtml(status)}</span>
     <span class="file-path">&lrm;${escapeHtml(filePath)}&lrm;</span>
     ${stat}`;
-  makeKeyActivatable(el);
-  el.addEventListener('click', () => openPreview(s.id, filePath, source));
+
+  // Verzeichnisse (git meldet sie unversioniert mit Schrägstrich am Ende)
+  // sind nicht anklickbar - eine Dateivorschau darauf schlägt zwangsläufig fehl.
+  if (!isDir) {
+    makeKeyActivatable(el);
+    el.addEventListener('click', () => openPreview(s.id, filePath, source));
+  }
   return el;
 }
 

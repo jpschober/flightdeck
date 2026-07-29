@@ -24,7 +24,9 @@ function parseStatus(porcelain) {
     if (arrow !== -1) p = p.slice(arrow + 4);
     if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
     const code = xy === '??' ? '?' : (xy.trim()[0] || 'M');
-    files.push({ status: code, path: p, untracked: xy === '??' });
+    // git meldet unversionierte Verzeichnisse mit Schraegstrich am Ende. Die
+    // sind keine Datei - eine Vorschau darauf scheitert zwangslaeufig.
+    files.push({ status: code, path: p, untracked: xy === '??', dir: p.endsWith('/') });
   }
   return files;
 }
