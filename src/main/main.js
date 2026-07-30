@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, shell: electronShell } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard, shell: electronShell } = require('electron');
 const {
   listClaudeSessions,
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
@@ -910,6 +910,15 @@ ipcMain.on('app:focus', () => {
     win.focus();
   }
 });
+
+// Zwischenablage ueber den Hauptprozess: `navigator.clipboard.readText()`
+// braucht im Renderer die Berechtigung `clipboard-read`, die Electron ohne
+// eigenen Permission-Handler verweigert - das Einfuegen scheiterte lautlos.
+ipcMain.on('clipboard:write', (e, text) => {
+  if (typeof text === 'string' && text) clipboard.writeText(text);
+});
+
+ipcMain.handle('clipboard:read', () => clipboard.readText());
 
 ipcMain.on('session:input', (e, id, data) => {
   const s = sessions.get(id);

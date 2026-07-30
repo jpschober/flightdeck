@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('api', {
   setMeta: (id, meta) => ipcRenderer.invoke('session:setMeta', id, meta),
   previewFile: (id, relPath, source, opts) => ipcRenderer.invoke('file:preview', id, relPath, source, opts),
   openExternal: (url) => ipcRenderer.send('open-external', url),
+  clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
+  clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
   getHistory: (id) => ipcRenderer.invoke('history:get', id),
   getTodos: (id) => ipcRenderer.invoke('todos:get', id),
   setTodos: (id, todos) => ipcRenderer.invoke('todos:set', id, todos),

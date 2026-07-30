@@ -23,23 +23,37 @@ const TERM_FONT = [
 
 // Vollbild-Oberflächen wie Claude schalten die Mausmeldung ein; xterm.js gibt
 // Klicks dann an die Anwendung weiter statt zu markieren. Mit gedrückter
-// Umschalttaste bleibt die Markierung möglich - darauf weist der Hinweis unten hin.
-async function copySelection(term) {
+// Umschalttaste bleibt die Markierung möglich.
+function copySelection(term) {
   const text = term.getSelection();
   if (!text) return false;
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
+  window.api.clipboardWrite(text);
+  return true;
 }
 
-async function pasteInto(sessionId) {
-  try {
-    const text = await navigator.clipboard.readText();
-    if (text) window.api.input(sessionId, text);
-  } catch { /* Zwischenablage nicht lesbar */ }
+// term.paste() statt window.api.input(): nur so wird der Text im Bracketed-Paste-
+// Modus geklammert. Ohne die Klammern liest Claude jede Zeile eines mehrzeiligen
+// Einfuegens als abgeschicktes Kommando.
+async function pasteInto(term) {
+  const text = await window.api.clipboardRead();
+  if (text) term.paste(text);
+}
+
+// OSC 52 ist die Bitte des Programms im Terminal, etwas in die Zwischenablage zu
+// legen - Claude kopiert genau so ("copied via OSC 52"). xterm.js bringt dafuer
+// keinen Handler mit, die Meldung stimmte also, die Zwischenablage blieb leer.
+function handleOsc52(term) {
+  term.parser.registerOscHandler(52, (data) => {
+    const payload = data.slice(data.indexOf(';') + 1);
+    // "?" fragt die Zwischenablage ab. Nicht beantworten: sonst koennte jede
+    // Ausgabe im Terminal ihren Inhalt auslesen.
+    if (!payload || payload === '?') return true;
+    try {
+      const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+      window.api.clipboardWrite(new TextDecoder().decode(bytes));
+    } catch { /* kein gueltiges Base64 */ }
+    return true;
+  });
 }
 
 const TERM_THEME = {
@@ -164,6 +178,7 @@ async function newSession(shellId, opts) {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => window.api.openExternal(uri)));
+  handleOsc52(term);
   term.open(paneEl);
 
   term.onData((data) => window.api.input(meta.id, data));
@@ -176,8 +191,10 @@ async function newSession(shellId, opts) {
     if (ev.shiftKey && k === 'w') return false;
     // Strg+C ist im Terminal SIGINT, kann also nicht kopieren. Strg+Umschalt+C
     // und Strg+Umschalt+V sind die üblichen Terminal-Entsprechungen.
-    if (ev.shiftKey && k === 'c') { copySelection(term); return false; }
-    if (ev.shiftKey && k === 'v') { pasteInto(meta.id); return false; }
+    // preventDefault(), damit Chromium die Tastenkombination nicht zusaetzlich
+    // als eigene auswertet - xterm unterdrueckt bei `false` nur sich selbst.
+    if (ev.shiftKey && k === 'c') { ev.preventDefault(); copySelection(term); return false; }
+    if (ev.shiftKey && k === 'v') { ev.preventDefault(); pasteInto(term); return false; }
     return true;
   });
 
@@ -185,7 +202,7 @@ async function newSession(shellId, opts) {
   paneEl.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
     if (term.hasSelection()) copySelection(term);
-    else pasteInto(meta.id);
+    else pasteInto(term);
   });
 
   const s = {
