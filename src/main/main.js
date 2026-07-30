@@ -10,6 +10,7 @@ const fs = require('fs');
 const pty = require('@lydell/node-pty');
 const { getGitInfo, getPrInfo, run } = require('./gitinfo');
 const { getUsage } = require('./usage');
+const { getSchemaView } = require('./dbschema');
 
 let win = null;
 const sessions = new Map(); // id -> session
@@ -901,6 +902,24 @@ ipcMain.handle('session:buffer', (e, id) => {
 ipcMain.handle('claude:sessions', () => listClaudeSessions());
 
 ipcMain.handle('usage:get', (e, force) => getUsage(Boolean(force)));
+
+// DB-Schema: der Senser sucht das zustaendige Plugin und vergleicht gegen die
+// gewuenschte Basis. Der Repo-Root ist die richtige Wurzel - arbeitet der Agent
+// in einem Worktree, zeigt gitRoot bereits dorthin.
+ipcMain.handle('dbschema:get', async (e, id, opts = {}) => {
+  const s = sessions.get(id);
+  if (!s) return { ok: false, reason: 'no-session' };
+  const root = s.gitRoot || s.agentCwd || s.cwd;
+  try {
+    return await getSchemaView(root, {
+      pr: s.pr,
+      baseline: opts.baseline || 'auto',
+      force: Boolean(opts.force),
+    });
+  } catch (err) {
+    return { ok: false, reason: 'error', error: err.message };
+  }
+});
 
 
 ipcMain.on('app:focus', () => {

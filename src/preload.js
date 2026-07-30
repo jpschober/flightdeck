@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   previewFile: (id, relPath, source, opts) => ipcRenderer.invoke('file:preview', id, relPath, source, opts),
   openExternal: (url) => ipcRenderer.send('open-external', url),
   getHistory: (id) => ipcRenderer.invoke('history:get', id),
+  getDbSchema: (id, opts) => ipcRenderer.invoke('dbschema:get', id, opts || {}),
   getTodos: (id) => ipcRenderer.invoke('todos:get', id),
   setTodos: (id, todos) => ipcRenderer.invoke('todos:set', id, todos),
   getUsage: (force) => ipcRenderer.invoke('usage:get', force),

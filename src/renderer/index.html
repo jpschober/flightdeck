@@ -47,6 +47,7 @@
         <button class="panel-tab active" data-tab="git">Git<span class="tab-badge hidden" id="badge-git"></span></button>
         <button class="panel-tab" data-tab="history">Verlauf<span class="tab-badge hidden" id="badge-history"></span></button>
         <button class="panel-tab" data-tab="todos">Notizen<span class="tab-badge hidden" id="badge-todos"></span></button>
+        <button class="panel-tab" data-tab="dbschema">DB-Schema<span class="tab-badge hidden" id="badge-dbschema"></span></button>
         <button class="panel-tab" data-tab="usage">Nutzung<span class="tab-dot hidden" id="dot-usage"></span></button>
       </nav>
       <div class="panel-page" id="page-git">
@@ -73,6 +74,12 @@
         <div id="todo-list"></div>
         <input id="todo-input" type="text" placeholder="Neue Notiz… (Enter)" />
       </div>
+      <div class="panel-page hidden" id="page-dbschema">
+        <div id="db-head"></div>
+        <div id="db-signal"></div>
+        <input id="db-search" type="text" placeholder="Tabelle oder Spalte suchen…" />
+        <div id="db-tables"><div class="muted">—</div></div>
+      </div>
     </aside>
   </div>
 
@@ -85,6 +92,22 @@
         <button id="preview-close" title="Schließen (Esc)" aria-label="Vorschau schließen">✕</button>
       </div>
       <div id="preview-content"></div>
+    </div>
+  </div>
+
+  <!-- DB-Schema: Vorher/Nachher nebeneinander -->
+  <div id="dbdiff-overlay" class="hidden">
+    <div id="dbdiff-window">
+      <div id="dbdiff-header">
+        <span id="dbdiff-title"></span>
+        <div id="dbdiff-modes" role="tablist" aria-label="Umfang"></div>
+        <button id="dbdiff-close" title="Schließen (Esc)" aria-label="Vergleich schließen">✕</button>
+      </div>
+      <div id="dbdiff-cols">
+        <div class="dbd-head old" id="dbdiff-head-old"></div>
+        <div class="dbd-head new" id="dbdiff-head-new"></div>
+      </div>
+      <div id="dbdiff-body"></div>
     </div>
   </div>
 
