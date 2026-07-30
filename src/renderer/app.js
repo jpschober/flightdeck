@@ -252,6 +252,11 @@ function setActive(id) {
   const active = id ? sessions.get(id) : null;
   renderHistory(active);
   loadTodosFor(active);
+  // Anderes Projekt, anderes Schema - der aufgeklappte Zustand passt nicht mehr
+  dbState.lastJson = '';
+  dbState.open.clear();
+  dbState.closed.clear();
+  loadDbSchema();
 }
 
 async function closeSession(id) {
@@ -272,6 +277,9 @@ async function closeSession(id) {
       renderContextPanel();
       renderHistory(null);
       renderTodos(null);
+      dbState.view = null;
+      dbState.lastJson = '';
+      renderDbPanel();
     }
   }
 }
@@ -650,6 +658,682 @@ window.api.onTodosChanged((key, todos) => {
 
 
 // ---------------------------------------------------------------------------
+// DB-Schema
+//
+// Der Main-Prozess liefert einen fertigen Stand: erkanntes Plugin, aktuelles
+// Schema im standardisierten Format, die Vergleichsbasis und den Diff. Hier
+// wird das nur noch dargestellt.
+//
+// Bewusst als Tabellenkarten und nicht als ER-Diagramm: gefragt sind Spalten,
+// Typen und Constraints, und die stehen in einem Diagrammkasten entweder nicht
+// drin oder unleserlich klein. Vor allem aber laesst sich ein Diagramm nicht
+// sinnvoll zeilenweise vergleichen - genau das braucht die Vorher/Nachher-
+// Ansicht. Beziehungen zeigen die Fremdschlüssel im Klartext mitsamt Ziel.
+// ---------------------------------------------------------------------------
+const dbHeadEl = $('#db-head');
+const dbSignalEl = $('#db-signal');
+const dbTablesEl = $('#db-tables');
+const dbSearchEl = $('#db-search');
+const badgeDbEl = $('#badge-dbschema');
+
+const dbState = {
+  sessionId: null,
+  view: null,
+  baseline: 'auto',
+  filter: '',
+  // Aufgeklappt bzw. bewusst zugeklappt - beides muss den Neuaufbau ueberleben,
+  // sonst springt eine von Hand geschlossene Tabelle beim naechsten Takt wieder auf.
+  open: new Set(),
+  closed: new Set(),
+  lastJson: '',
+  loading: false,
+};
+let dbTimer = null;
+
+const STATUS_MARK = { added: '+', removed: '−', changed: '~', same: '' };
+const STATUS_WORD = { added: 'neu', removed: 'entfernt', changed: 'geändert', same: '' };
+
+// Kurzzeichen fuer die Constraints, die eine Spalte betreffen
+const KIND_TAG = {
+  pk: { tag: 'PK', title: 'Primärschlüssel' },
+  fk: { tag: 'FK', title: 'Fremdschlüssel' },
+  unique: { tag: 'UQ', title: 'eindeutig' },
+  check: { tag: 'CK', title: 'Prüfbedingung' },
+  index: { tag: 'IX', title: 'Index' },
+  exclude: { tag: 'EX', title: 'Exclusion-Constraint' },
+};
+
+function fmtDefault(v) {
+  return v === null || v === undefined ? '' : String(v);
+}
+
+/** Die Zusatzangaben einer Spalte in der Reihenfolge, in der man sie liest. */
+function colMeta(col) {
+  const out = [];
+  if (!col.nullable) out.push('NOT NULL');
+  if (col.identity) out.push('identity');
+  if (col.generated) out.push('berechnet');
+  if (col.default) out.push('= ' + fmtDefault(col.default));
+  return out;
+}
+
+function constraintText(c) {
+  const cols = (c.columns || []).join(', ');
+  if (c.kind === 'fk' && c.references) {
+    const r = c.references;
+    const target = `${r.schema}.${r.table}${r.columns.length ? `(${r.columns.join(', ')})` : ''}`;
+    const actions = [
+      c.onDelete ? `on delete ${c.onDelete}` : '',
+      c.onUpdate ? `on update ${c.onUpdate}` : '',
+    ].filter(Boolean).join(' ');
+    return `(${cols}) → ${target}${actions ? ' ' + actions : ''}`;
+  }
+  if (c.kind === 'check' || c.kind === 'exclude') return c.expression || '';
+  if (c.kind === 'index') {
+    return `${c.unique ? 'unique ' : ''}(${cols})${c.method ? ' using ' + c.method : ''}`
+      + `${c.expression ? ' where ' + c.expression : ''}`;
+  }
+  return `(${cols})`;
+}
+
+function policyText(p) {
+  const bits = [p.command];
+  if (!p.permissive) bits.push('restrictive');
+  if (p.roles && p.roles.length) bits.push('für ' + p.roles.join(', '));
+  if (p.using) bits.push('using ' + p.using);
+  if (p.check) bits.push('check ' + p.check);
+  return bits.join(' · ');
+}
+
+/** Welche Constraints betreffen diese Spalte? */
+function tagsForColumn(table, colName) {
+  const kinds = new Set();
+  for (const c of table.constraints || []) {
+    if ((c.columns || []).includes(colName)) kinds.add(c.kind);
+  }
+  return [...kinds]
+    .filter((k) => KIND_TAG[k])
+    .sort((a, b) => Object.keys(KIND_TAG).indexOf(a) - Object.keys(KIND_TAG).indexOf(b))
+    .map((k) => KIND_TAG[k]);
+}
+
+function tagsHtml(tags) {
+  return tags.map((t) => `<span class="db-tag ${t.tag.toLowerCase()}" title="${escapeHtml(t.title)}">${t.tag}</span>`).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Laden
+// ---------------------------------------------------------------------------
+async function loadDbSchema(force = false) {
+  const s = activeId && sessions.get(activeId);
+  if (!s) {
+    dbState.view = null;
+    dbState.lastJson = '';
+    renderDbPanel();
+    return;
+  }
+  if (dbState.loading && !force) return;
+  dbState.loading = true;
+  try {
+    const view = await window.api.getDbSchema(s.id, { baseline: dbState.baseline, force });
+    if (s.id !== activeId) return; // inzwischen umgeschaltet
+    // Unveraendert? Dann nicht neu aufbauen - sonst springt die Scrollposition
+    // bei jedem Takt des Hintergrund-Abrufs.
+    const json = JSON.stringify(view);
+    if (json === dbState.lastJson) return;
+    dbState.lastJson = json;
+    dbState.view = view;
+    dbState.sessionId = s.id;
+    renderDbPanel();
+    if (!dbDiffOverlay.classList.contains('hidden')) renderDbDiff();
+  } catch {
+    /* Session weg o. ae. */
+  } finally {
+    dbState.loading = false;
+  }
+}
+
+function setDbBadge(count) {
+  badgeDbEl.textContent = count > 99 ? '99+' : String(count);
+  badgeDbEl.classList.toggle('hidden', !count);
+  badgeDbEl.classList.toggle('alert', Boolean(count));
+}
+
+// Im Hintergrund mitlaufen, damit das Zeichen am Tab stimmt, ohne dass man den
+// Tab offen haben muss - eine Schemaaenderung soll auffallen, nicht gesucht
+// werden. Der Senser liefert aus dem Cache, solange sich keine Datei ruehrt.
+function startDbPolling() {
+  clearInterval(dbTimer);
+  dbTimer = setInterval(() => { loadDbSchema().catch(() => {}); }, 10_000);
+}
+
+// ---------------------------------------------------------------------------
+// Panel
+// ---------------------------------------------------------------------------
+function renderDbPanel() {
+  const view = dbState.view;
+
+  if (!view || !view.ok) {
+    dbHeadEl.innerHTML = '';
+    dbSignalEl.innerHTML = '';
+    dbSearchEl.classList.add('hidden');
+    dbTablesEl.innerHTML = `<div class="muted">${view && view.error
+      ? escapeHtml(view.error) : 'Keine Session ausgewählt'}</div>`;
+    setDbBadge(0);
+    return;
+  }
+
+  if (!view.plugin) {
+    dbHeadEl.innerHTML = '';
+    dbSignalEl.innerHTML = '';
+    dbSearchEl.classList.add('hidden');
+    dbTablesEl.innerHTML = `
+      <div class="muted">Kein DB-Schema erkannt.</div>
+      <div class="db-hint">Kein Plugin fühlt sich für
+        <code>${escapeHtml(view.project || view.root || '')}</code> zuständig.
+        Erkannt werden derzeit Supabase-Projekte
+        (<code>supabase/migrations</code>).</div>`;
+    setDbBadge(0);
+    return;
+  }
+
+  renderDbHead(view);
+  renderDbSignal(view);
+  dbSearchEl.classList.remove('hidden');
+  renderDbTables(view);
+  setDbBadge(view.changeCount || 0);
+}
+
+function renderDbHead(view) {
+  const files = view.schema.files.length;
+  const baseSel = view.baselines.length
+    ? `<label class="db-base">Basis
+         <select id="db-baseline">
+           ${view.baselines.map((b) => `<option value="${escapeHtml(b.mode)}"${
+             view.baseline && view.baseline.mode === b.mode ? ' selected' : ''
+           } title="${escapeHtml(b.hint || '')}">${escapeHtml(b.label)}</option>`).join('')}
+         </select>
+       </label>`
+    : '<span class="muted">kein Git-Stand zum Vergleichen</span>';
+
+  dbHeadEl.innerHTML = `
+    <div class="db-top">
+      <span class="db-plugin" title="${escapeHtml((view.plugin.evidence || []).join('\n'))}">${escapeHtml(view.plugin.label)}</span>
+      <span class="db-files">${view.schema.tables.length} Tabellen · ${files} ${files === 1 ? 'Datei' : 'Dateien'}</span>
+      <button id="db-refresh" class="icon-btn" title="Neu einlesen" aria-label="Neu einlesen">↻</button>
+    </div>
+    <div class="db-baseline-row">${baseSel}</div>
+    ${view.schema.warnings.length ? `
+      <details class="db-warn">
+        <summary>${view.schema.warnings.length} Hinweis${view.schema.warnings.length === 1 ? '' : 'e'} beim Einlesen</summary>
+        <ul>${view.schema.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
+      </details>` : ''}`;
+
+  dbHeadEl.querySelector('#db-refresh').addEventListener('click', () => loadDbSchema(true));
+  const sel = dbHeadEl.querySelector('#db-baseline');
+  if (sel) {
+    sel.addEventListener('change', () => {
+      dbState.baseline = sel.value;
+      dbState.lastJson = '';
+      loadDbSchema(true);
+    });
+  }
+}
+
+function renderDbSignal(view) {
+  const d = view.diff;
+  if (!d) {
+    dbSignalEl.innerHTML = '';
+    return;
+  }
+  if (!d.changed) {
+    dbSignalEl.innerHTML = `<div class="db-signal ok">
+      <span class="db-signal-icon">✓</span>
+      <span>Schema unverändert gegenüber <strong>${escapeHtml(view.baseline.label)}</strong></span>
+    </div>`;
+    return;
+  }
+  const s = d.summary;
+  const detail = [
+    partsText(s.columns, 'Spalte', 'Spalten'),
+    partsText(s.constraints, 'Constraint', 'Constraints'),
+    partsText(s.policies, 'Policy', 'Policies'),
+  ].filter(Boolean).join(' · ');
+
+  dbSignalEl.innerHTML = `<div class="db-signal alert">
+    <span class="db-signal-icon">⚠</span>
+    <div class="db-signal-text">
+      <strong>Schema geändert</strong> gegenüber ${escapeHtml(view.baseline.label)}
+      <div class="db-signal-sub">${escapeHtml(view.changeText)}${detail ? '<br>' + detail : ''}</div>
+    </div>
+    <button id="db-open-diff" title="Vorher und Nachher nebeneinander">Vergleichen</button>
+  </div>`;
+  dbSignalEl.querySelector('#db-open-diff').addEventListener('click', openDbDiff);
+}
+
+function partsText(counts, one, many) {
+  const bits = [];
+  if (counts.added) bits.push(`${counts.added} neu`);
+  if (counts.removed) bits.push(`${counts.removed} entfernt`);
+  if (counts.changed) bits.push(`${counts.changed} geändert`);
+  if (!bits.length) return '';
+  const total = counts.added + counts.removed + counts.changed;
+  return `${total === 1 ? one : many}: ${bits.join(', ')}`;
+}
+
+/** Diff-Status je Tabelle/Spalte/Constraint nachschlagbar machen. */
+function diffLookup(view) {
+  const tables = new Map();
+  if (!view.diff) return tables;
+  for (const t of view.diff.tables) {
+    tables.set(t.id, {
+      status: t.status,
+      rlsChanged: t.rlsChanged,
+      columns: new Map(t.columns.map((c) => [c.name, c])),
+      constraints: new Map(t.constraints.map((c) => [c.name, c])),
+      policies: new Map(t.policies.map((p) => [p.name, p])),
+    });
+  }
+  return tables;
+}
+
+function renderDbTables(view) {
+  const q = dbState.filter.trim().toLowerCase();
+  const look = diffLookup(view);
+  dbTablesEl.innerHTML = '';
+  const frag = document.createDocumentFragment();
+
+  // --- Enums ---
+  const enums = view.schema.enums.filter((e) => !q
+    || e.name.toLowerCase().includes(q)
+    || e.values.some((v) => v.toLowerCase().includes(q)));
+  if (enums.length) {
+    const enumDiff = new Map((view.diff ? view.diff.enums : []).map((e) => [e.id, e]));
+    const box = document.createElement('details');
+    box.className = 'db-enums';
+    if (dbState.open.has('__enums')) box.open = true;
+    box.innerHTML = `<summary>Enums (${enums.length})</summary>
+      <div class="db-enum-list">${enums.map((e) => {
+        const d = enumDiff.get(e.id);
+        const st = d ? d.status : 'same';
+        return `<div class="db-enum ${st}">
+          <span class="db-enum-name">${escapeHtml(e.name)}</span>
+          <span class="db-enum-values">${e.values.map((v) => {
+            const added = d && d.added && d.added.includes(v);
+            return `<code class="${added ? 'added' : ''}">${escapeHtml(v)}</code>`;
+          }).join('')}${(d && d.removed || []).map((v) =>
+            `<code class="removed">${escapeHtml(v)}</code>`).join('')}</span>
+        </div>`;
+      }).join('')}</div>`;
+    box.addEventListener('toggle', () => {
+      if (box.open) dbState.open.add('__enums'); else dbState.open.delete('__enums');
+    });
+    frag.appendChild(box);
+  }
+
+  // --- Entfernte Tabellen: stehen nicht mehr im Schema, muessen aber auffallen
+  const removed = (view.diff ? view.diff.tables : []).filter((t) => t.status === 'removed');
+  for (const t of removed) {
+    if (q && !t.name.toLowerCase().includes(q)) continue;
+    const el = document.createElement('div');
+    el.className = 'db-table removed-table';
+    el.innerHTML = `<span class="db-status removed" title="entfernt">−</span>
+      <span class="db-table-name">${escapeHtml(t.schema)}.${escapeHtml(t.name)}</span>
+      <span class="db-table-note">entfernt</span>`;
+    frag.appendChild(el);
+  }
+
+  // --- Tabellen ---
+  const tables = view.schema.tables.filter((t) => !q
+    || t.name.toLowerCase().includes(q)
+    || t.columns.some((c) => c.name.toLowerCase().includes(q)));
+
+  for (const t of tables) {
+    frag.appendChild(buildDbTableCard(t, look.get(t.id), q));
+  }
+
+  if (!frag.childNodes.length) {
+    const d = document.createElement('div');
+    d.className = 'muted';
+    d.textContent = q ? 'Keine Treffer' : 'Keine Tabellen gefunden';
+    frag.appendChild(d);
+  }
+  dbTablesEl.appendChild(frag);
+}
+
+function buildDbTableCard(t, d, q) {
+  const status = d ? d.status : 'same';
+  const box = document.createElement('details');
+  box.className = `db-table ${status}`;
+  // Geaenderte Tabellen und Suchtreffer gleich aufklappen - danach sucht man.
+  // Was von Hand zugeklappt wurde, bleibt zu.
+  if (dbState.open.has(t.id)
+      || (q && q.length > 1)
+      || (status !== 'same' && !dbState.closed.has(t.id))) {
+    box.open = true;
+  }
+
+  const changedCols = d ? [...d.columns.values()].filter((c) => c.status !== 'same').length : 0;
+  box.innerHTML = `
+    <summary>
+      <span class="db-status ${status}" title="${STATUS_WORD[status] || 'unverändert'}">${STATUS_MARK[status] || '·'}</span>
+      <span class="db-table-name">${escapeHtml(t.name)}</span>
+      ${t.schema !== 'public' ? `<span class="db-schema">${escapeHtml(t.schema)}</span>` : ''}
+      ${t.rls.enabled ? `<span class="db-rls${d && d.rlsChanged ? ' changed' : ''}" title="Row Level Security aktiv${
+        t.rls.policies.length ? `, ${t.rls.policies.length} Policies` : ', keine Policies'}">RLS</span>` : ''}
+      ${t.external
+        ? '<span class="db-chip external" title="Diese Tabelle legt das Projekt nicht selbst an – es regelt nur den Zugriff darauf">extern</span>'
+        : `<span class="db-count">${t.columns.length}</span>`}
+      ${changedCols ? `<span class="db-chip changed">${changedCols} geändert</span>` : ''}
+    </summary>
+    <div class="db-body"></div>`;
+
+  const body = box.querySelector('.db-body');
+  if (t.external) {
+    // Die Spalten kennen wir nicht - das sagen wir, statt eine leere Liste zu zeigen
+    const note = document.createElement('div');
+    note.className = 'db-hint';
+    note.textContent = 'Fremde Tabelle – Spalten sind hier nicht bekannt. '
+      + 'Gezeigt wird, was dieses Projekt selbst dafür festlegt.';
+    body.appendChild(note);
+  } else {
+    body.appendChild(buildDbColumns(t, d));
+  }
+
+  const cons = (t.constraints || []).filter((c) => c.kind !== 'pk' || (c.columns || []).length > 1);
+  if (cons.length) body.appendChild(buildDbConstraints(cons, d));
+  if (t.rls.policies.length) body.appendChild(buildDbPolicies(t.rls.policies, d));
+  if (t.comment) {
+    const cm = document.createElement('div');
+    cm.className = 'db-comment';
+    cm.textContent = t.comment;
+    body.appendChild(cm);
+  }
+
+  box.addEventListener('toggle', () => {
+    if (box.open) { dbState.open.add(t.id); dbState.closed.delete(t.id); }
+    else { dbState.open.delete(t.id); dbState.closed.add(t.id); }
+  });
+  return box;
+}
+
+function buildDbColumns(t, d) {
+  const wrap = document.createElement('div');
+  wrap.className = 'db-cols';
+  const rows = t.columns.map((c) => {
+    const cd = d && d.columns.get(c.name);
+    const st = cd ? cd.status : 'same';
+    const why = cd && cd.fields && cd.fields.length
+      ? cd.fields.map((f) => `${f}: ${fmtDefault(cd.before[f])} → ${fmtDefault(cd.after[f])}`).join('\n')
+      : '';
+    return `<div class="db-col ${st}"${why ? ` title="${escapeHtml(why)}"` : ''}>
+      <span class="db-col-mark ${st}">${STATUS_MARK[st] || ''}</span>
+      <span class="db-col-name">${escapeHtml(c.name)}</span>
+      <span class="db-col-type">${escapeHtml(c.type)}</span>
+      <span class="db-col-tags">${tagsHtml(tagsForColumn(t, c.name))}</span>
+      <span class="db-col-meta">${escapeHtml(colMeta(c).join(' · '))}</span>
+    </div>`;
+  });
+  // Entfallene Spalten mitzeigen - sonst sieht man nur, dass die Zahl kleiner ist
+  if (d) {
+    for (const cd of d.columns.values()) {
+      if (cd.status !== 'removed') continue;
+      rows.push(`<div class="db-col removed" title="entfernt">
+        <span class="db-col-mark removed">−</span>
+        <span class="db-col-name">${escapeHtml(cd.name)}</span>
+        <span class="db-col-type">${escapeHtml(cd.before.type)}</span>
+        <span class="db-col-tags"></span>
+        <span class="db-col-meta">${escapeHtml(colMeta(cd.before).join(' · '))}</span>
+      </div>`);
+    }
+  }
+  wrap.innerHTML = rows.join('');
+  return wrap;
+}
+
+function buildDbConstraints(cons, d) {
+  const box = document.createElement('div');
+  box.className = 'db-sub';
+  box.innerHTML = `<div class="db-sub-title">Constraints</div>
+    ${cons.map((c) => {
+      const cd = d && d.constraints.get(c.name);
+      const st = cd ? cd.status : 'same';
+      return `<div class="db-con ${st}">
+        <span class="db-tag ${c.kind}" title="${escapeHtml((KIND_TAG[c.kind] || {}).title || c.kind)}">${(KIND_TAG[c.kind] || {}).tag || c.kind}</span>
+        <span class="db-con-name">${escapeHtml(c.name)}</span>
+        <span class="db-con-text">${escapeHtml(constraintText(c))}</span>
+      </div>`;
+    }).join('')}
+    ${d ? [...d.constraints.values()].filter((c) => c.status === 'removed').map((c) => `
+      <div class="db-con removed" title="entfernt">
+        <span class="db-tag ${c.before.kind}">${(KIND_TAG[c.before.kind] || {}).tag || c.before.kind}</span>
+        <span class="db-con-name">${escapeHtml(c.name)}</span>
+        <span class="db-con-text">${escapeHtml(constraintText(c.before))}</span>
+      </div>`).join('') : ''}`;
+  return box;
+}
+
+function buildDbPolicies(policies, d) {
+  const box = document.createElement('div');
+  box.className = 'db-sub';
+  box.innerHTML = `<div class="db-sub-title">RLS-Policies</div>
+    ${policies.map((p) => {
+      const pd = d && d.policies.get(p.name);
+      const st = pd ? pd.status : 'same';
+      return `<div class="db-con ${st}">
+        <span class="db-tag pol" title="Policy">POL</span>
+        <span class="db-con-name">${escapeHtml(p.name)}</span>
+        <span class="db-con-text">${escapeHtml(policyText(p))}</span>
+      </div>`;
+    }).join('')}
+    ${d ? [...d.policies.values()].filter((p) => p.status === 'removed').map((p) => `
+      <div class="db-con removed" title="entfernt">
+        <span class="db-tag pol">POL</span>
+        <span class="db-con-name">${escapeHtml(p.name)}</span>
+        <span class="db-con-text">${escapeHtml(policyText(p.before))}</span>
+      </div>`).join('') : ''}`;
+  return box;
+}
+
+dbSearchEl.addEventListener('input', () => {
+  dbState.filter = dbSearchEl.value;
+  if (dbState.view && dbState.view.ok && dbState.view.plugin) renderDbTables(dbState.view);
+});
+
+// ---------------------------------------------------------------------------
+// Vorher/Nachher nebeneinander
+//
+// Ein Zeichen-Diff waere hier wenig wert - umsortierte Spalten oder ein
+// umbenannter Constraint erzeugen Rauschen, und was fachlich passiert ist,
+// sieht man nicht. Deshalb wird strukturell verglichen und beide Staende
+// werden zeilengleich nebeneinander gestellt: links der alte, rechts der neue.
+// Beide Karten eines Paares liegen in derselben Rasterzeile, also stehen
+// gleiche Spalten auch auf gleicher Hoehe.
+// ---------------------------------------------------------------------------
+const dbDiffOverlay = $('#dbdiff-overlay');
+const dbDiffBody = $('#dbdiff-body');
+const dbDiffModes = $('#dbdiff-modes');
+let dbDiffMode = 'changed'; // 'changed' | 'all'
+
+function openDbDiff() {
+  dbDiffOverlay.classList.remove('hidden');
+  renderDbDiff();
+}
+
+function closeDbDiff() {
+  dbDiffOverlay.classList.add('hidden');
+  const s = activeId && sessions.get(activeId);
+  if (s) s.term.focus();
+}
+
+function renderDbDiffModes() {
+  dbDiffModes.innerHTML = '';
+  for (const m of [{ id: 'changed', label: 'Nur Änderungen' }, { id: 'all', label: 'Ganzes Schema' }]) {
+    const b = document.createElement('button');
+    b.textContent = m.label;
+    b.className = m.id === dbDiffMode ? 'active' : '';
+    b.setAttribute('role', 'tab');
+    b.addEventListener('click', () => {
+      if (dbDiffMode === m.id) return;
+      dbDiffMode = m.id;
+      renderDbDiff();
+    });
+    dbDiffModes.appendChild(b);
+  }
+}
+
+function renderDbDiff() {
+  const view = dbState.view;
+  // Nichts mehr zu vergleichen (Projekt gewechselt, Basis weggefallen): lieber
+  // zumachen als einen veralteten Stand stehen lassen.
+  if (!view || !view.ok || !view.plugin || !view.diff) { closeDbDiff(); return; }
+  renderDbDiffModes();
+
+  $('#dbdiff-title').textContent = `${view.plugin.label} · ${view.project || ''}`;
+  $('#dbdiff-head-old').innerHTML =
+    `<strong>Vorher</strong> <span>${escapeHtml(view.baseline.label)} · ${escapeHtml(view.baseline.ref)}</span>`;
+  $('#dbdiff-head-new').innerHTML =
+    '<strong>Nachher</strong> <span>Arbeitsverzeichnis</span>';
+
+  const baseTables = new Map(view.base.tables.map((t) => [t.id, t]));
+  const curTables = new Map(view.schema.tables.map((t) => [t.id, t]));
+
+  dbDiffBody.innerHTML = '';
+  const frag = document.createDocumentFragment();
+
+  // --- Enums ---
+  const enums = view.diff.enums.filter((e) => dbDiffMode === 'all' || e.status !== 'same');
+  if (enums.length) {
+    frag.appendChild(dbDiffSpan('Enums'));
+    for (const e of enums) {
+      frag.appendChild(dbDiffEnumCard(e, 'before'));
+      frag.appendChild(dbDiffEnumCard(e, 'after'));
+    }
+  }
+
+  // --- Tabellen ---
+  const tables = view.diff.tables.filter((t) => dbDiffMode === 'all' || t.status !== 'same');
+  if (tables.length) {
+    frag.appendChild(dbDiffSpan('Tabellen'));
+    for (const t of tables) {
+      frag.appendChild(dbDiffTableCard(t, baseTables.get(t.id) || null, 'before'));
+      frag.appendChild(dbDiffTableCard(t, curTables.get(t.id) || null, 'after'));
+    }
+  }
+
+  if (!frag.childNodes.length) {
+    frag.appendChild(dbDiffSpan('Keine Unterschiede'));
+  }
+  dbDiffBody.appendChild(frag);
+  dbDiffBody.scrollTop = 0;
+}
+
+/** Zeile, die beide Spalten des Rasters ueberspannt. */
+function dbDiffSpan(text) {
+  const el = document.createElement('div');
+  el.className = 'dbd-span';
+  el.textContent = text;
+  return el;
+}
+
+function dbDiffEnumCard(e, side) {
+  const values = side === 'before' ? (e.before || (e.status === 'added' ? [] : e.values)) : e.values;
+  const el = document.createElement('div');
+  const missing = (side === 'before' && e.status === 'added') || (side === 'after' && e.status === 'removed');
+  el.className = `dbd-card ${side}` + (missing ? ' absent' : '');
+  if (missing) {
+    el.innerHTML = `<div class="dbd-card-head"><span class="dbd-absent">${
+      side === 'before' ? 'existierte noch nicht' : 'entfernt'}</span></div>`;
+    return el;
+  }
+  el.innerHTML = `
+    <div class="dbd-card-head">
+      <span class="dbd-name">${escapeHtml(e.name)}</span>
+      <span class="db-tag enum">ENUM</span>
+    </div>
+    <div class="dbd-rows">${(values || []).map((v) => {
+      const gone = side === 'before' && e.removed && e.removed.includes(v);
+      const isNew = side === 'after' && e.added && e.added.includes(v);
+      return `<div class="dbd-row ${gone ? 'removed' : isNew ? 'added' : 'same'}">
+        <span class="dbd-mark">${gone ? '−' : isNew ? '+' : ''}</span>
+        <code>${escapeHtml(v)}</code></div>`;
+    }).join('')}</div>`;
+  return el;
+}
+
+function dbDiffTableCard(t, table, side) {
+  const el = document.createElement('div');
+  const missing = !table;
+  el.className = `dbd-card ${side} ${t.status}` + (missing ? ' absent' : '');
+
+  if (missing) {
+    el.innerHTML = `<div class="dbd-card-head">
+      <span class="dbd-name muted">${escapeHtml(t.schema)}.${escapeHtml(t.name)}</span>
+      <span class="dbd-absent">${side === 'before' ? 'neue Tabelle' : 'entfernt'}</span>
+    </div>`;
+    return el;
+  }
+
+  // Die Zeilenfolge kommt aus dem Diff und ist auf beiden Seiten dieselbe -
+  // dadurch stehen gleiche Spalten links und rechts auf gleicher Hoehe.
+  const colRows = t.columns.map((cd) => {
+    const c = side === 'before' ? cd.before : cd.after;
+    const st = cd.status;
+    if (!c) {
+      return `<div class="dbd-row absent"><span class="dbd-mark"></span>
+        <span class="dbd-cell muted">—</span></div>`;
+    }
+    const changedFields = st === 'changed' ? cd.fields : [];
+    const meta = colMeta(c).join(' · ');
+    return `<div class="dbd-row ${st}"${changedFields.length
+      ? ` title="${escapeHtml(changedFields.join(', '))}"` : ''}>
+      <span class="dbd-mark">${st === 'added' ? (side === 'after' ? '+' : '') : st === 'removed' ? (side === 'before' ? '−' : '') : st === 'changed' ? '~' : ''}</span>
+      <span class="dbd-col-name">${escapeHtml(c.name)}</span>
+      <span class="dbd-col-type${changedFields.includes('type') ? ' hot' : ''}">${escapeHtml(c.type)}</span>
+      <span class="dbd-col-tags">${tagsHtml(tagsForColumn(table, c.name))}</span>
+      <span class="dbd-col-meta${changedFields.some((f) => f !== 'type') ? ' hot' : ''}">${escapeHtml(meta)}</span>
+    </div>`;
+  });
+
+  const conRows = t.constraints.map((cd) => {
+    const c = side === 'before' ? cd.before : cd.after;
+    if (!c) return `<div class="dbd-row absent"><span class="dbd-mark"></span><span class="dbd-cell muted">—</span></div>`;
+    return `<div class="dbd-row ${cd.status}">
+      <span class="dbd-mark">${cd.status === 'added' ? (side === 'after' ? '+' : '') : cd.status === 'removed' ? (side === 'before' ? '−' : '') : cd.status === 'changed' ? '~' : ''}</span>
+      <span class="db-tag ${c.kind}">${(KIND_TAG[c.kind] || {}).tag || c.kind}</span>
+      <span class="dbd-con-name">${escapeHtml(c.name)}</span>
+      <span class="dbd-con-text">${escapeHtml(constraintText(c))}</span>
+    </div>`;
+  });
+
+  const polRows = t.policies.map((pd) => {
+    const p = side === 'before' ? pd.before : pd.after;
+    if (!p) return `<div class="dbd-row absent"><span class="dbd-mark"></span><span class="dbd-cell muted">—</span></div>`;
+    return `<div class="dbd-row ${pd.status}">
+      <span class="dbd-mark">${pd.status === 'added' ? (side === 'after' ? '+' : '') : pd.status === 'removed' ? (side === 'before' ? '−' : '') : pd.status === 'changed' ? '~' : ''}</span>
+      <span class="db-tag pol">POL</span>
+      <span class="dbd-con-name">${escapeHtml(p.name)}</span>
+      <span class="dbd-con-text">${escapeHtml(policyText(p))}</span>
+    </div>`;
+  });
+
+  el.innerHTML = `
+    <div class="dbd-card-head">
+      <span class="dbd-name">${escapeHtml(table.name)}</span>
+      ${table.schema !== 'public' ? `<span class="db-schema">${escapeHtml(table.schema)}</span>` : ''}
+      ${table.rls.enabled ? `<span class="db-rls${t.rlsChanged ? ' changed' : ''}" title="Row Level Security aktiv">RLS</span>` : ''}
+      ${table.external ? '<span class="db-chip external" title="fremde Tabelle, nur eigene Regeln">extern</span>' : ''}
+    </div>
+    <div class="dbd-rows">${colRows.join('')}</div>
+    ${conRows.length ? `<div class="dbd-sub">Constraints</div><div class="dbd-rows">${conRows.join('')}</div>` : ''}
+    ${polRows.length ? `<div class="dbd-sub">RLS-Policies</div><div class="dbd-rows">${polRows.join('')}</div>` : ''}`;
+  return el;
+}
+
+$('#dbdiff-close').addEventListener('click', closeDbDiff);
+dbDiffOverlay.addEventListener('click', (e) => { if (e.target === dbDiffOverlay) closeDbDiff(); });
+
+// ---------------------------------------------------------------------------
 // Nutzungslimits des Abos: Ist-Verbrauch, dazu der anteilig erlaubte Stand.
 // Nach 3 von 7 Tagen sind 3/7 = 42,9 % das Soll - wer darueber liegt, reisst
 // das Limit, wenn das Tempo bleibt.
@@ -804,7 +1488,7 @@ function startUsagePolling() {
 }
 
 // ---------------------------------------------------------------------------
-// Panel-Tabs (Git / Report / Nutzung / Verlauf / Notizen) mit Badges
+// Panel-Tabs (Git / Verlauf / Notizen / DB-Schema / Nutzung) mit Badges
 // ---------------------------------------------------------------------------
 const badgeGit = $('#badge-git');
 const badgeHistory = $('#badge-history');
@@ -820,8 +1504,10 @@ function setPanelTab(tab) {
   $('#page-history').classList.toggle('hidden', tab !== 'history');
   $('#page-todos').classList.toggle('hidden', tab !== 'todos');
   $('#page-usage').classList.toggle('hidden', tab !== 'usage');
+  $('#page-dbschema').classList.toggle('hidden', tab !== 'dbschema');
   const s = activeId && sessions.get(activeId);
   if (tab === 'usage') loadUsage();
+  if (tab === 'dbschema') loadDbSchema();
   if (tab === 'history' && s) {
     s.unseenHist = 0;
     renderHistory(s);
@@ -1247,7 +1933,15 @@ window.api.onInfo((info) => {
     state: info.state,
   });
   updateSessionItem(s);
-  if (rootChanged) loadTodosFor(s); // anderes Projekt -> dessen Notizen laden
+  if (rootChanged) {
+    loadTodosFor(s); // anderes Projekt -> dessen Notizen laden
+    if (info.id === activeId) {
+      dbState.lastJson = '';
+      dbState.open.clear();
+      dbState.closed.clear();
+      loadDbSchema();
+    }
+  }
   if (info.id === activeId) renderContextPanel();
 });
 
@@ -1299,6 +1993,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape') {
     if (!previewOverlay.classList.contains('hidden')) closePreview();
+    else if (!dbDiffOverlay.classList.contains('hidden')) closeDbDiff();
     else if (!sessionsOverlay.classList.contains('hidden')) closeSessionBrowser();
     else if (gridOpen) closeGrid();
   }
@@ -1312,4 +2007,5 @@ window.addEventListener('keydown', (e) => {
   buildShellMenu();
   await newSession(shells[0] && shells[0].id);
   startUsagePolling();
+  startDbPolling();
 })();

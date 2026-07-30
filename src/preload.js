@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
   clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
   getHistory: (id) => ipcRenderer.invoke('history:get', id),
+  getDbSchema: (id, opts) => ipcRenderer.invoke('dbschema:get', id, opts || {}),
   getTodos: (id) => ipcRenderer.invoke('todos:get', id),
   setTodos: (id, todos) => ipcRenderer.invoke('todos:set', id, todos),
   getUsage: (force) => ipcRenderer.invoke('usage:get', force),
