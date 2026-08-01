@@ -1,87 +1,87 @@
 # Flightdeck ✈️
 
-Warp-ähnliche Terminal-App für die Arbeit mit parallelen KI-Agenten
-(Electron + xterm.js + node-pty). Viele Maschinen auf dem Deck — du gibst die
-Startfreigaben.
+Warp-like terminal app for working with parallel AI agents
+(Electron + xterm.js + node-pty). Many machines on the deck — you give the
+clearance for takeoff.
 
 ## Features
 
-- **Mehrere Shell-Sessions parallel**: PowerShell, PowerShell 7, Git Bash, CMD,
-  WSL (Windows) bzw. Bash/Zsh (Linux). Neue Session über `+` (Standard-Shell)
-  oder `▾` (Shell-Auswahl), `Strg+T` / `Strg+Shift+W`.
-- **Session-Liste links** – jeder Tab zeigt:
-  - **Status**: 🟡 arbeitet · ⭕ wartet auf Kommando · 🔵 Agent (z. B. Claude
-    Code) wartet auf *deine* Eingabe — du siehst sofort, wer dich braucht
-  - **laufende Agenten**: `✈ 3`, wenn in dieser Session gerade drei Subagenten
-    arbeiten — Tooltip nennt ihre Aufträge (s. u.)
-  - aktuelles Verzeichnis (live über Shell-Integration / OSC 7) und Git-Branch
-  - optionales manuelles **Label** (Chip) und optionalen manuellen **Titel**
-    → Doppelklick/Rechtsklick auf den Tab öffnet das Bearbeiten-Popover
-- **Kontextpanel rechts** mit Tabs (folgt der aktiven Session):
-  - **Git**: zugehöriger Pull Request (via `gh` CLI) + geänderte Dateien;
-    Klick auf eine Datei öffnet die Diff-/Datei-Vorschau, `Esc` schließt
-  - **Verlauf**: deine Eingaben dieser Session — Shell-Kommandos exakt,
-    Prompts an Agenten rekonstruiert; Klick kopiert, `↩` fügt ins Terminal ein
-  - **Notizen**: kurze TODOs pro Projekt (Repo-Root), persistiert über
-    Neustarts; Badges zeigen offene Notizen und neue Verlaufseinträge
-  - **DB-Schema**: Tabellen, Spalten, Typen und Constraints des Projekts —
-    plus ein Signal, sobald der aktuelle Vorgang oder PR das Schema ändert
-    (s. u.)
-- Panels per Trenner in der Breite verstellbar.
+- **Multiple shell sessions in parallel**: PowerShell, PowerShell 7, Git Bash,
+  CMD, WSL (Windows) or Bash/Zsh (Linux). New session via `+` (default shell)
+  or `▾` (shell picker), `Ctrl+T` / `Ctrl+Shift+W`.
+- **Session list on the left** – every tab shows:
+  - **Status**: 🟡 working · ⭕ waiting for a command · 🔵 agent (e.g. Claude
+    Code) is waiting for *your* input — you see at a glance who needs you
+  - **running agents**: `✈ 3` when three subagents are working in this session
+    right now — the tooltip names their tasks (see below)
+  - current directory (live via shell integration / OSC 7) and git branch
+  - optional manual **label** (chip) and optional manual **title**
+    → double-click/right-click the tab to open the edit popover
+- **Context panel on the right** with tabs (follows the active session):
+  - **Git**: the associated pull request (via the `gh` CLI) + changed files;
+    clicking a file opens the diff/file preview, `Esc` closes it
+  - **History**: your input in this session — shell commands verbatim, prompts
+    to agents reconstructed; click to copy, `↩` inserts into the terminal
+  - **Notes**: short TODOs per project (repo root), persisted across restarts;
+    badges show open notes and new history entries
+  - **DB schema**: the project's tables, columns, types and constraints —
+    plus a signal as soon as the current work or PR changes the schema
+    (see below)
+- Panels are resizable via the dividers.
 
-## Start
+## Getting started
 
 ```
 npm install
 npm start
 ```
 
-Voraussetzungen: `git` im PATH; für PR-Anzeige zusätzlich
+Requirements: `git` on the PATH; for PR display additionally the
 [GitHub CLI](https://cli.github.com/) (`gh auth login`).
 
-## Architektur
+## Architecture
 
 ```
-src/main/main.js     Electron-Main: PTY-Sessions (node-pty), Shell-Erkennung,
-                     OSC-Parsing (cwd, Busy/Idle, Kommandos), Verlauf,
-                     Notizen-Persistenz, IPC
-src/main/gitinfo.js  git status/branch + PR-Infos via gh (gecacht)
-src/main/agents/     Laufende Agenten: Plugin-Registry ("Senser") + Plugins
-src/main/dbschema/   DB-Schema: Plugin-Registry ("Senser"), DDL-Leser, Diff
-src/preload.js       contextBridge-API für den Renderer
-src/renderer/        UI: Sidebar, xterm-Terminals, Tab-Panel, Vorschau
+src/main/main.js     Electron main: PTY sessions (node-pty), shell detection,
+                     OSC parsing (cwd, busy/idle, commands), history,
+                     note persistence, IPC
+src/main/gitinfo.js  git status/branch + PR info via gh (cached)
+src/main/agents/     Running agents: plugin registry ("sensor") + plugins
+src/main/dbschema/   DB schema: plugin registry ("sensor"), DDL reader, diff
+src/preload.js       contextBridge API for the renderer
+src/renderer/        UI: sidebar, xterm terminals, tab panel, preview
 ```
 
-### Shell-Integration
+### Shell integration
 
-Beim Start der Shell wird der Prompt erweitert (PowerShell via
-`-EncodedCommand`, Bash via rc-Datei) und sendet:
+When the shell starts, its prompt is extended (PowerShell via
+`-EncodedCommand`, Bash via an rc file) and emits:
 
-- `OSC 7` — aktuelles Verzeichnis (file://-URL), wie in Warp/WezTerm/VS Code
-- `OSC 133` — `C` = Kommando gestartet, `A`/`D` = Prompt wieder da
-- `OSC 7770;cmd` — die abgesendete Kommandozeile (Base64)
+- `OSC 7` — current directory (file:// URL), as in Warp/WezTerm/VS Code
+- `OSC 133` — `C` = command started, `A`/`D` = prompt is back
+- `OSC 7770;cmd` — the command line that was submitted (Base64)
 
-Der Main-Prozess parst die Sequenzen aus dem PTY-Strom und leitet daraus
-Verzeichnis, Branch, geänderte Dateien, PR (Refresh 4 s, PR-Cache 45 s) und
-den Busy-/Idle-Status ab. Bei beobachteten Agenten-TUIs (`claude`, `codex`,
-`aider`) gilt zusätzlich: >2 s Stille bei laufendem Kommando = „Eingabe
-erwartet“ (blauer Punkt), da diese TUIs beim Arbeiten permanent rendern.
+The main process parses these sequences out of the PTY stream and derives from
+them the directory, branch, changed files, PR (refresh 4 s, PR cache 45 s) and
+the busy/idle state. For the agent TUIs we watch (`claude`, `codex`, `aider`)
+one more rule applies: >2 s of silence while a command is running = "input
+expected" (blue dot), because these TUIs render continuously while working.
 
-### Laufende Agenten
+### Running agents
 
-Ein Agent, der Arbeit an weitere Agenten verteilt, sieht von außen aus wie
-einer, der nichts tut: das Terminal steht still, während im Hintergrund vier
-Vorgänge laufen. Der Chip am Tab sagt, wie viele es sind — und der Tooltip,
-woran sie sitzen.
+An agent that hands work off to further agents looks, from the outside, like
+one that is doing nothing: the terminal sits still while four tasks run in the
+background. The chip on the tab says how many there are — and the tooltip says
+what they are working on.
 
 ```
-src/main/agents/index.js          Senser: fragt die Plugins, wählt das überzeugteste
-src/main/agents/plugins/claude.js Claude Code: Erkennung + Zählung
+src/main/agents/index.js          Sensor: asks the plugins, picks the most confident one
+src/main/agents/plugins/claude.js Claude Code: detection + counting
 ```
 
-**Plugins.** Wie beim DB-Schema weiß der Senser nichts über die Technik
-dahinter — kein Wort über Claude, Transcripts oder Subagenten-Verzeichnisse.
-Erkennung *und* Zählung stecken im Plugin:
+**Plugins.** As with the DB schema, the sensor knows nothing about the
+technology behind it — not a word about Claude, transcripts or subagent
+directories. Detection *and* counting live in the plugin:
 
 ```js
 {
@@ -91,59 +91,57 @@ Erkennung *und* Zählung stecken im Plugin:
 }
 ```
 
-`ctx` ist, was die Shell-Beobachtung über das Terminal hergibt: Verzeichnis,
-laufendes Kommando, gebundene Session. Welche dieser Angaben ein Plugin
-braucht, ist seine Sache — das Claude-Plugin erkennt sich an der gebundenen
-Session, ein Plugin für eine andere Agenten-CLI könnte am Kommando gehen.
-Meldet ein Plugin Zuständigkeit, liefert es auch die Zahl. Ein weiteres
-einzuhängen heißt: Datei unter `plugins/` anlegen, in `PLUGINS` eintragen,
-fertig.
+`ctx` is whatever the shell observation can tell about the terminal: directory,
+running command, bound session. Which of those a plugin needs is its own
+business — the Claude plugin recognises itself by the bound session, a plugin
+for a different agent CLI could go by the command. If a plugin claims
+responsibility, it also delivers the count. Adding another one means: create a
+file under `plugins/`, register it in `PLUGINS`, done.
 
-**Claude-Plugin.** Claude Code legt jeden Subagenten einer Session als eigenes
-Paar unter `~/.claude/projects/<projekt>/<session>/subagents/` ab:
-`agent-<id>.jsonl` (das Transcript) und `agent-<id>.meta.json` (Auftrag, Typ,
-Worktree). Einen Status gibt es dort nicht — „arbeitet noch" ergibt sich aus
-drei Signalen, und erst zusammen sind sie belastbar:
+**Claude plugin.** Claude Code stores every subagent of a session as its own
+pair under `~/.claude/projects/<project>/<session>/subagents/`:
+`agent-<id>.jsonl` (the transcript) and `agent-<id>.meta.json` (task, type,
+worktree). There is no status field in there — "still working" follows from
+three signals, and only together are they reliable:
 
-- **Start** — die `meta.json` entsteht beim Losschicken; ihre mtime ist der
-  Startzeitpunkt.
-- **Stopp** — eine `<task-notification>` im Transcript des Auftraggebers. Das
-  `tool_result` des Agent-Aufrufs taugt dafür nicht: Agenten laufen asynchron,
-  es meldet nur „launched successfully" und steht schon Sekunden nach dem Start
-  da.
-- **Wiederaufnahme** — ein `SendMessage` an denselben Agenten; danach arbeitet
-  er wieder, und die vorige Abschlussmeldung ist verbraucht.
+- **Start** — the `meta.json` is created when the agent is dispatched; its
+  mtime is the start time.
+- **Stop** — a `<task-notification>` in the transcript of the caller. The
+  `tool_result` of the agent call is no good for this: agents run
+  asynchronously, it only reports "launched successfully" and is already there
+  seconds after the start.
+- **Resume** — a `SendMessage` to the same agent; afterwards it is working
+  again, and the previous completion message is spent.
 
-Dazu ein Sicherheitsnetz: Wer 15 Minuten nichts mehr geschrieben hat, gilt als
-verwaist. Ohne das bliebe ein Agent für immer als „arbeitet" stehen, wenn
-Claude abstürzt und die Abschlussmeldung nie kommt.
+Plus a safety net: anything that has not written for 15 minutes counts as
+orphaned. Without that, an agent would stay at "working" forever if Claude
+crashes and the completion message never arrives.
 
-Transcripts wachsen nur hinten an, deshalb merkt sich das Plugin pro Datei den
-Lesestand: der erste Durchlauf kostet einmal die ganze Datei, jeder weitere nur
-den neuen Rest. Der Abgleich alle 4 s kostet damit nichts.
+Transcripts only ever grow at the end, so the plugin remembers a read offset
+per file: the first pass costs the whole file once, every further pass only the
+new remainder. That makes the check every 4 s essentially free.
 
-Das alles ist undokumentiertes internes Format. Ändert Claude Code daran etwas,
-fällt nichts um: dann findet das Plugin keine Agenten und der Chip verschwindet,
-statt falsch zu werden.
+All of this is undocumented internal format. If Claude Code changes it, nothing
+breaks: the plugin simply finds no agents and the chip disappears instead of
+becoming wrong.
 
-### DB-Schema
+### DB schema
 
-Ein Agent, der eine Migration schreibt, ändert das Datenmodell — und das ist
-die Art Änderung, die man gesehen haben will, bevor sie durchgeht. Der Tab
-zeigt deshalb nicht nur das Schema, sondern vor allem, **was sich daran
-geändert hat**.
+An agent that writes a migration changes the data model — and that is the kind
+of change you want to have seen before it goes through. The tab therefore shows
+not just the schema, but above all **what has changed about it**.
 
 ```
-src/main/dbschema/index.js       Senser: fragt die Plugins, cached, wählt die Basis
-src/main/dbschema/files.js       Dateizugriff: Arbeitsverzeichnis oder Git-Stand
-src/main/dbschema/sql-ddl.js     Postgres-DDL-Leser (Migrationen nachspielen)
-src/main/dbschema/ir.js          das standardisierte Schema-Format
-src/main/dbschema/diff.js        struktureller Vergleich zweier Stände
-src/main/dbschema/plugins/       je Technik ein Plugin (derzeit: supabase.js)
+src/main/dbschema/index.js       Sensor: asks the plugins, caches, picks the baseline
+src/main/dbschema/files.js       File access: working tree or git state
+src/main/dbschema/sql-ddl.js     Postgres DDL reader (replays migrations)
+src/main/dbschema/ir.js          the standardised schema format
+src/main/dbschema/diff.js        structural comparison of two states
+src/main/dbschema/plugins/       one plugin per technology (currently: supabase.js)
 ```
 
-**Plugins.** Der Senser weiß nichts über Supabase, Drizzle oder SQL. Er kennt
-nur diese Schnittstelle — Erkennung *und* Lesen stecken vollständig im Plugin:
+**Plugins.** The sensor knows nothing about Supabase, Drizzle or SQL. It only
+knows this interface — detection *and* reading live entirely in the plugin:
 
 ```js
 {
@@ -153,42 +151,42 @@ nur diese Schnittstelle — Erkennung *und* Lesen stecken vollständig im Plugin
 }
 ```
 
-Der Senser fragt beim aktiven Arbeitsverzeichnis alle Plugins, ob sie sich
-zuständig fühlen; das überzeugteste gewinnt und liefert das Schema im
-standardisierten Format zurück. Ein weiteres Plugin einzuhängen heißt: Datei
-unter `plugins/` anlegen, in `PLUGINS` eintragen, fertig.
+For the active working directory the sensor asks every plugin whether it feels
+responsible; the most confident one wins and returns the schema in the
+standardised format. Adding another plugin means: create a file under
+`plugins/`, register it in `PLUGINS`, done.
 
-`provider` abstrahiert den Dateizugriff (`exists` / `read` / `list` / `stamp`),
-damit ein Plugin dasselbe Schema aus dem Arbeitsverzeichnis **und** aus einem
-Git-Commit lesen kann — ohne das gäbe es kein „vorher“.
+`provider` abstracts file access (`exists` / `read` / `list` / `stamp`) so a
+plugin can read the same schema from the working directory **and** from a git
+commit — without that there would be no "before".
 
-**Supabase-Plugin.** Erkennung über `supabase/config.toml` bzw.
-`supabase/migrations/`; gelesen wird durch Nachspielen der Migrationen in
-Namensreihenfolge (`CREATE`/`ALTER`/`DROP TABLE`, Enums, Indizes, RLS-Policies,
-`COMMENT ON`). Die Migrationen sind die Quelle der Wahrheit im Repo — anders
-als eine laufende Datenbank sind sie immer da und liegen im Git.
+**Supabase plugin.** Detection via `supabase/config.toml` or
+`supabase/migrations/`; reading happens by replaying the migrations in name
+order (`CREATE`/`ALTER`/`DROP TABLE`, enums, indexes, RLS policies,
+`COMMENT ON`). The migrations are the source of truth in the repo — unlike a
+running database they are always there, and they live in git.
 
-**Diff.** Verglichen wird strukturell, nicht zeichenweise: Tabellen, Spalten
-(Typ, NULL, Default, Identity, berechnet, Kommentar), Constraints, Indizes,
-Enum-Werte und RLS-Policies. Ein Zeichen-Diff wäre hier wenig wert —
-umsortierte Spalten erzeugen Rauschen, und was fachlich passiert ist, sieht man
-nicht. Die Basis ist wählbar:
+**Diff.** The comparison is structural, not character-based: tables, columns
+(type, NULL, default, identity, generated, comment), constraints, indexes,
+enum values and RLS policies. A character diff would be worth little here —
+reordered columns create noise, and what actually happened is not visible. The
+baseline is selectable:
 
-- **PR-Basis** — alle Änderungen des Pull Requests (Merge-Base zum Zielbranch)
-- **Abzweig von main** — alle Änderungen dieses Branches
-- **HEAD** — nur was noch nicht committet ist
+- **PR baseline** — all changes of the pull request (merge base with the target
+  branch)
+- **Branch point from main** — all changes of this branch
+- **HEAD** — only what has not been committed yet
 
-Gibt es Änderungen, erscheint eine Zahl am Tab (auch wenn er zu ist) und im
-Panel ein Hinweis. „Vergleichen“ öffnet **Vorher/Nachher nebeneinander**: links
-der alte Stand, rechts der neue, zeilengleich — gleiche Spalten stehen auf
-gleicher Höhe, fehlende als `—`.
+If there are changes, a number appears on the tab (even when it is closed) and
+a notice in the panel. "Compare" opens **before/after side by side**: the old
+state on the left, the new one on the right, row-aligned — identical columns
+sit at the same height, missing ones show as `—`.
 
-Dargestellt wird als Tabellenkarten, nicht als ER-Diagramm: gefragt sind
-Spalten, Typen und Constraints, und die stehen in einem Diagrammkasten entweder
-nicht drin oder unleserlich klein. Vor allem aber lässt sich ein Diagramm nicht
-zeilenweise vergleichen. Beziehungen zeigen die Fremdschlüssel im Klartext
-mitsamt Ziel und `on delete`-Verhalten.
+It is rendered as table cards, not as an ER diagram: what matters are columns,
+types and constraints, and inside a diagram box those are either absent or
+illegibly small. Above all, a diagram cannot be compared row by row.
+Relationships are shown as foreign keys in plain text, including target and
+`on delete` behaviour.
 
-Neu gelesen wird nur, wenn sich am Fingerabdruck der beteiligten Dateien
-(mtime/Größe) etwas ändert — der Hintergrund-Abruf alle 10 s kostet damit
-nichts.
+A re-read only happens when the fingerprint of the involved files (mtime/size)
+changes — which makes the background poll every 10 s essentially free.

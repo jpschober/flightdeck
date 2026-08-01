@@ -41,7 +41,7 @@ html, body {
 .hidden { display: none !important; }
 .muted { color: var(--text-faint); font-size: 12px; }
 
-/* Sichtbarer Tastatur-Fokus, ueberall konsistent */
+/* Visible keyboard focus, consistent everywhere */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -52,7 +52,7 @@ button { transition: background var(--speed) var(--ease), border-color var(--spe
 button:active { transform: translateY(0.5px); }
 
 /* ------------------------------------------------------------------ */
-/* Seitenleiste (Sessions)                                             */
+/* Sidebar (sessions)                                                  */
 /* ------------------------------------------------------------------ */
 #sidebar {
   width: 250px;
@@ -73,7 +73,7 @@ button:active { transform: translateY(0.5px); }
   border-bottom: 1px solid var(--border);
 }
 
-/* Puls: liegt hinter Schriftzug und Knoepfen und faengt keine Klicks ab */
+/* Pulse: sits behind the wordmark and buttons and catches no clicks */
 #pulse-canvas {
   position: absolute;
   inset: 0;
@@ -91,7 +91,7 @@ button:active { transform: translateY(0.5px); }
   color: var(--text-dim);
   font-size: 12px;
   text-transform: uppercase;
-  /* Haelt den Schriftzug lesbar, wenn die Kurve dahinter durchlaeuft */
+  /* Keeps the wordmark readable while the curve runs behind it */
   text-shadow: 0 0 6px var(--bg-panel), 0 0 3px var(--bg-panel);
 }
 
@@ -209,8 +209,8 @@ button:active { transform: translateY(0.5px); }
 .si-status.exited {
   background: var(--text-faint);
 }
-/* Ruhig, nicht pulsierend: "wartet auf dich" ist ein Zustand, kein Vorgang -
-   eine Animation liest sich, als liefe gerade etwas. */
+/* Calm, not pulsing: "waiting for you" is a state, not a process -
+   an animation would read as if something were running right now. */
 .si-status.attention {
   background: var(--accent);
   box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.18);
@@ -240,9 +240,9 @@ button:active { transform: translateY(0.5px); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Laufende Agenten. Bewusst ruhig gehalten und ohne Animation: die Zahl sagt
-   „hier ist etwas unterwegs", der Statuspunkt daneben sagt, ob du dran bist -
-   zwei bewegte Dinge nebeneinander wuerden sich gegenseitig entwerten. */
+/* Running agents. Deliberately kept calm and without animation: the number
+   says "something is underway here", the status dot next to it says whether it
+   is your turn - two moving things side by side would devalue one another. */
 .si-agents {
   flex-shrink: 0;
   margin-left: auto;
@@ -273,9 +273,9 @@ button:active { transform: translateY(0.5px); }
   text-overflow: ellipsis;
   font-family: var(--mono);
 }
-/* Worktree-Branches werden lang (feature/18-onboarding-start-presets) und
-   schossen ueber den Rahmen der Kachel hinaus. Jetzt kuerzt der Branch selbst,
-   behaelt aber Vorrang vor dem Pfad. */
+/* Worktree branches get long (feature/18-onboarding-start-presets) and used to
+   shoot past the frame of the tile. Now the branch truncates itself, but keeps
+   priority over the path. */
 .si-branch {
   flex: 0 1 auto;
   min-width: 0;
@@ -306,7 +306,7 @@ button:active { transform: translateY(0.5px); }
 .si-close:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
 
 /* ------------------------------------------------------------------ */
-/* Terminal-Bereich                                                    */
+/* Terminal area                                                       */
 /* ------------------------------------------------------------------ */
 #terminal-area {
   flex: 1;
@@ -339,7 +339,7 @@ button:active { transform: translateY(0.5px); }
 }
 
 /* ------------------------------------------------------------------ */
-/* Grid-Übersicht                                                      */
+/* Grid overview                                                       */
 /* ------------------------------------------------------------------ */
 #grid-view {
   position: absolute;
@@ -393,11 +393,11 @@ button:active { transform: translateY(0.5px); }
   overflow: hidden;
   padding: 4px 6px;
   background: var(--bg);
-  pointer-events: none; /* Klick geht an die Karte */
+  pointer-events: none; /* the click goes to the card */
 }
 
 /* ------------------------------------------------------------------ */
-/* Claude-Session-Browser                                              */
+/* Claude session browser                                              */
 /* ------------------------------------------------------------------ */
 #sessions-overlay {
   position: fixed;
@@ -510,7 +510,7 @@ button:active { transform: translateY(0.5px); }
 .cs-actions .cs-resume:hover { background: var(--accent); filter: brightness(1.1); }
 
 /* ------------------------------------------------------------------ */
-/* Trenner                                                             */
+/* Dividers                                                            */
 /* ------------------------------------------------------------------ */
 .divider {
   width: 4px;
@@ -522,7 +522,7 @@ button:active { transform: translateY(0.5px); }
 .divider:hover, .divider.dragging { background: var(--accent); }
 
 /* ------------------------------------------------------------------ */
-/* Rechtes Kontextpanel                                                */
+/* Right-hand context panel                                            */
 /* ------------------------------------------------------------------ */
 #context-panel {
   width: 330px;
@@ -535,14 +535,14 @@ button:active { transform: translateY(0.5px); }
   overflow: hidden;
 }
 
-/* Tab-Leiste des Kontextpanels */
+/* Tab bar of the context panel */
 #panel-tabs {
   display: flex;
   gap: 2px;
   padding: 6px 8px 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  /* Schmales Panel: lieber die Leiste schieben als die Beschriftungen stauchen */
+  /* Narrow panel: rather scroll the bar than squeeze the labels */
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -565,8 +565,8 @@ button:active { transform: translateY(0.5px); }
 .panel-tab:hover { color: var(--text); background: var(--bg-hover); }
 .panel-tab.active { color: var(--text); border-bottom-color: var(--accent); }
 
-/* Vergrößern: schiebt sich rechts an die Tabs, bleibt dort auch im Großzustand */
-/* Bleibt beim Schieben der Leiste rechts stehen statt mit hinauszuwandern */
+/* Enlarge: sits to the right of the tabs and stays there when enlarged too */
+/* Stays put on the right while the bar scrolls instead of wandering out */
 #btn-panel-zoom {
   position: sticky;
   right: 0;
@@ -577,9 +577,10 @@ button:active { transform: translateY(0.5px); }
   background: var(--bg-panel);
 }
 
-/* Vergrößertes Panel: dasselbe Muster wie #preview-overlay und #dbdiff-overlay.
-   Das Panel verlässt dabei den Flex-Fluss - die .panel-page bleiben aber, wo sie
-   im DOM sind, deshalb rendert und aktualisiert alles unverändert weiter. */
+/* Enlarged panel: the same pattern as #preview-overlay and #dbdiff-overlay.
+   The panel leaves the flex flow in the process - but the .panel-page elements
+   stay where they are in the DOM, so everything keeps rendering and updating
+   unchanged. */
 #panel-backdrop {
   position: fixed;
   inset: 0;
@@ -622,7 +623,7 @@ button:active { transform: translateY(0.5px); }
 #pr-section { border-bottom: 1px solid var(--border); flex-shrink: 0; }
 #files-section { flex-shrink: 0; }
 
-/* Worktree-Hinweis: Branch/Dateien kommen nicht aus dem Shell-Verzeichnis */
+/* Worktree notice: branch/files do not come from the shell's directory */
 #wt-banner {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -697,7 +698,7 @@ button:active { transform: translateY(0.5px); }
 .pr-stats .del { color: var(--red); }
 
 /* ------------------------------------------------------------------ */
-/* PR-Zusatzsektionen & Markdown                                       */
+/* PR extra sections & markdown                                        */
 /* ------------------------------------------------------------------ */
 .pr-checks { display: flex; gap: 4px; }
 .check-chip {
@@ -751,7 +752,7 @@ button:active { transform: translateY(0.5px); }
 .fb-state.commented { color: var(--text-dim); }
 .fb-date { margin-left: auto; color: var(--text-faint); font-family: var(--mono); font-size: 10px; }
 
-/* Mini-Markdown */
+/* Mini markdown */
 .md { font-size: 12px; line-height: 1.55; }
 .md .md-p { margin: 4px 0; }
 .md .md-h { margin: 10px 0 4px; font-size: 12px; color: var(--text); }
@@ -788,11 +789,11 @@ button:active { transform: translateY(0.5px); }
 .md a:hover { text-decoration: underline; }
 
 /* ------------------------------------------------------------------ */
-/* Agent-Report                                                        */
+/* Agent report                                                        */
 /* ------------------------------------------------------------------ */
 #page-report { overflow-y: auto; padding: 12px; }
 
-/* --- Nutzungslimits ------------------------------------------------------ */
+/* --- Usage limits -------------------------------------------------------- */
 #page-usage { overflow-y: auto; padding: 12px; }
 
 .uz-top {
@@ -845,7 +846,7 @@ button:active { transform: translateY(0.5px); }
 .uz-dot.warn { background: var(--yellow); }
 .uz-dot.over { background: var(--red); }
 
-/* Leiste: Fuellstand = Ist, senkrechter Strich = Soll zum jetzigen Zeitpunkt */
+/* Bar: fill level = actual, vertical line = target as of now */
 .uz-bar {
   position: relative;
   height: 9px;
@@ -926,7 +927,7 @@ button:active { transform: translateY(0.5px); }
   line-height: 1.5;
 }
 
-/* Punkt am Tab: nur bei gelb/rot sichtbar */
+/* Dot on the tab: only visible for amber/red */
 .tab-dot {
   display: inline-block;
   width: 6px;
@@ -979,11 +980,11 @@ button:active { transform: translateY(0.5px); }
 .file-status.U { color: var(--accent); }
 .file-status.C { color: var(--text-faint); }
 
-/* Bereits committet: bleibt in der Liste, tritt aber zurueck */
+/* Already committed: stays in the list, but recedes */
 .file-item.committed { opacity: 0.6; }
 .file-item.committed:hover { opacity: 1; }
 
-/* Verzeichnisse sind nicht anklickbar - kein Hover, kein Zeiger */
+/* Directories are not clickable - no hover, no pointer */
 .file-item.is-dir {
   cursor: default;
   color: var(--text-faint);
@@ -993,7 +994,7 @@ button:active { transform: translateY(0.5px); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  direction: rtl;        /* Dateiname (Ende) bleibt sichtbar */
+  direction: rtl;        /* the file name (the end) stays visible */
   text-align: left;
 }
 .file-diffstat { flex-shrink: 0; font-size: 10px; }
@@ -1001,7 +1002,7 @@ button:active { transform: translateY(0.5px); }
 .file-diffstat .del { color: var(--red); }
 
 /* ------------------------------------------------------------------ */
-/* Eingabe-Verlauf                                                     */
+/* Input history                                                       */
 /* ------------------------------------------------------------------ */
 #history-list { overflow-y: auto; flex: 1; min-height: 0; }
 
@@ -1055,7 +1056,7 @@ button:active { transform: translateY(0.5px); }
 .hist-item.copied { background: var(--accent-soft); }
 
 /* ------------------------------------------------------------------ */
-/* Notizen / TODO                                                      */
+/* Notes / TODO                                                        */
 /* ------------------------------------------------------------------ */
 #todo-list { overflow-y: auto; flex: 1; min-height: 0; }
 
@@ -1113,7 +1114,7 @@ button:active { transform: translateY(0.5px); }
 #todo-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ------------------------------------------------------------------ */
-/* Datei-Vorschau                                                      */
+/* File preview                                                        */
 /* ------------------------------------------------------------------ */
 #preview-overlay {
   position: fixed;
@@ -1172,8 +1173,8 @@ button:active { transform: translateY(0.5px); }
   line-height: 1.5;
   tab-size: 4;
 }
-/* Roh- und Diff-Ansicht behalten die Zeilenumbrueche der Datei, die
-   gerenderte Markdown-Ansicht bricht wie Fliesstext um. */
+/* The raw and diff views keep the file's line breaks, the rendered markdown
+   view wraps like body text. */
 #preview-content > pre.pv-pre {
   margin: 0;
   font: inherit;
@@ -1185,8 +1186,8 @@ button:active { transform: translateY(0.5px); }
   line-height: 1.65;
   max-width: 78ch;
 }
-/* Die .md-Regeln sind fuer das schmale Panel gedacht; in der breiten Vorschau
-   duerfen Ueberschriften wieder Groessenabstufungen haben. */
+/* The .md rules are meant for the narrow panel; in the wide preview headings
+   may have size gradations again. */
 #preview-content .pv-md .md-h { margin: 18px 0 6px; color: var(--text); }
 #preview-content .pv-md h3.md-h { font-size: 18px; }
 #preview-content .pv-md h4.md-h { font-size: 15px; }
@@ -1226,7 +1227,7 @@ button:active { transform: translateY(0.5px); }
 #preview-content .dl-meta { color: var(--text-faint); }
 
 /* ------------------------------------------------------------------ */
-/* Meta-Popover (Titel/Label)                                          */
+/* Meta popover (title/label)                                          */
 /* ------------------------------------------------------------------ */
 #meta-popover {
   position: fixed;
@@ -1274,7 +1275,7 @@ button:active { transform: translateY(0.5px); }
 #meta-save:hover { background: var(--accent); filter: brightness(1.1); }
 
 /* ------------------------------------------------------------------ */
-/* DB-Schema                                                           */
+/* DB schema                                                           */
 /* ------------------------------------------------------------------ */
 #page-dbschema { padding: 10px 12px 12px; overflow: hidden; }
 #db-head, #db-signal { flex-shrink: 0; }
@@ -1319,7 +1320,7 @@ button:active { transform: translateY(0.5px); }
 .db-hint { margin-top: 8px; font-size: 11px; color: var(--text-faint); line-height: 1.6; }
 .db-hint code, .db-comment code { font-family: var(--mono); font-size: 10px; }
 
-/* Das Signal: eine Schemaaenderung soll ins Auge fallen */
+/* The signal: a schema change should catch the eye */
 .db-signal {
   display: flex;
   align-items: flex-start;
@@ -1397,7 +1398,7 @@ button:active { transform: translateY(0.5px); }
   text-decoration: line-through;
 }
 
-/* Tabellenkarte */
+/* Table card */
 .db-table {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1483,7 +1484,7 @@ button:active { transform: translateY(0.5px); }
   font-style: italic;
 }
 
-/* Spaltenzeilen */
+/* Column rows */
 .db-cols { display: flex; flex-direction: column; }
 .db-col {
   display: grid;
@@ -1511,7 +1512,7 @@ button:active { transform: translateY(0.5px); }
 .db-col.removed { background: rgba(224, 95, 106, 0.07); opacity: 0.75; }
 .db-col.removed .db-col-name { text-decoration: line-through; }
 
-/* Kurzzeichen fuer Constraints */
+/* Short tags for constraints */
 .db-tag {
   flex-shrink: 0;
   font-size: 8px;
@@ -1531,7 +1532,7 @@ button:active { transform: translateY(0.5px); }
 .db-tag.pol { color: var(--purple); background: rgba(160, 123, 240, 0.16); }
 .db-tag.enum { color: var(--purple); background: rgba(160, 123, 240, 0.16); }
 
-/* Constraints und Policies */
+/* Constraints and policies */
 .db-sub { margin-top: 7px; }
 .db-sub-title {
   font-size: 9px;
@@ -1558,7 +1559,7 @@ button:active { transform: translateY(0.5px); }
 .db-con.removed .db-con-name { text-decoration: line-through; }
 
 /* ------------------------------------------------------------------ */
-/* DB-Schema: Vorher/Nachher nebeneinander                             */
+/* DB schema: before/after side by side                                */
 /* ------------------------------------------------------------------ */
 #dbdiff-overlay {
   position: fixed;
@@ -1629,7 +1630,7 @@ button:active { transform: translateY(0.5px); }
 }
 #dbdiff-close:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
 
-/* Kopfzeile der beiden Spalten, bleibt beim Scrollen stehen */
+/* Header row of the two columns, stays put while scrolling */
 #dbdiff-cols {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1645,10 +1646,10 @@ button:active { transform: translateY(0.5px); }
 .dbd-head.old strong { color: var(--red); }
 .dbd-head.new strong { color: var(--green); }
 
-/* Ein Raster fuer beide Seiten: die Karten eines Paares liegen in derselben
-   Zeile und sind damit automatisch gleich hoch - gleiche Spalten stehen links
-   und rechts auf gleicher Hoehe. Gescrollt wird der Container, also beide
-   Seiten gemeinsam. */
+/* One grid for both sides: the cards of a pair sit in the same row and are
+   therefore automatically the same height - identical columns stand at the same
+   height on the left and on the right. The container scrolls, so both sides move
+   together. */
 #dbdiff-body {
   flex: 1;
   min-height: 0;
@@ -1718,8 +1719,8 @@ button:active { transform: translateY(0.5px); }
   border-radius: 3px;
   font-family: var(--mono);
   font-size: 10px;
-  /* Gleiche Mindesthoehe auf beiden Seiten, damit die Zeilen Zeile fuer Zeile
-     nebeneinander bleiben, auch wenn eine Seite leer ist. */
+  /* The same minimum height on both sides, so the rows stay aligned row by row
+     even when one side is empty. */
   min-height: 17px;
 }
 .dbd-mark { grid-area: mark; font-weight: 700; }

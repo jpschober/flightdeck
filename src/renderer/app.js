@@ -12,18 +12,18 @@ const emptyStateEl = $('#empty-state');
 const prCardEl = $('#pr-card');
 const fileListEl = $('#file-list');
 
-// Erster Treffer gewinnt. Ohne die Linux-/macOS-Schriften fiel die Liste auf
-// das generische `monospace` zurueck - zusammen mit lineHeight 1.25 ergab das
-// die zu grossen Zeilenabstaende.
+// First match wins. Without the Linux/macOS fonts the list fell back to the
+// generic `monospace` - together with lineHeight 1.25 that produced the
+// oversized line spacing.
 const TERM_FONT = [
   '"Cascadia Code"', '"Cascadia Mono"', '"JetBrains Mono"', '"Fira Code"',
   '"Hack"', '"Source Code Pro"', '"DejaVu Sans Mono"', '"Liberation Mono"',
   '"Noto Sans Mono"', '"Ubuntu Mono"', 'Menlo', 'Consolas', 'monospace',
 ].join(', ');
 
-// Vollbild-Oberflächen wie Claude schalten die Mausmeldung ein; xterm.js gibt
-// Klicks dann an die Anwendung weiter statt zu markieren. Mit gedrückter
-// Umschalttaste bleibt die Markierung möglich.
+// Full-screen interfaces like Claude turn on mouse reporting; xterm.js then
+// forwards clicks to the application instead of selecting. Holding Shift keeps
+// selection possible.
 function copySelection(term) {
   const text = term.getSelection();
   if (!text) return false;
@@ -31,27 +31,28 @@ function copySelection(term) {
   return true;
 }
 
-// term.paste() statt window.api.input(): nur so wird der Text im Bracketed-Paste-
-// Modus geklammert. Ohne die Klammern liest Claude jede Zeile eines mehrzeiligen
-// Einfuegens als abgeschicktes Kommando.
+// term.paste() rather than window.api.input(): only that wraps the text in
+// bracketed-paste mode. Without the brackets Claude reads every line of a
+// multi-line paste as a submitted command.
 async function pasteInto(term) {
   const text = await window.api.clipboardRead();
   if (text) term.paste(text);
 }
 
-// OSC 52 ist die Bitte des Programms im Terminal, etwas in die Zwischenablage zu
-// legen - Claude kopiert genau so ("copied via OSC 52"). xterm.js bringt dafuer
-// keinen Handler mit, die Meldung stimmte also, die Zwischenablage blieb leer.
+// OSC 52 is the request of the program in the terminal to put something on the
+// clipboard - that is exactly how Claude copies ("copied via OSC 52"). xterm.js
+// ships no handler for it, so the message was true but the clipboard stayed
+// empty.
 function handleOsc52(term) {
   term.parser.registerOscHandler(52, (data) => {
     const payload = data.slice(data.indexOf(';') + 1);
-    // "?" fragt die Zwischenablage ab. Nicht beantworten: sonst koennte jede
-    // Ausgabe im Terminal ihren Inhalt auslesen.
+    // "?" queries the clipboard. Do not answer: otherwise any output in the
+    // terminal could read out its content.
     if (!payload || payload === '?') return true;
     try {
       const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
       window.api.clipboardWrite(new TextDecoder().decode(bytes));
-    } catch { /* kein gueltiges Base64 */ }
+    } catch { /* not valid base64 */ }
     return true;
   });
 }
@@ -73,7 +74,7 @@ function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Element per Tastatur bedienbar machen: Enter/Leertaste = Klick
+// Make an element keyboard-operable: Enter/Space = click
 function makeKeyActivatable(el) {
   el.tabIndex = 0;
   el.addEventListener('keydown', (e) => {
@@ -91,8 +92,8 @@ function basename(p) {
 }
 
 // ---------------------------------------------------------------------------
-// Mini-Markdown-Renderer (PR-Beschreibungen, Agent-Zusammenfassungen).
-// Kein externes Paket (CSP) - deckt die von Agenten ueblichen Konstrukte ab.
+// Mini markdown renderer (PR descriptions, agent summaries).
+// No external package (CSP) - covers the constructs agents typically use.
 // ---------------------------------------------------------------------------
 function mdInline(s) {
   return s
@@ -105,7 +106,7 @@ function mdInline(s) {
 function mdToHtml(md) {
   if (!md) return '';
   const esc = escapeHtml(md.replace(/\r\n/g, '\n'));
-  // Codeblöcke herauslösen, damit sie nicht weiterverarbeitet werden
+  // Pull code blocks out so they are not processed any further
   const blocks = [];
   const withoutCode = esc.replace(/```[^\n]*\n([\s\S]*?)```/g, (m, code) => {
     blocks.push(`<pre class="md-code">${code}</pre>`);
@@ -147,7 +148,7 @@ function mdToHtml(md) {
   return out.join('\n').replace(/\x00(\d+)\x00/g, (m, i) => blocks[+i]);
 }
 
-// Links in gerendertem Markdown extern oeffnen
+// Open links in rendered markdown externally
 document.addEventListener('click', (e) => {
   const a = e.target.closest('a[data-url]');
   if (a) {
@@ -157,7 +158,7 @@ document.addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Sessions anlegen / aktivieren / schließen
+// Create / activate / close sessions
 // ---------------------------------------------------------------------------
 async function newSession(shellId, opts) {
   const meta = await window.api.createSession(shellId, opts || {});
@@ -183,22 +184,22 @@ async function newSession(shellId, opts) {
 
   term.onData((data) => window.api.input(meta.id, data));
   term.onResize(({ cols, rows }) => window.api.resize(meta.id, cols, rows));
-  // App-Shortcuts nicht als Steuerzeichen an die Shell durchreichen
+  // Do not pass app shortcuts through to the shell as control characters
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown' || !ev.ctrlKey) return true;
     const k = ev.key.toLowerCase();
     if (!ev.shiftKey && (k === 't' || k === 'g')) return false;
     if (ev.shiftKey && k === 'w') return false;
-    // Strg+C ist im Terminal SIGINT, kann also nicht kopieren. Strg+Umschalt+C
-    // und Strg+Umschalt+V sind die üblichen Terminal-Entsprechungen.
-    // preventDefault(), damit Chromium die Tastenkombination nicht zusaetzlich
-    // als eigene auswertet - xterm unterdrueckt bei `false` nur sich selbst.
+    // Ctrl+C is SIGINT in the terminal, so it cannot copy. Ctrl+Shift+C and
+    // Ctrl+Shift+V are the usual terminal equivalents.
+    // preventDefault() so Chromium does not additionally evaluate the shortcut
+    // as its own - on `false` xterm only suppresses itself.
     if (ev.shiftKey && k === 'c') { ev.preventDefault(); copySelection(term); return false; }
     if (ev.shiftKey && k === 'v') { ev.preventDefault(); pasteInto(term); return false; }
     return true;
   });
 
-  // Rechtsklick: Auswahl kopieren, sonst einfügen - wie in den meisten Terminals
+  // Right-click: copy the selection, otherwise paste - as in most terminals
   paneEl.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
     if (term.hasSelection()) copySelection(term);
@@ -236,8 +237,8 @@ async function newSession(shellId, opts) {
 
 function setActive(id) {
   activeId = id;
-  // Der Fortschritt der neuen Session ist kein Fortschritt, der gerade
-  // passiert ist - sonst blitzt der Puls bei jedem Sessionwechsel auf.
+  // The progress of the new session is not progress that just happened -
+  // otherwise the pulse would flash on every session switch.
   pulseProgSeen = null;
   for (const s of sessions.values()) {
     const active = s.id === id;
@@ -245,7 +246,7 @@ function setActive(id) {
     s.itemEl.classList.toggle('active', active);
     if (active) {
       requestAnimationFrame(() => {
-        try { s.fit.fit(); } catch { /* Pane evtl. noch 0px */ }
+        try { s.fit.fit(); } catch { /* pane may still be 0px */ }
         s.term.focus();
       });
     }
@@ -255,7 +256,7 @@ function setActive(id) {
   const active = id ? sessions.get(id) : null;
   renderHistory(active);
   loadTodosFor(active);
-  // Anderes Projekt, anderes Schema - der aufgeklappte Zustand passt nicht mehr
+  // Different project, different schema - the expanded state no longer fits
   dbState.lastJson = '';
   dbState.open.clear();
   dbState.closed.clear();
@@ -288,7 +289,7 @@ async function closeSession(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Seitenleiste
+// Sidebar
 // ---------------------------------------------------------------------------
 function buildSessionItem(s) {
   const el = document.createElement('div');
@@ -305,7 +306,7 @@ function buildSessionItem(s) {
       <span class="si-cwd"></span>
       <span class="si-branch hidden"></span>
     </div>
-    <button class="si-close" title="Session schließen" aria-label="Session schließen">✕</button>`;
+    <button class="si-close" title="Close session" aria-label="Close session">✕</button>`;
   el.addEventListener('click', (e) => {
     if (e.target.closest('.si-close')) return;
     setActive(s.id);
@@ -324,9 +325,9 @@ function updateSessionItem(s) {
   const statusEl = el.querySelector('.si-status');
   const state = s.exited ? 'exited' : (s.state || 'idle');
   statusEl.className = 'si-status ' + state;
-  statusEl.title = state === 'busy' ? 'Arbeitet…'
-    : state === 'attention' ? 'Eingabe erwartet – du bist dran'
-    : state === 'exited' ? 'Beendet' : 'Wartet auf Eingabe';
+  statusEl.title = state === 'busy' ? 'Working…'
+    : state === 'attention' ? 'Input expected – it is your turn'
+    : state === 'exited' ? 'Exited' : 'Waiting for input';
   el.querySelector('.si-title').textContent =
     s.title || `${basename(s.cwd) || s.shellName}`;
   const labelEl = el.querySelector('.si-label');
@@ -340,9 +341,9 @@ function updateSessionItem(s) {
   branchEl.textContent = s.branch || '';
 }
 
-// Wie viele Agenten arbeiten in dieser Session? Der Chip erscheint nur, wenn
-// gerade welche laufen — eine dauerhafte „0" wäre Ballast in einer Liste, die
-// man im Vorbeigehen liest.
+// How many agents are working in this session? The chip only appears while
+// some are running — a permanent "0" would be dead weight in a list you read in
+// passing.
 function updateAgentChip(el, agents) {
   if (!el) return;
   const n = agents ? agents.running : 0;
@@ -353,17 +354,17 @@ function updateAgentChip(el, agents) {
     const what = a.description || a.type || a.id.slice(0, 8);
     return `• ${what}${a.worktree ? ` (⑂ ${a.worktree})` : ''}`;
   });
-  el.title = [`${n} ${n === 1 ? 'Agent arbeitet' : 'Agenten arbeiten'}`, ...lines].join('\n');
+  el.title = [`${n} ${n === 1 ? 'agent working' : 'agents working'}`, ...lines].join('\n');
 }
 
 // ---------------------------------------------------------------------------
-// Rechtes Panel: PR + geänderte Dateien
+// Right-hand panel: PR + changed files
 // ---------------------------------------------------------------------------
 function renderContextPanel() {
   const s = activeId ? sessions.get(activeId) : null;
   const wtBannerEl = $('#wt-banner');
   if (!s) {
-    prCardEl.innerHTML = '<div class="muted">Keine Session ausgewählt</div>';
+    prCardEl.innerHTML = '<div class="muted">No session selected</div>';
     $('#pr-extra').innerHTML = '';
     fileListEl.innerHTML = '';
     wtBannerEl.classList.add('hidden');
@@ -371,19 +372,19 @@ function renderContextPanel() {
     return;
   }
 
-  // --- Worktree-Hinweis ---
-  // Branch und Dateien stammen dann aus dem Verzeichnis des Agenten, nicht
-  // aus dem der Shell - ohne Hinweis waere das nicht nachvollziehbar.
+  // --- Worktree notice ---
+  // Branch and files then come from the agent's directory, not from the
+  // shell's - without a notice that would be impossible to follow.
   wtBannerEl.classList.toggle('hidden', !s.worktree);
   if (s.worktree) {
     wtBannerEl.innerHTML = `
       <span class="wt-icon">⑂</span>
-      <span class="wt-text">Agent arbeitet im Worktree
+      <span class="wt-text">Agent is working in worktree
         <code>${escapeHtml(s.worktree)}</code></span>
       <span class="wt-sub" title="${escapeHtml(s.agentCwd || '')}">Shell: ${escapeHtml(s.cwd)}</span>`;
   }
 
-  // --- PR-Karte ---
+  // --- PR card ---
   const prExtraEl = $('#pr-extra');
   if (s.pr) {
     const pr = s.pr;
@@ -397,10 +398,10 @@ function renderContextPanel() {
          </div>`
       : '';
     prCardEl.innerHTML = `
-      <div class="pr-title" title="Im Browser öffnen">#${pr.number} ${escapeHtml(pr.title)}</div>
+      <div class="pr-title" title="Open in browser">#${pr.number} ${escapeHtml(pr.title)}</div>
       <div class="pr-meta">
         <span class="pr-state ${stateClass}">${escapeHtml(stateText)}</span>
-        ${pr.author ? `<span>von ${escapeHtml(pr.author)}</span>` : ''}
+        ${pr.author ? `<span>by ${escapeHtml(pr.author)}</span>` : ''}
         ${checks}
       </div>
       <div class="pr-branches">${escapeHtml(pr.headRefName)} → ${escapeHtml(pr.baseRefName)}</div>
@@ -411,25 +412,25 @@ function renderContextPanel() {
     prTitleEl.addEventListener('click', () => window.api.openExternal(pr.url));
     renderPrExtra(prExtraEl, pr);
   } else if (s.branch) {
-    prCardEl.innerHTML = `<div class="muted">Kein Pull Request für <code>${escapeHtml(s.branch)}</code></div>`;
+    prCardEl.innerHTML = `<div class="muted">No pull request for <code>${escapeHtml(s.branch)}</code></div>`;
     prExtraEl.innerHTML = '';
   } else {
-    prCardEl.innerHTML = '<div class="muted">Kein Git-Repository</div>';
+    prCardEl.innerHTML = '<div class="muted">Not a git repository</div>';
     prExtraEl.innerHTML = '';
   }
 
-  // --- Dateilisten ---
+  // --- File lists ---
   fileListEl.innerHTML = '';
   const frag = document.createDocumentFragment();
 
-  // Sobald ein PR existiert, ist dessen Dateiliste die maßgebliche - das
-  // lokale Gedächtnis würde sie nur doppeln.
+  // As soon as a PR exists, its file list is the authoritative one - the local
+  // memory would only duplicate it.
   const hasPr = Boolean(s.pr && s.pr.files && s.pr.files.length);
 
   if (hasPr) {
     const t = document.createElement('div');
     t.className = 'file-group-title';
-    t.textContent = `Im Pull Request (${s.pr.files.length})`;
+    t.textContent = `In the pull request (${s.pr.files.length})`;
     frag.appendChild(t);
     for (const f of s.pr.files) {
       frag.appendChild(buildFileItem(s, f, 'pr'));
@@ -440,14 +441,14 @@ function renderContextPanel() {
     if (open.length) {
       const t = document.createElement('div');
       t.className = 'file-group-title';
-      t.textContent = 'Arbeitsverzeichnis';
+      t.textContent = 'Working directory';
       frag.appendChild(t);
       for (const f of open) frag.appendChild(buildFileItem(s, f, 'wt'));
     }
     if (done.length) {
       const t = document.createElement('div');
       t.className = 'file-group-title';
-      t.textContent = `Committet (${done.length})`;
+      t.textContent = `Committed (${done.length})`;
       frag.appendChild(t);
       for (const f of done) frag.appendChild(buildFileItem(s, f, 'wt'));
     }
@@ -456,15 +457,15 @@ function renderContextPanel() {
   if (!frag.childNodes.length) {
     const d = document.createElement('div');
     d.className = 'muted';
-    d.textContent = s.branch ? 'Keine Änderungen' : '—';
+    d.textContent = s.branch ? 'No changes' : '—';
     frag.appendChild(d);
   }
   fileListEl.appendChild(frag);
   updateBadges(s);
 }
 
-// PR-Zusatzsektionen (Beschreibung, Commits, Kommentare) - Aufklappzustand
-// ueberlebt die periodischen Re-Renders
+// PR extra sections (description, commits, comments) - the expanded state
+// survives the periodic re-renders
 const prOpenSections = new Set();
 
 function buildDetails(key, title, innerHtml) {
@@ -485,7 +486,7 @@ function renderPrExtra(container, pr) {
   const frag = document.createDocumentFragment();
 
   if (pr.body && pr.body.trim()) {
-    frag.appendChild(buildDetails('body', 'Beschreibung', `<div class="md">${mdToHtml(pr.body)}</div>`));
+    frag.appendChild(buildDetails('body', 'Description', `<div class="md">${mdToHtml(pr.body)}</div>`));
   }
 
   if (pr.checks && pr.checks.total) {
@@ -510,11 +511,11 @@ function renderPrExtra(container, pr) {
         <div class="fb-head">
           <strong>${escapeHtml(f.author || '?')}</strong>
           ${f.kind === 'review' ? `<span class="fb-state ${escapeHtml((f.state || '').toLowerCase())}">${escapeHtml(f.state || '')}</span>` : ''}
-          <span class="fb-date">${f.at ? new Date(f.at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+          <span class="fb-date">${f.at ? new Date(f.at).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
         </div>
         ${f.body ? `<div class="md">${mdToHtml(f.body)}</div>` : ''}
       </div>`).join('');
-    frag.appendChild(buildDetails('feedback', `Kommentare & Reviews (${feedback.length})`, rows));
+    frag.appendChild(buildDetails('feedback', `Comments & reviews (${feedback.length})`, rows));
   }
 
   container.appendChild(frag);
@@ -532,7 +533,7 @@ function buildFileItem(s, f, source) {
     + (f.committed ? ' committed' : '')
     + (isDir ? ' is-dir' : '');
   el.title = isDir
-    ? `${filePath} — Verzeichnis, keine Vorschau`
+    ? `${filePath} — directory, no preview`
     : filePath;
 
   const stat = (f.additions !== undefined || f.deletions !== undefined)
@@ -543,8 +544,8 @@ function buildFileItem(s, f, source) {
     <span class="file-path">&lrm;${escapeHtml(filePath)}&lrm;</span>
     ${stat}`;
 
-  // Verzeichnisse (git meldet sie unversioniert mit Schrägstrich am Ende)
-  // sind nicht anklickbar - eine Dateivorschau darauf schlägt zwangsläufig fehl.
+  // Directories (git reports them untracked with a trailing slash) are not
+  // clickable - a file preview of them is bound to fail.
   if (!isDir) {
     makeKeyActivatable(el);
     el.addEventListener('click', () => openPreview(s.id, filePath, source));
@@ -553,32 +554,32 @@ function buildFileItem(s, f, source) {
 }
 
 // ---------------------------------------------------------------------------
-// Eingabe-Verlauf
+// Input history
 // ---------------------------------------------------------------------------
 const historyListEl = $('#history-list');
 
 function renderHistory(s) {
   historyListEl.innerHTML = '';
   if (!s || !s.history.length) {
-    historyListEl.innerHTML = '<div class="muted">Noch keine Eingaben</div>';
+    historyListEl.innerHTML = '<div class="muted">No input yet</div>';
     return;
   }
   const frag = document.createDocumentFragment();
   for (const entry of [...s.history].reverse()) {
     const el = document.createElement('div');
     el.className = 'hist-item';
-    const time = new Date(entry.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    const time = new Date(entry.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
     el.innerHTML = `
       <span class="hist-time">${time}</span>
-      <span class="hist-kind ${entry.kind}" title="${entry.kind === 'agent' ? 'Prompt an Agent (z. B. Claude)' : 'Shell-Kommando'}">${entry.kind === 'agent' ? '✳' : '$'}</span>
+      <span class="hist-kind ${entry.kind}" title="${entry.kind === 'agent' ? 'Prompt to an agent (e.g. Claude)' : 'Shell command'}">${entry.kind === 'agent' ? '✳' : '$'}</span>
       <span class="hist-text"></span>
-      <button class="hist-send" title="In die Eingabezeile des Terminals einfügen" aria-label="In Terminal einfügen">↩</button>`;
+      <button class="hist-send" title="Insert into the terminal input line" aria-label="Insert into terminal">↩</button>`;
     el.querySelector('.hist-text').textContent = entry.text;
-    el.title = 'Klick: kopieren\n\n' + entry.text;
+    el.title = 'Click: copy\n\n' + entry.text;
     makeKeyActivatable(el);
     el.addEventListener('click', async (e) => {
       if (e.target.closest('.hist-send')) return;
-      try { await navigator.clipboard.writeText(entry.text); } catch { /* egal */ }
+      try { await navigator.clipboard.writeText(entry.text); } catch { /* never mind */ }
       el.classList.add('copied');
       setTimeout(() => el.classList.remove('copied'), 400);
     });
@@ -605,7 +606,7 @@ window.api.onHistAdd((id, entry) => {
 });
 
 // ---------------------------------------------------------------------------
-// Notizen / TODO (pro Projekt persistiert)
+// Notes / TODO (persisted per project)
 // ---------------------------------------------------------------------------
 const todoListEl = $('#todo-list');
 const todoInputEl = $('#todo-input');
@@ -615,10 +616,10 @@ function renderTodos(s) {
   const todos = s ? s.todos : [];
   todoInputEl.disabled = !s;
   updateBadges(s);
-  // Einziger Trichter fuer beides: Notiz abgehakt und Session gewechselt
+  // A single funnel for both: note ticked off and session switched
   pulseWake();
   if (!todos.length) {
-    todoListEl.innerHTML = '<div class="muted">Keine Notizen</div>';
+    todoListEl.innerHTML = '<div class="muted">No notes</div>';
     return;
   }
   const frag = document.createDocumentFragment();
@@ -626,9 +627,9 @@ function renderTodos(s) {
     const el = document.createElement('div');
     el.className = 'todo-item' + (t.done ? ' done' : '');
     el.innerHTML = `
-      <input type="checkbox" ${t.done ? 'checked' : ''} title="Erledigt" />
+      <input type="checkbox" ${t.done ? 'checked' : ''} title="Done" />
       <span class="todo-text"></span>
-      <button class="todo-del" title="Löschen" aria-label="Notiz löschen">✕</button>`;
+      <button class="todo-del" title="Delete" aria-label="Delete note">✕</button>`;
     el.querySelector('.todo-text').textContent = t.text;
     el.querySelector('input').addEventListener('change', (e) => {
       s.todos[idx].done = e.target.checked;
@@ -668,7 +669,7 @@ todoInputEl.addEventListener('keydown', (e) => {
 });
 
 window.api.onTodosChanged((key, todos) => {
-  // andere Session im selben Projekt hat Notizen geaendert
+  // another session in the same project changed the notes
   for (const s of sessions.values()) {
     if (s.todoKey === key && s.id !== activeId) s.todos = todos;
   }
@@ -681,17 +682,17 @@ window.api.onTodosChanged((key, todos) => {
 
 
 // ---------------------------------------------------------------------------
-// DB-Schema
+// DB schema
 //
-// Der Main-Prozess liefert einen fertigen Stand: erkanntes Plugin, aktuelles
-// Schema im standardisierten Format, die Vergleichsbasis und den Diff. Hier
-// wird das nur noch dargestellt.
+// The main process delivers a finished state: detected plugin, current schema
+// in the standardised format, the comparison baseline and the diff. Here it is
+// only rendered.
 //
-// Bewusst als Tabellenkarten und nicht als ER-Diagramm: gefragt sind Spalten,
-// Typen und Constraints, und die stehen in einem Diagrammkasten entweder nicht
-// drin oder unleserlich klein. Vor allem aber laesst sich ein Diagramm nicht
-// sinnvoll zeilenweise vergleichen - genau das braucht die Vorher/Nachher-
-// Ansicht. Beziehungen zeigen die Fremdschlüssel im Klartext mitsamt Ziel.
+// Deliberately as table cards and not as an ER diagram: what matters are
+// columns, types and constraints, and inside a diagram box those are either
+// absent or illegibly small. Above all, a diagram cannot sensibly be compared
+// row by row - which is exactly what the before/after view needs.
+// Relationships are shown as foreign keys in plain text, including the target.
 // ---------------------------------------------------------------------------
 const dbHeadEl = $('#db-head');
 const dbSignalEl = $('#db-signal');
@@ -704,8 +705,8 @@ const dbState = {
   view: null,
   baseline: 'auto',
   filter: '',
-  // Aufgeklappt bzw. bewusst zugeklappt - beides muss den Neuaufbau ueberleben,
-  // sonst springt eine von Hand geschlossene Tabelle beim naechsten Takt wieder auf.
+  // Expanded or deliberately collapsed - both have to survive the rebuild,
+  // otherwise a table closed by hand pops open again on the next tick.
   open: new Set(),
   closed: new Set(),
   lastJson: '',
@@ -714,28 +715,28 @@ const dbState = {
 let dbTimer = null;
 
 const STATUS_MARK = { added: '+', removed: '−', changed: '~', same: '' };
-const STATUS_WORD = { added: 'neu', removed: 'entfernt', changed: 'geändert', same: '' };
+const STATUS_WORD = { added: 'new', removed: 'removed', changed: 'changed', same: '' };
 
-// Kurzzeichen fuer die Constraints, die eine Spalte betreffen
+// Short tags for the constraints that affect a column
 const KIND_TAG = {
-  pk: { tag: 'PK', title: 'Primärschlüssel' },
-  fk: { tag: 'FK', title: 'Fremdschlüssel' },
-  unique: { tag: 'UQ', title: 'eindeutig' },
-  check: { tag: 'CK', title: 'Prüfbedingung' },
-  index: { tag: 'IX', title: 'Index' },
-  exclude: { tag: 'EX', title: 'Exclusion-Constraint' },
+  pk: { tag: 'PK', title: 'primary key' },
+  fk: { tag: 'FK', title: 'foreign key' },
+  unique: { tag: 'UQ', title: 'unique' },
+  check: { tag: 'CK', title: 'check constraint' },
+  index: { tag: 'IX', title: 'index' },
+  exclude: { tag: 'EX', title: 'exclusion constraint' },
 };
 
 function fmtDefault(v) {
   return v === null || v === undefined ? '' : String(v);
 }
 
-/** Die Zusatzangaben einer Spalte in der Reihenfolge, in der man sie liest. */
+/** The extra details of a column, in the order one reads them. */
 function colMeta(col) {
   const out = [];
   if (!col.nullable) out.push('NOT NULL');
   if (col.identity) out.push('identity');
-  if (col.generated) out.push('berechnet');
+  if (col.generated) out.push('generated');
   if (col.default) out.push('= ' + fmtDefault(col.default));
   return out;
 }
@@ -762,13 +763,13 @@ function constraintText(c) {
 function policyText(p) {
   const bits = [p.command];
   if (!p.permissive) bits.push('restrictive');
-  if (p.roles && p.roles.length) bits.push('für ' + p.roles.join(', '));
+  if (p.roles && p.roles.length) bits.push('for ' + p.roles.join(', '));
   if (p.using) bits.push('using ' + p.using);
   if (p.check) bits.push('check ' + p.check);
   return bits.join(' · ');
 }
 
-/** Welche Constraints betreffen diese Spalte? */
+/** Which constraints affect this column? */
 function tagsForColumn(table, colName) {
   const kinds = new Set();
   for (const c of table.constraints || []) {
@@ -785,7 +786,7 @@ function tagsHtml(tags) {
 }
 
 // ---------------------------------------------------------------------------
-// Laden
+// Loading
 // ---------------------------------------------------------------------------
 async function loadDbSchema(force = false) {
   const s = activeId && sessions.get(activeId);
@@ -799,9 +800,9 @@ async function loadDbSchema(force = false) {
   dbState.loading = true;
   try {
     const view = await window.api.getDbSchema(s.id, { baseline: dbState.baseline, force });
-    if (s.id !== activeId) return; // inzwischen umgeschaltet
-    // Unveraendert? Dann nicht neu aufbauen - sonst springt die Scrollposition
-    // bei jedem Takt des Hintergrund-Abrufs.
+    if (s.id !== activeId) return; // switched away in the meantime
+    // Unchanged? Then do not rebuild - otherwise the scroll position jumps on
+    // every tick of the background poll.
     const json = JSON.stringify(view);
     if (json === dbState.lastJson) return;
     dbState.lastJson = json;
@@ -810,7 +811,7 @@ async function loadDbSchema(force = false) {
     renderDbPanel();
     if (!dbDiffOverlay.classList.contains('hidden')) renderDbDiff();
   } catch {
-    /* Session weg o. ae. */
+    /* session gone or similar */
   } finally {
     dbState.loading = false;
   }
@@ -822,9 +823,9 @@ function setDbBadge(count) {
   badgeDbEl.classList.toggle('alert', Boolean(count));
 }
 
-// Im Hintergrund mitlaufen, damit das Zeichen am Tab stimmt, ohne dass man den
-// Tab offen haben muss - eine Schemaaenderung soll auffallen, nicht gesucht
-// werden. Der Senser liefert aus dem Cache, solange sich keine Datei ruehrt.
+// Keep running in the background so the indicator on the tab is right without
+// having to keep the tab open - a schema change should stand out, not have to
+// be searched for. The sensor serves from the cache as long as no file moves.
 function startDbPolling() {
   clearInterval(dbTimer);
   dbTimer = setInterval(() => { loadDbSchema().catch(() => {}); }, 10_000);
@@ -841,7 +842,7 @@ function renderDbPanel() {
     dbSignalEl.innerHTML = '';
     dbSearchEl.classList.add('hidden');
     dbTablesEl.innerHTML = `<div class="muted">${view && view.error
-      ? escapeHtml(view.error) : 'Keine Session ausgewählt'}</div>`;
+      ? escapeHtml(view.error) : 'No session selected'}</div>`;
     setDbBadge(0);
     return;
   }
@@ -851,10 +852,10 @@ function renderDbPanel() {
     dbSignalEl.innerHTML = '';
     dbSearchEl.classList.add('hidden');
     dbTablesEl.innerHTML = `
-      <div class="muted">Kein DB-Schema erkannt.</div>
-      <div class="db-hint">Kein Plugin fühlt sich für
-        <code>${escapeHtml(view.project || view.root || '')}</code> zuständig.
-        Erkannt werden derzeit Supabase-Projekte
+      <div class="muted">No DB schema detected.</div>
+      <div class="db-hint">No plugin feels responsible for
+        <code>${escapeHtml(view.project || view.root || '')}</code>.
+        Currently recognised are Supabase projects
         (<code>supabase/migrations</code>).</div>`;
     setDbBadge(0);
     return;
@@ -870,25 +871,25 @@ function renderDbPanel() {
 function renderDbHead(view) {
   const files = view.schema.files.length;
   const baseSel = view.baselines.length
-    ? `<label class="db-base">Basis
+    ? `<label class="db-base">Baseline
          <select id="db-baseline">
            ${view.baselines.map((b) => `<option value="${escapeHtml(b.mode)}"${
              view.baseline && view.baseline.mode === b.mode ? ' selected' : ''
            } title="${escapeHtml(b.hint || '')}">${escapeHtml(b.label)}</option>`).join('')}
          </select>
        </label>`
-    : '<span class="muted">kein Git-Stand zum Vergleichen</span>';
+    : '<span class="muted">no git state to compare against</span>';
 
   dbHeadEl.innerHTML = `
     <div class="db-top">
       <span class="db-plugin" title="${escapeHtml((view.plugin.evidence || []).join('\n'))}">${escapeHtml(view.plugin.label)}</span>
-      <span class="db-files">${view.schema.tables.length} Tabellen · ${files} ${files === 1 ? 'Datei' : 'Dateien'}</span>
-      <button id="db-refresh" class="icon-btn" title="Neu einlesen" aria-label="Neu einlesen">↻</button>
+      <span class="db-files">${view.schema.tables.length} tables · ${files} ${files === 1 ? 'file' : 'files'}</span>
+      <button id="db-refresh" class="icon-btn" title="Re-read" aria-label="Re-read">↻</button>
     </div>
     <div class="db-baseline-row">${baseSel}</div>
     ${view.schema.warnings.length ? `
       <details class="db-warn">
-        <summary>${view.schema.warnings.length} Hinweis${view.schema.warnings.length === 1 ? '' : 'e'} beim Einlesen</summary>
+        <summary>${view.schema.warnings.length} warning${view.schema.warnings.length === 1 ? '' : 's'} while reading</summary>
         <ul>${view.schema.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
       </details>` : ''}`;
 
@@ -912,39 +913,39 @@ function renderDbSignal(view) {
   if (!d.changed) {
     dbSignalEl.innerHTML = `<div class="db-signal ok">
       <span class="db-signal-icon">✓</span>
-      <span>Schema unverändert gegenüber <strong>${escapeHtml(view.baseline.label)}</strong></span>
+      <span>Schema unchanged compared to <strong>${escapeHtml(view.baseline.label)}</strong></span>
     </div>`;
     return;
   }
   const s = d.summary;
   const detail = [
-    partsText(s.columns, 'Spalte', 'Spalten'),
-    partsText(s.constraints, 'Constraint', 'Constraints'),
-    partsText(s.policies, 'Policy', 'Policies'),
+    partsText(s.columns, 'column', 'columns'),
+    partsText(s.constraints, 'constraint', 'constraints'),
+    partsText(s.policies, 'policy', 'policies'),
   ].filter(Boolean).join(' · ');
 
   dbSignalEl.innerHTML = `<div class="db-signal alert">
     <span class="db-signal-icon">⚠</span>
     <div class="db-signal-text">
-      <strong>Schema geändert</strong> gegenüber ${escapeHtml(view.baseline.label)}
+      <strong>Schema changed</strong> compared to ${escapeHtml(view.baseline.label)}
       <div class="db-signal-sub">${escapeHtml(view.changeText)}${detail ? '<br>' + detail : ''}</div>
     </div>
-    <button id="db-open-diff" title="Vorher und Nachher nebeneinander">Vergleichen</button>
+    <button id="db-open-diff" title="Before and after side by side">Compare</button>
   </div>`;
   dbSignalEl.querySelector('#db-open-diff').addEventListener('click', openDbDiff);
 }
 
 function partsText(counts, one, many) {
   const bits = [];
-  if (counts.added) bits.push(`${counts.added} neu`);
-  if (counts.removed) bits.push(`${counts.removed} entfernt`);
-  if (counts.changed) bits.push(`${counts.changed} geändert`);
+  if (counts.added) bits.push(`${counts.added} new`);
+  if (counts.removed) bits.push(`${counts.removed} removed`);
+  if (counts.changed) bits.push(`${counts.changed} changed`);
   if (!bits.length) return '';
   const total = counts.added + counts.removed + counts.changed;
   return `${total === 1 ? one : many}: ${bits.join(', ')}`;
 }
 
-/** Diff-Status je Tabelle/Spalte/Constraint nachschlagbar machen. */
+/** Make the diff status per table/column/constraint look-up-able. */
 function diffLookup(view) {
   const tables = new Map();
   if (!view.diff) return tables;
@@ -994,19 +995,19 @@ function renderDbTables(view) {
     frag.appendChild(box);
   }
 
-  // --- Entfernte Tabellen: stehen nicht mehr im Schema, muessen aber auffallen
+  // --- Removed tables: no longer in the schema, but they have to stand out
   const removed = (view.diff ? view.diff.tables : []).filter((t) => t.status === 'removed');
   for (const t of removed) {
     if (q && !t.name.toLowerCase().includes(q)) continue;
     const el = document.createElement('div');
     el.className = 'db-table removed-table';
-    el.innerHTML = `<span class="db-status removed" title="entfernt">−</span>
+    el.innerHTML = `<span class="db-status removed" title="removed">−</span>
       <span class="db-table-name">${escapeHtml(t.schema)}.${escapeHtml(t.name)}</span>
-      <span class="db-table-note">entfernt</span>`;
+      <span class="db-table-note">removed</span>`;
     frag.appendChild(el);
   }
 
-  // --- Tabellen ---
+  // --- Tables ---
   const tables = view.schema.tables.filter((t) => !q
     || t.name.toLowerCase().includes(q)
     || t.columns.some((c) => c.name.toLowerCase().includes(q)));
@@ -1018,7 +1019,7 @@ function renderDbTables(view) {
   if (!frag.childNodes.length) {
     const d = document.createElement('div');
     d.className = 'muted';
-    d.textContent = q ? 'Keine Treffer' : 'Keine Tabellen gefunden';
+    d.textContent = q ? 'No matches' : 'No tables found';
     frag.appendChild(d);
   }
   dbTablesEl.appendChild(frag);
@@ -1028,8 +1029,8 @@ function buildDbTableCard(t, d, q) {
   const status = d ? d.status : 'same';
   const box = document.createElement('details');
   box.className = `db-table ${status}`;
-  // Geaenderte Tabellen und Suchtreffer gleich aufklappen - danach sucht man.
-  // Was von Hand zugeklappt wurde, bleibt zu.
+  // Expand changed tables and search hits right away - that is what one is
+  // looking for. Whatever was collapsed by hand stays collapsed.
   if (dbState.open.has(t.id)
       || (q && q.length > 1)
       || (status !== 'same' && !dbState.closed.has(t.id))) {
@@ -1039,25 +1040,25 @@ function buildDbTableCard(t, d, q) {
   const changedCols = d ? [...d.columns.values()].filter((c) => c.status !== 'same').length : 0;
   box.innerHTML = `
     <summary>
-      <span class="db-status ${status}" title="${STATUS_WORD[status] || 'unverändert'}">${STATUS_MARK[status] || '·'}</span>
+      <span class="db-status ${status}" title="${STATUS_WORD[status] || 'unchanged'}">${STATUS_MARK[status] || '·'}</span>
       <span class="db-table-name">${escapeHtml(t.name)}</span>
       ${t.schema !== 'public' ? `<span class="db-schema">${escapeHtml(t.schema)}</span>` : ''}
-      ${t.rls.enabled ? `<span class="db-rls${d && d.rlsChanged ? ' changed' : ''}" title="Row Level Security aktiv${
-        t.rls.policies.length ? `, ${t.rls.policies.length} Policies` : ', keine Policies'}">RLS</span>` : ''}
+      ${t.rls.enabled ? `<span class="db-rls${d && d.rlsChanged ? ' changed' : ''}" title="Row level security enabled${
+        t.rls.policies.length ? `, ${t.rls.policies.length} policies` : ', no policies'}">RLS</span>` : ''}
       ${t.external
-        ? '<span class="db-chip external" title="Diese Tabelle legt das Projekt nicht selbst an – es regelt nur den Zugriff darauf">extern</span>'
+        ? '<span class="db-chip external" title="The project does not create this table itself – it only governs access to it">external</span>'
         : `<span class="db-count">${t.columns.length}</span>`}
-      ${changedCols ? `<span class="db-chip changed">${changedCols} geändert</span>` : ''}
+      ${changedCols ? `<span class="db-chip changed">${changedCols} changed</span>` : ''}
     </summary>
     <div class="db-body"></div>`;
 
   const body = box.querySelector('.db-body');
   if (t.external) {
-    // Die Spalten kennen wir nicht - das sagen wir, statt eine leere Liste zu zeigen
+    // We do not know the columns - say so instead of showing an empty list
     const note = document.createElement('div');
     note.className = 'db-hint';
-    note.textContent = 'Fremde Tabelle – Spalten sind hier nicht bekannt. '
-      + 'Gezeigt wird, was dieses Projekt selbst dafür festlegt.';
+    note.textContent = 'Foreign table – its columns are not known here. '
+      + 'What is shown is what this project itself defines for it.';
     body.appendChild(note);
   } else {
     body.appendChild(buildDbColumns(t, d));
@@ -1097,11 +1098,11 @@ function buildDbColumns(t, d) {
       <span class="db-col-meta">${escapeHtml(colMeta(c).join(' · '))}</span>
     </div>`;
   });
-  // Entfallene Spalten mitzeigen - sonst sieht man nur, dass die Zahl kleiner ist
+  // Show dropped columns too - otherwise one only sees that the count is smaller
   if (d) {
     for (const cd of d.columns.values()) {
       if (cd.status !== 'removed') continue;
-      rows.push(`<div class="db-col removed" title="entfernt">
+      rows.push(`<div class="db-col removed" title="removed">
         <span class="db-col-mark removed">−</span>
         <span class="db-col-name">${escapeHtml(cd.name)}</span>
         <span class="db-col-type">${escapeHtml(cd.before.type)}</span>
@@ -1128,7 +1129,7 @@ function buildDbConstraints(cons, d) {
       </div>`;
     }).join('')}
     ${d ? [...d.constraints.values()].filter((c) => c.status === 'removed').map((c) => `
-      <div class="db-con removed" title="entfernt">
+      <div class="db-con removed" title="removed">
         <span class="db-tag ${c.before.kind}">${(KIND_TAG[c.before.kind] || {}).tag || c.before.kind}</span>
         <span class="db-con-name">${escapeHtml(c.name)}</span>
         <span class="db-con-text">${escapeHtml(constraintText(c.before))}</span>
@@ -1139,18 +1140,18 @@ function buildDbConstraints(cons, d) {
 function buildDbPolicies(policies, d) {
   const box = document.createElement('div');
   box.className = 'db-sub';
-  box.innerHTML = `<div class="db-sub-title">RLS-Policies</div>
+  box.innerHTML = `<div class="db-sub-title">RLS policies</div>
     ${policies.map((p) => {
       const pd = d && d.policies.get(p.name);
       const st = pd ? pd.status : 'same';
       return `<div class="db-con ${st}">
-        <span class="db-tag pol" title="Policy">POL</span>
+        <span class="db-tag pol" title="policy">POL</span>
         <span class="db-con-name">${escapeHtml(p.name)}</span>
         <span class="db-con-text">${escapeHtml(policyText(p))}</span>
       </div>`;
     }).join('')}
     ${d ? [...d.policies.values()].filter((p) => p.status === 'removed').map((p) => `
-      <div class="db-con removed" title="entfernt">
+      <div class="db-con removed" title="removed">
         <span class="db-tag pol">POL</span>
         <span class="db-con-name">${escapeHtml(p.name)}</span>
         <span class="db-con-text">${escapeHtml(policyText(p.before))}</span>
@@ -1164,14 +1165,13 @@ dbSearchEl.addEventListener('input', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Vorher/Nachher nebeneinander
+// Before/after side by side
 //
-// Ein Zeichen-Diff waere hier wenig wert - umsortierte Spalten oder ein
-// umbenannter Constraint erzeugen Rauschen, und was fachlich passiert ist,
-// sieht man nicht. Deshalb wird strukturell verglichen und beide Staende
-// werden zeilengleich nebeneinander gestellt: links der alte, rechts der neue.
-// Beide Karten eines Paares liegen in derselben Rasterzeile, also stehen
-// gleiche Spalten auch auf gleicher Hoehe.
+// A character diff would be worth little here - reordered columns or a renamed
+// constraint create noise, and what actually happened is not visible. So the
+// comparison is structural and both states are placed side by side, row for
+// row: the old one on the left, the new one on the right. Both cards of a pair
+// sit in the same grid row, so identical columns stand at the same height.
 // ---------------------------------------------------------------------------
 const dbDiffOverlay = $('#dbdiff-overlay');
 const dbDiffBody = $('#dbdiff-body');
@@ -1191,7 +1191,7 @@ function closeDbDiff() {
 
 function renderDbDiffModes() {
   dbDiffModes.innerHTML = '';
-  for (const m of [{ id: 'changed', label: 'Nur Änderungen' }, { id: 'all', label: 'Ganzes Schema' }]) {
+  for (const m of [{ id: 'changed', label: 'Changes only' }, { id: 'all', label: 'Whole schema' }]) {
     const b = document.createElement('button');
     b.textContent = m.label;
     b.className = m.id === dbDiffMode ? 'active' : '';
@@ -1207,16 +1207,16 @@ function renderDbDiffModes() {
 
 function renderDbDiff() {
   const view = dbState.view;
-  // Nichts mehr zu vergleichen (Projekt gewechselt, Basis weggefallen): lieber
-  // zumachen als einen veralteten Stand stehen lassen.
+  // Nothing left to compare (project switched, baseline gone): better to close
+  // than to leave a stale state standing.
   if (!view || !view.ok || !view.plugin || !view.diff) { closeDbDiff(); return; }
   renderDbDiffModes();
 
   $('#dbdiff-title').textContent = `${view.plugin.label} · ${view.project || ''}`;
   $('#dbdiff-head-old').innerHTML =
-    `<strong>Vorher</strong> <span>${escapeHtml(view.baseline.label)} · ${escapeHtml(view.baseline.ref)}</span>`;
+    `<strong>Before</strong> <span>${escapeHtml(view.baseline.label)} · ${escapeHtml(view.baseline.ref)}</span>`;
   $('#dbdiff-head-new').innerHTML =
-    '<strong>Nachher</strong> <span>Arbeitsverzeichnis</span>';
+    '<strong>After</strong> <span>working directory</span>';
 
   const baseTables = new Map(view.base.tables.map((t) => [t.id, t]));
   const curTables = new Map(view.schema.tables.map((t) => [t.id, t]));
@@ -1234,10 +1234,10 @@ function renderDbDiff() {
     }
   }
 
-  // --- Tabellen ---
+  // --- Tables ---
   const tables = view.diff.tables.filter((t) => dbDiffMode === 'all' || t.status !== 'same');
   if (tables.length) {
-    frag.appendChild(dbDiffSpan('Tabellen'));
+    frag.appendChild(dbDiffSpan('Tables'));
     for (const t of tables) {
       frag.appendChild(dbDiffTableCard(t, baseTables.get(t.id) || null, 'before'));
       frag.appendChild(dbDiffTableCard(t, curTables.get(t.id) || null, 'after'));
@@ -1245,13 +1245,13 @@ function renderDbDiff() {
   }
 
   if (!frag.childNodes.length) {
-    frag.appendChild(dbDiffSpan('Keine Unterschiede'));
+    frag.appendChild(dbDiffSpan('No differences'));
   }
   dbDiffBody.appendChild(frag);
   dbDiffBody.scrollTop = 0;
 }
 
-/** Zeile, die beide Spalten des Rasters ueberspannt. */
+/** A row that spans both columns of the grid. */
 function dbDiffSpan(text) {
   const el = document.createElement('div');
   el.className = 'dbd-span';
@@ -1266,7 +1266,7 @@ function dbDiffEnumCard(e, side) {
   el.className = `dbd-card ${side}` + (missing ? ' absent' : '');
   if (missing) {
     el.innerHTML = `<div class="dbd-card-head"><span class="dbd-absent">${
-      side === 'before' ? 'existierte noch nicht' : 'entfernt'}</span></div>`;
+      side === 'before' ? 'did not exist yet' : 'removed'}</span></div>`;
     return el;
   }
   el.innerHTML = `
@@ -1292,13 +1292,13 @@ function dbDiffTableCard(t, table, side) {
   if (missing) {
     el.innerHTML = `<div class="dbd-card-head">
       <span class="dbd-name muted">${escapeHtml(t.schema)}.${escapeHtml(t.name)}</span>
-      <span class="dbd-absent">${side === 'before' ? 'neue Tabelle' : 'entfernt'}</span>
+      <span class="dbd-absent">${side === 'before' ? 'new table' : 'removed'}</span>
     </div>`;
     return el;
   }
 
-  // Die Zeilenfolge kommt aus dem Diff und ist auf beiden Seiten dieselbe -
-  // dadurch stehen gleiche Spalten links und rechts auf gleicher Hoehe.
+  // The row order comes from the diff and is the same on both sides - which is
+  // why identical columns stand at the same height on the left and the right.
   const colRows = t.columns.map((cd) => {
     const c = side === 'before' ? cd.before : cd.after;
     const st = cd.status;
@@ -1344,12 +1344,12 @@ function dbDiffTableCard(t, table, side) {
     <div class="dbd-card-head">
       <span class="dbd-name">${escapeHtml(table.name)}</span>
       ${table.schema !== 'public' ? `<span class="db-schema">${escapeHtml(table.schema)}</span>` : ''}
-      ${table.rls.enabled ? `<span class="db-rls${t.rlsChanged ? ' changed' : ''}" title="Row Level Security aktiv">RLS</span>` : ''}
-      ${table.external ? '<span class="db-chip external" title="fremde Tabelle, nur eigene Regeln">extern</span>' : ''}
+      ${table.rls.enabled ? `<span class="db-rls${t.rlsChanged ? ' changed' : ''}" title="Row level security enabled">RLS</span>` : ''}
+      ${table.external ? '<span class="db-chip external" title="foreign table, only our own rules">external</span>' : ''}
     </div>
     <div class="dbd-rows">${colRows.join('')}</div>
     ${conRows.length ? `<div class="dbd-sub">Constraints</div><div class="dbd-rows">${conRows.join('')}</div>` : ''}
-    ${polRows.length ? `<div class="dbd-sub">RLS-Policies</div><div class="dbd-rows">${polRows.join('')}</div>` : ''}`;
+    ${polRows.length ? `<div class="dbd-sub">RLS policies</div><div class="dbd-rows">${polRows.join('')}</div>` : ''}`;
   return el;
 }
 
@@ -1357,43 +1357,43 @@ $('#dbdiff-close').addEventListener('click', closeDbDiff);
 dbDiffOverlay.addEventListener('click', (e) => { if (e.target === dbDiffOverlay) closeDbDiff(); });
 
 // ---------------------------------------------------------------------------
-// Nutzungslimits des Abos: Ist-Verbrauch, dazu der anteilig erlaubte Stand.
-// Nach 3 von 7 Tagen sind 3/7 = 42,9 % das Soll - wer darueber liegt, reisst
-// das Limit, wenn das Tempo bleibt.
+// Usage limits of the subscription: actual usage, plus the proportionally
+// allowed level. After 3 of 7 days, 3/7 = 42.9 % is the target - anyone above
+// that will blow the limit if the pace holds.
 // ---------------------------------------------------------------------------
 const usageContentEl = $('#usage-content');
 const dotUsageEl = $('#dot-usage');
 let usageTimer = null;
 
 const STATUS_LABEL = {
-  ok: 'im Rahmen',
-  warn: 'knapp drüber',
-  over: 'Limit wird gerissen',
-  early: 'zu früh im Fenster',
-  unknown: 'keine Daten',
+  ok: 'within budget',
+  warn: 'slightly over',
+  over: 'limit will be blown',
+  early: 'too early in the window',
+  unknown: 'no data',
 };
 
 function fmtPct(n) {
   if (typeof n !== 'number') return '–';
-  return (Math.round(n * 10) / 10).toLocaleString('de-DE') + ' %';
+  return (Math.round(n * 10) / 10).toLocaleString('en-GB') + ' %';
 }
 
-// "in 1 h 47" bzw. "in 3 Tagen 5 h"
+// "in 1 h 47" or "in 3 days 5 h"
 function fmtUntil(ts) {
   if (!ts) return '';
   let ms = ts - Date.now();
-  if (ms <= 0) return 'jetzt';
+  if (ms <= 0) return 'now';
   const days = Math.floor(ms / 86400000); ms -= days * 86400000;
   const hours = Math.floor(ms / 3600000); ms -= hours * 3600000;
   const mins = Math.floor(ms / 60000);
-  if (days) return `in ${days} ${days === 1 ? 'Tag' : 'Tagen'} ${hours} h`;
+  if (days) return `in ${days} ${days === 1 ? 'day' : 'days'} ${hours} h`;
   if (hours) return `in ${hours} h ${String(mins).padStart(2, '0')}`;
   return `in ${mins} min`;
 }
 
 function fmtReset(ts) {
-  if (!ts) return 'unbekannt';
-  return new Date(ts).toLocaleString('de-DE',
+  if (!ts) return 'unknown';
+  return new Date(ts).toLocaleString('en-GB',
     { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
@@ -1402,23 +1402,23 @@ function renderLimit(title, limit, opts = {}) {
   const status = limit.status || 'unknown';
   const used = typeof limit.used === 'number' ? limit.used : 0;
   const budget = typeof limit.budget === 'number' ? limit.budget : null;
-  // Soll-Marke nur zeigen, wo sie etwas aussagt (nicht am Fensterrand)
+  // Only show the target mark where it says something (not at the window edge)
   const showMark = budget !== null && budget > 1 && budget < 99 && !opts.hideMark;
 
   let verdict = '';
   if (status === 'unknown') {
-    verdict = '<div class="uz-note">Keine Daten für dieses Limit.</div>';
+    verdict = '<div class="uz-note">No data for this limit.</div>';
   } else if (status === 'early') {
-    verdict = `<div class="uz-note">Noch zu früh im Fenster für eine Hochrechnung.
-      Erlaubt wären bis jetzt <strong>${fmtPct(budget)}</strong>.</div>`;
+    verdict = `<div class="uz-note">Still too early in the window for a projection.
+      Allowed so far would be <strong>${fmtPct(budget)}</strong>.</div>`;
   } else {
     const over = used - budget;
     verdict = `<div class="uz-verdict ${status}">
-      <span class="uz-target">Erlaubt bis jetzt: <strong>${fmtPct(budget)}</strong></span>
+      <span class="uz-target">Allowed so far: <strong>${fmtPct(budget)}</strong></span>
       <span class="uz-delta">${over > 0
-        ? `${fmtPct(over)} darüber`
-        : `${fmtPct(-over)} Luft`}</span>
-      <span class="uz-proj">Hochrechnung Fensterende: <strong>${fmtPct(limit.projected)}</strong></span>
+        ? `${fmtPct(over)} over`
+        : `${fmtPct(-over)} to spare`}</span>
+      <span class="uz-proj">Projection at window end: <strong>${fmtPct(limit.projected)}</strong></span>
     </div>`;
   }
 
@@ -1429,19 +1429,19 @@ function renderLimit(title, limit, opts = {}) {
         <span class="uz-title">${escapeHtml(title)}</span>
         <span class="uz-status">${STATUS_LABEL[status]}</span>
       </header>
-      <div class="uz-bar" role="img" aria-label="${fmtPct(used)} verbraucht">
+      <div class="uz-bar" role="img" aria-label="${fmtPct(used)} used">
         <div class="uz-fill ${status}" style="width:${Math.min(used, 100)}%"></div>
-        ${showMark ? `<div class="uz-mark" style="left:${budget}%" title="Soll: ${fmtPct(budget)}"></div>` : ''}
+        ${showMark ? `<div class="uz-mark" style="left:${budget}%" title="target: ${fmtPct(budget)}"></div>` : ''}
       </div>
       <div class="uz-meta">
-        <span class="uz-used">${fmtPct(used)} verbraucht</span>
+        <span class="uz-used">${fmtPct(used)} used</span>
         <span class="uz-reset">Reset ${fmtReset(limit.resetsAt)} · ${fmtUntil(limit.resetsAt)}</span>
       </div>
       ${verdict}
     </section>`;
 }
 
-// Schlechtester Status gewinnt - der Punkt am Tab soll das knappste Limit zeigen
+// The worst status wins - the dot on the tab should show the tightest limit
 const SEVERITY = { unknown: 0, early: 0, ok: 1, warn: 2, over: 3 };
 
 function worstStatus(data) {
@@ -1453,45 +1453,43 @@ function worstStatus(data) {
 }
 
 async function loadUsage(force = false) {
-  // Bewusst ohne Sichtbarkeitspruefung: der Punkt am Tab soll auch dann
-  // stimmen, wenn der Tab zu ist. In eine versteckte Seite zu rendern kostet
-  // nichts.
+  // Deliberately without a visibility check: the dot on the tab should be right
+  // even when the tab is closed. Rendering into a hidden page costs nothing.
   const data = await window.api.getUsage(force);
 
   if (data.error && !data.stale) {
     usageContentEl.innerHTML = `
       <div class="uz-error">${escapeHtml(data.error)}</div>
-      <div class="muted" style="margin-top:8px">Die Zahlen stammen aus deinem
-      Claude-Abo (derselbe Stand wie <code>/usage</code>).</div>`;
+      <div class="muted" style="margin-top:8px">The numbers come from your
+      Claude subscription (the same state as <code>/usage</code>).</div>`;
     dotUsageEl.classList.add('hidden');
     return;
   }
 
   const parts = [
-    renderLimit('5-Stunden-Fenster', data.fiveHour),
-    renderLimit('7-Tage-Fenster', data.sevenDay),
-    renderLimit('7 Tage · Opus', data.sevenDayOpus),
+    renderLimit('5-hour window', data.fiveHour),
+    renderLimit('7-day window', data.sevenDay),
+    renderLimit('7 days · Opus', data.sevenDayOpus),
   ].filter(Boolean);
 
   if (!parts.length) {
-    usageContentEl.innerHTML = '<div class="muted">Keine Limits gemeldet.</div>';
+    usageContentEl.innerHTML = '<div class="muted">No limits reported.</div>';
     dotUsageEl.classList.add('hidden');
     return;
   }
 
-  const stamp = new Date(data.fetchedAt).toLocaleTimeString('de-DE',
+  const stamp = new Date(data.fetchedAt).toLocaleTimeString('en-GB',
     { hour: '2-digit', minute: '2-digit' });
   usageContentEl.innerHTML = `
     <div class="uz-top">
       ${data.plan ? `<span class="uz-plan">${escapeHtml(data.plan)}</span>` : '<span></span>'}
-      <button id="usage-refresh" class="icon-btn" title="Jetzt aktualisieren" aria-label="Aktualisieren">↻</button>
-      <span class="uz-stamp">Stand ${stamp}${data.stale ? ' · veraltet' : ''}</span>
+      <button id="usage-refresh" class="icon-btn" title="Refresh now" aria-label="Refresh">↻</button>
+      <span class="uz-stamp">As of ${stamp}${data.stale ? ' · stale' : ''}</span>
     </div>
     ${data.stale ? `<div class="uz-error">${escapeHtml(data.error)}</div>` : ''}
     ${parts.join('')}
-    <div class="uz-legend">Der Strich in der Leiste markiert, wie viel zum
-    jetzigen Zeitpunkt verbraucht sein dürfte, wenn das Kontingent gleichmäßig
-    über das Fenster reichen soll.</div>`;
+    <div class="uz-legend">The mark in the bar shows how much may have been
+    used by now if the quota is meant to last evenly across the window.</div>`;
   usageContentEl.querySelector('#usage-refresh')
     .addEventListener('click', () => loadUsage(true));
 
@@ -1500,18 +1498,18 @@ async function loadUsage(force = false) {
   dotUsageEl.classList.toggle('hidden', worst !== 'warn' && worst !== 'over');
 }
 
-// Im Hintergrund mitlaufen, damit der Punkt am Tab stimmt, ohne dass man
-// den Tab offen haben muss
+// Keep running in the background so the dot on the tab is right without having
+// to keep the tab open
 function startUsagePolling() {
-  loadUsage(true).catch(() => { /* offline o. ae. */ });
+  loadUsage(true).catch(() => { /* offline or similar */ });
   clearInterval(usageTimer);
   usageTimer = setInterval(() => {
-    loadUsage().catch(() => { /* egal */ });
+    loadUsage().catch(() => { /* never mind */ });
   }, 120_000);
 }
 
 // ---------------------------------------------------------------------------
-// Panel-Tabs (Git / Verlauf / Notizen / DB-Schema / Nutzung) mit Badges
+// Panel tabs (git / history / notes / DB schema / usage) with badges
 // ---------------------------------------------------------------------------
 const badgeGit = $('#badge-git');
 const badgeHistory = $('#badge-history');
@@ -1543,8 +1541,8 @@ for (const btn of document.querySelectorAll('.panel-tab')) {
   btn.addEventListener('click', () => setPanelTab(btn.dataset.tab));
 }
 
-// Panel vergrößern: gilt fuer jeden Tab, weil nicht der Inhalt umzieht, sondern
-// nur das Panel selbst gross gestellt wird. Der aktive Tab bleibt der aktive.
+// Enlarging the panel: applies to every tab, because the content does not move
+// - only the panel itself is made large. The active tab stays the active one.
 const contextPanel = $('#context-panel');
 const panelBackdrop = $('#panel-backdrop');
 const panelZoomBtn = $('#btn-panel-zoom');
@@ -1554,16 +1552,16 @@ let panelWidth = '';
 function setPanelZoom(on) {
   if (on === panelZoomed) return;
   panelZoomed = on;
-  // Die per Trenner gesetzte Breite steht inline und schlaege sonst `inset`.
+  // The width set via the divider is inline and would otherwise beat `inset`.
   if (on) { panelWidth = contextPanel.style.width; contextPanel.style.width = ''; }
   else contextPanel.style.width = panelWidth;
   contextPanel.classList.toggle('zoomed', on);
   panelBackdrop.classList.toggle('hidden', !on);
   panelZoomBtn.textContent = on ? '⤡' : '⤢';
-  panelZoomBtn.title = on ? 'Panel verkleinern (Esc)' : 'Panel vergrößern';
-  // Erst beim Verkleinern fitten: waehrend das Panel gross ist, liegt das
-  // Terminal darunter und `#terminal-area` ist zu breit - ein Fit wuerde dem
-  // PTY die falsche Groesse melden und die Anzeige des Agenten zerlegen.
+  panelZoomBtn.title = on ? 'Shrink panel (Esc)' : 'Enlarge panel';
+  // Only fit when shrinking: while the panel is large, the terminal lies
+  // underneath it and `#terminal-area` is too wide - a fit would report the
+  // wrong size to the PTY and wreck the agent's display.
   if (!on) fitActive();
 }
 
@@ -1582,7 +1580,7 @@ function updateBadges(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Datei-Vorschau
+// File preview
 // ---------------------------------------------------------------------------
 const previewOverlay = $('#preview-overlay');
 const previewTitle = $('#preview-title');
@@ -1605,8 +1603,8 @@ function highlightDiff(text) {
   }).join('\n');
 }
 
-// Holt eine Ansicht und merkt sie sich - der Wechsel zwischen den Modi soll
-// nicht jedes Mal neu über IPC gehen.
+// Fetches a view and remembers it - switching between the modes should not go
+// over IPC again every time.
 async function fetchPreview(wantContent) {
   const key = wantContent ? 'content' : 'default';
   if (previewState.cache[key]) return previewState.cache[key];
@@ -1620,9 +1618,9 @@ async function fetchPreview(wantContent) {
 
 async function renderPreview() {
   const st = previewState;
-  // Die formatierte Ansicht braucht den Dateiinhalt, nicht den Diff
+  // The formatted view needs the file content, not the diff
   const res = await fetchPreview(st.mode === 'md');
-  if (previewState !== st) return; // inzwischen andere Datei geöffnet
+  if (previewState !== st) return; // a different file was opened meanwhile
 
   if (res.kind === 'error') {
     previewContent.innerHTML = `<pre class="pv-pre">${escapeHtml(res.text)}</pre>`;
@@ -1641,11 +1639,11 @@ async function renderPreview() {
 function renderPreviewModes(hasDiff) {
   const modes = [];
   if (hasDiff) modes.push({ id: 'diff', label: 'Diff' });
-  modes.push({ id: 'raw', label: hasDiff ? 'Datei' : 'Quelltext' });
-  if (MD_EXT.test(previewState.filePath)) modes.push({ id: 'md', label: 'Formatiert' });
+  modes.push({ id: 'raw', label: hasDiff ? 'File' : 'Source' });
+  if (MD_EXT.test(previewState.filePath)) modes.push({ id: 'md', label: 'Formatted' });
 
   previewModesEl.innerHTML = '';
-  if (modes.length < 2) return; // nichts umzuschalten
+  if (modes.length < 2) return; // nothing to switch between
   for (const m of modes) {
     const b = document.createElement('button');
     b.textContent = m.label;
@@ -1662,7 +1660,7 @@ function renderPreviewModes(hasDiff) {
 }
 
 async function openPreview(sessionId, filePath, source) {
-  previewTitle.textContent = filePath + ' (lädt…)';
+  previewTitle.textContent = filePath + ' (loading…)';
   previewContent.innerHTML = '';
   previewModesEl.innerHTML = '';
   previewOverlay.classList.remove('hidden');
@@ -1675,7 +1673,7 @@ async function openPreview(sessionId, filePath, source) {
   previewTitle.textContent = first.path;
 
   const hasDiff = first.kind === 'diff';
-  // Markdown ohne Diff gleich formatiert zeigen - dafür öffnet man es meistens
+  // Show markdown without a diff formatted right away - that is usually why one opens it
   st.mode = hasDiff ? 'diff' : (MD_EXT.test(filePath) ? 'md' : 'raw');
   renderPreviewModes(hasDiff);
   await renderPreview();
@@ -1690,7 +1688,7 @@ $('#preview-close').addEventListener('click', closePreview);
 previewOverlay.addEventListener('click', (e) => { if (e.target === previewOverlay) closePreview(); });
 
 // ---------------------------------------------------------------------------
-// Meta-Popover: Titel & Label bearbeiten
+// Meta popover: edit title & label
 // ---------------------------------------------------------------------------
 const metaPopover = $('#meta-popover');
 const metaTitleInput = $('#meta-title');
@@ -1731,7 +1729,7 @@ metaPopover.addEventListener('keydown', (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Neue-Session-Buttons + Shell-Menü
+// New-session buttons + shell menu
 // ---------------------------------------------------------------------------
 const shellMenu = $('#shell-menu');
 
@@ -1759,7 +1757,7 @@ function buildShellMenu() {
 }
 
 // ---------------------------------------------------------------------------
-// Grid-Übersicht: alle Sessions als Live-Kacheln
+// Grid overview: all sessions as live tiles
 // ---------------------------------------------------------------------------
 const gridViewEl = $('#grid-view');
 const gridContainerEl = $('#grid-container');
@@ -1792,8 +1790,8 @@ function openGrid() {
     makeKeyActivatable(card);
     gridContainerEl.appendChild(card);
 
-    // Read-only-Miniatur: gleiche Spalten/Zeilen wie das echte Terminal,
-    // kleine Schrift - die PTY-Groesse bleibt unangetastet
+    // Read-only thumbnail: same columns/rows as the real terminal, small font -
+    // the PTY size stays untouched
     const mini = new Terminal({
       cols: s.term.cols,
       rows: s.term.rows,
@@ -1828,7 +1826,7 @@ function toggleGrid() { gridOpen ? closeGrid() : openGrid(); }
 $('#btn-grid').addEventListener('click', toggleGrid);
 
 // ---------------------------------------------------------------------------
-// Claude-Session-Browser: alte Sessions durchsuchen, fortsetzen, forken
+// Claude session browser: search, resume and fork old sessions
 // ---------------------------------------------------------------------------
 const sessionsOverlay = $('#sessions-overlay');
 const sessionsListEl = $('#sessions-list');
@@ -1837,7 +1835,7 @@ let claudeSessions = [];
 
 async function openSessionBrowser() {
   sessionsOverlay.classList.remove('hidden');
-  sessionsListEl.innerHTML = '<div class="muted">Lade Sessions…</div>';
+  sessionsListEl.innerHTML = '<div class="muted">Loading sessions…</div>';
   sessionsSearchEl.value = '';
   sessionsSearchEl.focus();
   claudeSessions = await window.api.listClaudeSessions();
@@ -1861,7 +1859,7 @@ function renderClaudeSessions() {
 
   sessionsListEl.innerHTML = '';
   if (!list.length) {
-    sessionsListEl.innerHTML = `<div class="muted">${q ? 'Keine Treffer' : 'Keine Claude-Sessions gefunden'}</div>`;
+    sessionsListEl.innerHTML = `<div class="muted">${q ? 'No matches' : 'No Claude sessions found'}</div>`;
     return;
   }
 
@@ -1884,12 +1882,12 @@ function renderClaudeSessions() {
       </div>
       <span class="cs-date"></span>
       <div class="cs-actions">
-        <button class="cs-resume">Fortsetzen</button>
-        <button class="cs-fork" title="Als neue Session abzweigen">Fork</button>
+        <button class="cs-resume">Resume</button>
+        <button class="cs-fork" title="Branch off as a new session">Fork</button>
       </div>`;
     el.querySelector('.cs-title').textContent = cs.slug || (cs.preview ? cs.preview.slice(0, 60) : cs.id.slice(0, 8));
     el.querySelector('.cs-preview').textContent = cs.preview || '';
-    el.querySelector('.cs-date').textContent = new Date(cs.mtime).toLocaleString('de-DE', {
+    el.querySelector('.cs-date').textContent = new Date(cs.mtime).toLocaleString('en-GB', {
       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
     });
     const start = (fork) => {
@@ -1912,12 +1910,12 @@ sessionsSearchEl.addEventListener('input', renderClaudeSessions);
 sessionsOverlay.addEventListener('click', (e) => { if (e.target === sessionsOverlay) closeSessionBrowser(); });
 
 // ---------------------------------------------------------------------------
-// Desktop-Benachrichtigungen: wenn ein Agent Aufmerksamkeit braucht
+// Desktop notifications: when an agent needs attention
 // ---------------------------------------------------------------------------
 const NOTIFY_COOLDOWN_MS = 8000;
 
 function maybeNotify(s, body) {
-  // Nur wenn man es nicht ohnehin vor Augen hat
+  // Only when it is not right in front of you anyway
   if (document.hasFocus() && s.id === activeId) return;
   const now = Date.now();
   if (now - (s.lastNotifyAt || 0) < NOTIFY_COOLDOWN_MS) return;
@@ -1936,7 +1934,7 @@ window.api.onNotify((id, message) => {
 });
 
 // ---------------------------------------------------------------------------
-// Events aus dem Main-Prozess
+// Events from the main process
 // ---------------------------------------------------------------------------
 window.api.onData((id, data) => {
   const s = sessions.get(id);
@@ -1955,7 +1953,7 @@ window.api.onState((id, state) => {
   if (gridEntry) gridEntry.statusEl.className = 'si-status ' + (s.exited ? 'exited' : state);
   pulseWake();
   if (state === 'attention' && prev !== 'attention') {
-    maybeNotify(s, 'Wartet auf deine Eingabe');
+    maybeNotify(s, 'Waiting for your input');
   }
 });
 
@@ -1963,7 +1961,7 @@ window.api.onExit((id) => {
   const s = sessions.get(id);
   if (!s) return;
   s.exited = true;
-  s.term.write('\r\n\x1b[90m[Prozess beendet]\x1b[0m\r\n');
+  s.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
   updateSessionItem(s);
 });
 
@@ -1985,9 +1983,9 @@ window.api.onInfo((info) => {
     state: info.state,
   });
   updateSessionItem(s);
-  pulseWake(); // die Agentenzahl steuert den Puls mit
+  pulseWake(); // the agent count feeds into the pulse
   if (rootChanged) {
-    loadTodosFor(s); // anderes Projekt -> dessen Notizen laden
+    loadTodosFor(s); // different project -> load its notes
     if (info.id === activeId) {
       dbState.lastJson = '';
       dbState.open.clear();
@@ -1999,14 +1997,14 @@ window.api.onInfo((info) => {
 });
 
 // ---------------------------------------------------------------------------
-// Layout: Panels per Trenner skalieren, Terminal-Fit bei Resize
+// Layout: resize panels via the dividers, fit the terminal on resize
 // ---------------------------------------------------------------------------
-// Das Terminal des aktiven Tabs an seine Flaeche anpassen. Solange das
-// Kontextpanel vergroessert ist, waere diese Flaeche falsch - siehe setPanelZoom().
+// Fit the active tab's terminal to its area. While the context panel is
+// enlarged that area would be wrong - see setPanelZoom().
 function fitActive() {
   if (panelZoomed) return;
   const s = activeId && sessions.get(activeId);
-  if (s) { try { s.fit.fit(); } catch { /* Pane evtl. noch 0px */ } }
+  if (s) { try { s.fit.fit(); } catch { /* pane may still be 0px */ } }
 }
 
 function setupDivider(dividerEl, panelEl, growsRight) {
@@ -2037,30 +2035,29 @@ setupDivider($('#divider-right'), $('#context-panel'), false);
 window.addEventListener('resize', () => { fitActive(); sizePulse(); pulseWake(); });
 
 // ---------------------------------------------------------------------------
-// Puls im Kopf der Seitenleiste
+// Pulse in the sidebar header
 //
-// Eine Kurve, die den Kopf in zwei Felder teilt: darueber warm, darunter
-// kuehl, beide nur angedeutet. Die Linie bleibt die Hauptsache - die Flaechen
-// geben ihr einen Horizont, an dem der Ausschlag ablesbar wird, ohne dass man
-// die Linie verfolgen muss.
+// A curve that divides the header into two fields: warm above, cool below,
+// both only hinted at. The line stays the main thing - the fields give it a
+// horizon that makes the amplitude readable without having to follow the line.
 //
-// Vier Groessen, alle aus vorhandenem Zustand:
+// Four quantities, all derived from existing state:
 //
-//   Ausschlag  wie viel ueberhaupt laeuft - `busy`-Sessions vor allem, Agenten
-//              mit geringerem Gewicht (sie arbeiten im Hintergrund weiter,
-//              waehrend die Shell davor still steht).
-//   Dichte     wie viel *parallel* laeuft: je mehr Agenten unterwegs sind,
-//              desto mehr Wellenberge stehen nebeneinander. Das ist die
-//              Groesse, die eine Zahl schlecht und ein Bild gut zeigt.
-//   Faerbung   der Flaechen zieht mit der Last an; der Verlauf wandert dabei
-//              sehr langsam durch zwei verwandte Toene.
-//   Fortschritt der Anteil erledigter Notizen, als Helligkeitsstufe in der
-//              Linie und als Strich an der Kante. Kommt eine Notiz dazu,
-//              laeuft ein heller Blitz darueber.
+//   Amplitude  how much is running at all - `busy` sessions above all, agents
+//              with less weight (they keep working in the background while the
+//              shell in front of them sits still).
+//   Density    how much runs *in parallel*: the more agents are underway, the
+//              more wave crests stand side by side. That is the quantity a
+//              number shows badly and a picture shows well.
+//   Colouring  of the fields picks up with the load; the gradient wanders very
+//              slowly through two related tones.
+//   Progress   the share of completed notes, as a brightness step in the line
+//              and as a mark at the edge. When a note is added, a bright flash
+//              runs across it.
 //
-// Die Schleife laeuft nur, solange sich etwas bewegt: steht alles still, wird
-// ein letztes Bild gezeichnet und rAF abgemeldet. Eine App, die den ganzen Tag
-// offen steht, soll fuer Deko keinen Kern verheizen.
+// The loop only runs while something is moving: if everything is still, one
+// last frame is drawn and rAF is unsubscribed. An app that stays open all day
+// should not burn a core on decoration.
 // ---------------------------------------------------------------------------
 const pulseCanvas = $('#pulse-canvas');
 const pulseCtx = pulseCanvas.getContext('2d');
@@ -2076,7 +2073,7 @@ function pulseBusy() {
   return n;
 }
 
-// Alle Agenten ueber alle Sessions - der Kopf zeigt das Deck, nicht eine Kachel
+// All agents across all sessions - the header shows the deck, not one tile
 function pulseAgents() {
   let n = 0;
   for (const s of sessions.values()) {
@@ -2085,7 +2082,7 @@ function pulseAgents() {
   return n;
 }
 
-// null = kein Nenner. Ohne Notizen gibt es keinen Fortschritt zu behaupten.
+// null = no denominator. Without notes there is no progress to claim.
 function pulseProgress() {
   const s = activeId && sessions.get(activeId);
   const todos = s ? s.todos : null;
@@ -2100,28 +2097,27 @@ function sizePulse() {
   pulseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-// Zwei ueberlagerte Sinus mit unterschiedlicher Laenge - eine einzelne Welle
-// sieht nach Bildschirmschoner aus, zwei nach Messgeraet. `dens` staucht beide
-// zugleich, damit das Muster bei vielen Agenten dichter wird, ohne seinen
-// Charakter zu verlieren.
+// Two superimposed sines of different length - a single wave looks like a
+// screensaver, two look like an instrument. `dens` compresses both at once so
+// the pattern gets denser with many agents without losing its character.
 function pulseWaveAt(x) {
   const d = PULSE.dens;
   return PULSE.amp * (Math.sin(x * 0.055 * d + PULSE.phase) * 0.6
     + Math.sin(x * 0.021 * d - PULSE.phase * 1.4) * 0.4);
 }
 
-// Groesster Ausschlag: die Kurve soll den Rand streifen, nicht daran anstossen.
+// Largest amplitude: the curve should graze the edge, not bump into it.
 function pulseMaxAmp(h) {
   return Math.max(0.5, h / 2 - 3);
 }
 
-// Je Feld zwei verwandte Toene, zwischen denen der Verlauf ueber die Breite
-// wandert. Zwei Toene aus derselben Ecke des Farbkreises, nicht zwei Farben:
-// der Wechsel soll als Schimmer lesbar sein, nicht als Regenbogen.
-const PULSE_WARM = [[217, 164, 65], [206, 118, 92]];   // Bernstein -> Kupfer
-// Das untere Feld traegt den Panelton in sich: gedeckte Toene, die #16181f nur
-// nach Gruen bzw. Blau schieben, statt eine Farbe darueberzulegen.
-const PULSE_COOL = [[84, 134, 112], [78, 122, 142]];   // Salbei -> Schiefer
+// Two related tones per field, between which the gradient wanders across the
+// width. Two tones from the same corner of the colour wheel, not two colours:
+// the shift should read as a shimmer, not as a rainbow.
+const PULSE_WARM = [[217, 164, 65], [206, 118, 92]];   // amber -> copper
+// The lower field carries the panel tone within it: muted tones that only push
+// #16181f towards green or blue instead of laying a colour on top.
+const PULSE_COOL = [[84, 134, 112], [78, 122, 142]];   // sage -> slate
 
 function pulseMix([ar, ag, ab], [br, bg, bb], t) {
   return `${Math.round(ar + (br - ar) * t)}, `
@@ -2129,8 +2125,8 @@ function pulseMix([ar, ag, ab], [br, bg, bb], t) {
     + `${Math.round(ab + (bb - ab) * t)}`;
 }
 
-// Der Verlauf laeuft zyklisch (cos), damit linker und rechter Rand
-// zusammenpassen und das Wandern keine Naht hinterlaesst.
+// The gradient runs cyclically (cos) so the left and right edges match and the
+// wandering leaves no seam.
 function pulseFieldFill(w, [a, b], alpha) {
   const g = pulseCtx.createLinearGradient(0, 0, w, 0);
   const STOPS = 6;
@@ -2150,18 +2146,18 @@ function drawPulse() {
   const edge = PULSE.prog * w;
   pulseCtx.clearRect(0, 0, w, h);
 
-  // Die Kurve einmal abtasten - Flaechen und Linie benutzen dieselben Punkte.
+  // Sample the curve once - fields and line use the same points.
   const pts = [];
   for (let x = 0; x <= w; x += 2) pts.push([x, mid + pulseWaveAt(x)]);
 
-  // Die Kurve trennt zwei Felder: darueber warm (Betrieb), darunter kuehl
-  // (Erledigtes). Blass gehalten - sie sollen den Kopf einfaerben, nicht ihn
-  // zumalen; Schriftzug und Knoepfe liegen darueber. Mit steigender Last zieht
-  // die Faerbung an, damit sich ein volles Deck auch dann noch vom leeren
-  // unterscheidet, wenn man nicht auf den Ausschlag achtet.
+  // The curve separates two fields: warm above (activity), cool below (what is
+  // done). Kept pale - they should tint the header, not paint over it; wordmark
+  // and buttons sit on top. With rising load the colouring picks up, so a full
+  // deck still differs from an empty one even when you are not watching the
+  // amplitude.
   const wash = 0.085 + PULSE.load * 0.09;
 
-  // Oberes Feld: warm, ueber die ganze Hoehe gleich stark.
+  // Upper field: warm, equally strong across the whole height.
   pulseCtx.beginPath();
   pulseCtx.moveTo(-2, 0);
   pulseCtx.lineTo(-2, pts[0][1]);
@@ -2172,15 +2168,15 @@ function drawPulse() {
   pulseCtx.fillStyle = pulseFieldFill(w, PULSE_WARM, wash);
   pulseCtx.fill();
 
-  // Unteres Feld: liegt schon von Haus aus dicht am Panelton und wird nach
-  // unten hin ganz durchsichtig. Unter dem Kopf geht die Sessionliste in
-  // derselben Farbe weiter - eine sichtbare Kante dazwischen waere genau das,
-  // was man hier nicht will.
+  // Lower field: already sits close to the panel tone by itself and becomes
+  // fully transparent towards the bottom. Below the header the session list
+  // continues in the same colour - a visible edge in between would be exactly
+  // what one does not want here.
   pulseCtx.save();
   pulseCtx.beginPath();
-  // Die senkrechten Kanten liegen ausserhalb der Flaeche: laegen sie genau auf
-  // ihr, blieben dort halb gedeckte Pixel stehen, die das Ausblenden nicht
-  // mehr wegbekommt.
+  // The vertical edges lie outside the area: were they exactly on it,
+  // half-opaque pixels would remain there that the fade-out can no longer
+  // remove.
   pulseCtx.moveTo(-2, h);
   pulseCtx.lineTo(-2, pts[0][1]);
   for (const [px, py] of pts) pulseCtx.lineTo(px, py);
@@ -2189,18 +2185,18 @@ function drawPulse() {
   pulseCtx.closePath();
   pulseCtx.clip();
   pulseCtx.fillStyle = pulseFieldFill(w, PULSE_COOL, wash * 1.15);
-  // Ueber die Kanten hinaus: die Canvas ist in Geraetepixeln breiter als die
-  // CSS-Breite hergibt (krummer devicePixelRatio), und die angeschnittene
-  // letzte Spalte wuerde sonst weder ganz gefuellt noch ganz geloescht.
+  // Beyond the edges: in device pixels the canvas is wider than the CSS width
+  // suggests (a fractional devicePixelRatio), and the clipped last column would
+  // otherwise be neither fully filled nor fully cleared.
   pulseCtx.fillRect(-2, 0, w + 4, h);
-  // Deckkraft von der Linie abwaerts auf null ziehen. Der Verlauf laeuft quer,
-  // das Ausblenden laengs - beides in einem Farbverlauf geht nicht, deshalb
-  // wird die zweite Richtung herausradiert statt hineingemalt.
+  // Pull the opacity down to zero from the line downwards. The gradient runs
+  // across, the fade lengthwise - both in one gradient is impossible, so the
+  // second direction is erased out instead of painted in.
   const fade = pulseCtx.createLinearGradient(0, mid, 0, h);
   fade.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  // Schon knapp vor der Unterkante ganz durchsichtig: liefe die Rampe exakt
-  // bis h, bliebe in der letzten Pixelreihe ein Rest stehen, weil deren Mitte
-  // noch oberhalb liegt.
+  // Fully transparent just short of the bottom edge: if the ramp ran exactly to
+  // h, a remnant would stay in the last pixel row because its centre still lies
+  // above.
   fade.addColorStop(0.9, 'rgba(0, 0, 0, 1)');
   fade.addColorStop(1, 'rgba(0, 0, 0, 1)');
   pulseCtx.globalCompositeOperation = 'destination-out';
@@ -2208,10 +2204,10 @@ function drawPulse() {
   pulseCtx.fillRect(-2, 0, w + 4, h);
   pulseCtx.restore();
 
-  // Die Linie nimmt die Farbe des unteren Feldes an: sie ist dessen Kante,
-  // kein eigener Strich. Den Fortschritt traegt sie nur noch in der Helligkeit
-  // - links vom Stand etwas praesenter als rechts davon. Ein Farbwechsel waere
-  // hier zu laut, jetzt wo die Flaechen die Farbe tragen.
+  // The line takes on the colour of the lower field: it is that field's edge,
+  // not a stroke of its own. It carries the progress only in its brightness -
+  // a little more present left of the mark than right of it. A colour change
+  // would be too loud here now that the fields carry the colour.
   pulseCtx.lineWidth = 1.4;
   pulseCtx.lineJoin = 'round';
   const segs = [
@@ -2234,9 +2230,9 @@ function drawPulse() {
     pulseCtx.restore();
   }
 
-  // Kante des Fortschritts, beim Abhaken kurz aufleuchtend. Etwas kraeftiger
-  // als die Linie: seit die sich ins Feld zurueckgenommen hat, ist dieser
-  // Strich die Stelle, an der der Stand ueberhaupt noch ablesbar ist.
+  // Edge of the progress, briefly lighting up when something is ticked off. A
+  // little stronger than the line: since that has withdrawn into the field,
+  // this mark is the only place where the level is still readable at all.
   if (edge > 0.5 && edge < w) {
     pulseCtx.fillStyle = `rgba(78, 201, 122, ${0.38 + PULSE.flash * 0.5})`;
     pulseCtx.fillRect(edge - 0.75, mid - PULSE.amp - 3, 1.5, PULSE.amp * 2 + 6);
@@ -2253,12 +2249,12 @@ function pulseTick(now) {
   const h = pulseCanvas.clientHeight || 1;
   const idle = busy === 0 && agents === 0;
 
-  // Agenten zaehlen schwaecher als busy-Sessions: sie laufen im Hintergrund
-  // weiter, waehrend die Shell davor still steht - das ist weniger Betrieb als
-  // ein Terminal, in dem sichtbar etwas passiert.
+  // Agents count for less than busy sessions: they keep running in the
+  // background while the shell in front of them sits still - that is less
+  // activity than a terminal in which something visibly happens.
   const targetAmp = idle ? 0.5
     : Math.min(pulseMaxAmp(h), 1.4 + busy * 1.8 + agents * 0.8);
-  // Gedeckelt: ab einem Dutzend Agenten wird aus dichter nur noch unruhig.
+  // Capped: beyond a dozen agents, denser only turns into restless.
   const targetDens = 1 + Math.min(1.1, agents * 0.16);
   const targetLoad = Math.min(1, (busy * 0.3 + agents * 0.15));
   const p = pulseProgress();
@@ -2268,18 +2264,18 @@ function pulseTick(now) {
 
   PULSE.amp += (targetAmp - PULSE.amp) * Math.min(1, dt * 4);
   PULSE.prog += (targetProg - PULSE.prog) * Math.min(1, dt * 5);
-  // Dichte weicher nachziehen als der Ausschlag: ein Agent, der fertig wird,
-  // soll das Muster nicht umspringen lassen.
+  // Let the density follow more softly than the amplitude: an agent that
+  // finishes should not make the pattern jump.
   PULSE.dens += (targetDens - PULSE.dens) * Math.min(1, dt * 1.5);
   PULSE.load += (targetLoad - PULSE.load) * Math.min(1, dt * 2);
-  // Sehr langsam - ein Umlauf dauert ueber eine Minute. Steht das Deck still,
-  // steht auch der Verlauf: sonst liefe die Schleife fuer Deko ewig weiter.
+  // Very slow - one cycle takes over a minute. If the deck stands still, so
+  // does the gradient: otherwise the loop would run forever for decoration.
   if (!idle) PULSE.drift = (PULSE.drift + dt * 0.016) % 1;
   PULSE.phase += dt * (idle ? 0.7 : 1.4 + busy * 0.8 + agents * 0.3);
   PULSE.flash = Math.max(0, PULSE.flash - dt * 1.6);
   drawPulse();
 
-  // Nur weiterlaufen, wenn noch Bewegung aussteht
+  // Only keep running while there is still movement pending
   const settled = idle && PULSE.flash <= 0
     && Math.abs(targetAmp - PULSE.amp) < 0.15
     && Math.abs(targetDens - PULSE.dens) < 0.01
@@ -2290,8 +2286,8 @@ function pulseTick(now) {
 
 function pulseWake() {
   if (pulseCalm.matches) {
-    // Ohne Bewegung: Fortschritt trotzdem als ruhige Linie zeigen
-    // Dichte und Faerbung duerfen bleiben: das sind Zustaende, keine Bewegung.
+    // Without motion: still show the progress as a calm line.
+    // Density and colouring may stay: those are states, not motion.
     const p = pulseProgress();
     const agents = pulseAgents();
     PULSE.amp = 0.5;
@@ -2313,7 +2309,7 @@ pulseCalm.addEventListener('change', () => {
   pulseWake();
 });
 
-// Tastenkürzel
+// Keyboard shortcuts
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 't') {
     e.preventDefault();
@@ -2337,7 +2333,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Start
+// Startup
 // ---------------------------------------------------------------------------
 (async function init() {
   sizePulse();

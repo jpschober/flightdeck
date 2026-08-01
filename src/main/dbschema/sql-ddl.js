@@ -1,29 +1,29 @@
 'use strict';
-// Minimaler Postgres-DDL-Leser.
+// Minimal Postgres DDL reader.
 //
-// Eine Migration ist kein fertiges Schema, sondern eine Folge von Anweisungen:
-// erst CREATE TABLE, drei Dateien spaeter ADD COLUMN, dann DROP CONSTRAINT. Wie
-// das Schema *jetzt* aussieht, weiss man erst, wenn man die Anweisungen der
-// Reihe nach auf einem Modell nachspielt - genau das tut dieses Modul.
+// A migration is not a finished schema but a sequence of statements: first
+// CREATE TABLE, three files later ADD COLUMN, then DROP CONSTRAINT. What the
+// schema looks like *now* is only known once the statements have been replayed
+// in order onto a model - which is exactly what this module does.
 //
-// Bewusst ohne SQL-Parser-Paket: der Renderer darf per CSP keine fremden
-// Skripte laden, und im Main-Prozess wollen wir uns fuer ein Panel keine
-// Abhaengigkeit dieser Groesse einkaufen. Abgedeckt ist der DDL-Anteil, den
-// Migrationswerkzeuge tatsaechlich erzeugen. Was nicht verstanden wird, wird
-// uebersprungen und als Warnung gemeldet - ein unvollstaendiges Schema mit
-// Hinweis ist brauchbar, ein Absturz nicht.
+// Deliberately without an SQL parser package: the renderer may not load foreign
+// scripts because of the CSP, and in the main process we do not want to buy a
+// dependency of that size for a single panel. Covered is the DDL subset that
+// migration tools actually produce. Whatever is not understood is skipped and
+// reported as a warning - an incomplete schema with a note is usable, a crash
+// is not.
 
 const DEFAULT_SCHEMA = 'public';
 
 // ---------------------------------------------------------------------------
-// Zerlegen: Kommentare weg, an Semikolons auf oberster Ebene trennen
+// Splitting: strip comments, break at top-level semicolons
 // ---------------------------------------------------------------------------
 
 /**
- * Trennt ein SQL-Skript in einzelne Anweisungen. Beachtet Zeilen- und
- * Blockkommentare, Zeichenketten, zitierte Bezeichner und Dollar-Quoting
- * ($$ ... $$), in dem Funktions- und Policy-Rumpfe stecken - dort darf ein
- * Semikolon nicht trennen.
+ * Splits an SQL script into individual statements. Respects line and block
+ * comments, string literals, quoted identifiers and dollar quoting
+ * ($$ ... $$) that holds function and policy bodies - a semicolon must not
+ * split anything in there.
  */
 function splitStatements(sql) {
   const out = [];
@@ -36,13 +36,13 @@ function splitStatements(sql) {
 
     if (ch === '-' && sql[i + 1] === '-') {
       const nl = sql.indexOf('\n', i);
-      i = nl === -1 ? n : nl; // das \n selbst bleibt als Trenner erhalten
+      i = nl === -1 ? n : nl; // the \n itself is kept as a separator
       buf += ' ';
       continue;
     }
 
     if (ch === '/' && sql[i + 1] === '*') {
-      let depth = 1; // Blockkommentare sind in Postgres verschachtelbar
+      let depth = 1; // block comments can be nested in Postgres
       i += 2;
       while (i < n && depth > 0) {
         if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2; }
@@ -80,12 +80,12 @@ function splitStatements(sql) {
   return out.map((s) => s.trim()).filter(Boolean);
 }
 
-/** Index hinter dem schliessenden Anfuehrungszeichen ab `at`. */
+/** Index just past the closing quote starting at `at`. */
 function scanQuoted(s, at) {
   const q = s[at];
   let j = at + 1;
   while (j < s.length) {
-    if (s[j] === q && s[j + 1] === q) { j += 2; continue; } // '' bzw. "" = escape
+    if (s[j] === q && s[j + 1] === q) { j += 2; continue; } // '' or "" = escape
     if (s[j] === q) return j + 1;
     j++;
   }
@@ -93,14 +93,14 @@ function scanQuoted(s, at) {
 }
 
 // ---------------------------------------------------------------------------
-// Hilfsmittel: geklammerte und zitierte Bereiche ausblenden
+// Helpers: mask out parenthesised and quoted regions
 // ---------------------------------------------------------------------------
 
 /**
- * Ersetzt alles innerhalb von Klammern und Anfuehrungszeichen durch
- * Leerzeichen, laengengleich. Darauf laesst sich nach Schluesselwoertern und Kommas auf
- * oberster Ebene suchen, ohne in Ausdruecke wie `numeric(10,2)` oder
- * `check (status <> 'default')` hineinzugreifen.
+ * Replaces everything inside parentheses and quotes with spaces, keeping the
+ * length. On the result one can search for top-level keywords and commas
+ * without reaching into expressions like `numeric(10,2)` or
+ * `check (status <> 'default')`.
  */
 function maskNested(s) {
   const a = s.split('');
@@ -122,7 +122,7 @@ function maskNested(s) {
   return a.join('');
 }
 
-/** Teilt an Kommas der obersten Ebene. */
+/** Splits at top-level commas. */
 function splitTopLevel(s, sep = ',') {
   const masked = maskNested(s);
   const parts = [];
@@ -134,13 +134,13 @@ function splitTopLevel(s, sep = ',') {
   return parts.map((p) => p.trim()).filter(Boolean);
 }
 
-/** Erster Treffer von `re` auf oberster Ebene, oder null. */
+/** First match of `re` at the top level, or null. */
 function findTopLevel(s, re) {
   const m = re.exec(maskNested(s));
   return m ? { index: m.index, length: m[0].length } : null;
 }
 
-/** Index der zur Klammer bei `at` gehoerenden schliessenden Klammer. */
+/** Index of the closing parenthesis belonging to the one at `at`. */
 function matchParen(s, at) {
   let depth = 0;
   for (let i = at; i < s.length; i++) {
@@ -152,7 +152,7 @@ function matchParen(s, at) {
   return -1;
 }
 
-/** Inhalt der Klammer am Anfang von `s` plus Rest dahinter. */
+/** Content of the parenthesis at the start of `s` plus the rest behind it. */
 function readParens(s) {
   const t = s.trimStart();
   if (!t.startsWith('(')) return null;
@@ -162,13 +162,13 @@ function readParens(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Bezeichner
+// Identifiers
 // ---------------------------------------------------------------------------
-// Unzitierte Bezeichner duerfen ausser Buchstaben, Ziffern, _ und $ auch
-// Nicht-ASCII enthalten; Klammern, Punkt und Komma beenden sie.
+// Besides letters, digits, _ and $, unquoted identifiers may also contain
+// non-ASCII characters; parentheses, dot and comma terminate them.
 const IDENT_RE = /^(?:"((?:[^"]|"")*)"|([A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*))/;
 
-/** Liest einen Bezeichner. Unzitierte faltet Postgres auf Kleinschreibung. */
+/** Reads an identifier. Postgres folds unquoted ones to lower case. */
 function readIdent(s) {
   const m = IDENT_RE.exec(s.trimStart());
   if (!m) return null;
@@ -179,7 +179,7 @@ function readIdent(s) {
   };
 }
 
-/** Liest `name`, `schema.name` oder `db.schema.name`. */
+/** Reads `name`, `schema.name` or `db.schema.name`. */
 function readQualified(s) {
   const first = readIdent(s);
   if (!first) return null;
@@ -198,13 +198,13 @@ function readQualified(s) {
   };
 }
 
-/** Liest eine Spaltenliste `(a, b)`. Ausdruecke bleiben als Text stehen. */
+/** Reads a column list `(a, b)`. Expressions are kept as text. */
 function readColumnList(s) {
   const p = readParens(s);
   if (!p) return null;
   const columns = splitTopLevel(p.inner).map((part) => {
     const id = readIdent(part);
-    // Ein Ausdrucks-Index (`lower(email)`) ist keine Spalte - Text behalten
+    // An expression index (`lower(email)`) is not a column - keep the text
     return id && !id.rest.trim() ? id.name : squash(part);
   });
   return { columns, rest: p.rest };
@@ -215,10 +215,10 @@ function squash(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Typen
+// Types
 // ---------------------------------------------------------------------------
-// Echte Aliase zusammenfuehren, sonst meldet der Diff eine Aenderung, wo sich
-// nur die Schreibweise geaendert hat (`varchar` -> `character varying`).
+// Merge genuine aliases, otherwise the diff reports a change where only the
+// spelling changed (`varchar` -> `character varying`).
 const TYPE_ALIASES = new Map([
   ['int', 'integer'], ['int4', 'integer'],
   ['int2', 'smallint'], ['int8', 'bigint'],
@@ -240,22 +240,22 @@ const TYPE_ALIASES = new Map([
 const SERIAL_RE = /^(?:big|small)?serial[248]?$/i;
 
 /**
- * Normalisiert eine Typangabe: Schluesselwoerter klein, Whitespace einheitlich,
- * bekannte Aliase aufgeloest. Array- und Praezisionsangaben bleiben erhalten.
+ * Normalises a type: keywords lower-cased, whitespace unified, known aliases
+ * resolved. Array and precision specifications are preserved.
  */
 function normalizeType(raw) {
   let t = squash(raw);
   if (!t) return '';
-  // Praezision/Array vom Basisnamen trennen: `varchar(255)[]` -> `varchar` + Rest
+  // Separate precision/array from the base name: `varchar(255)[]` -> `varchar` + rest
   const m = /^([^([]+?)\s*((?:\(.*\))?(?:\s*\[[^\]]*\])*)$/.exec(t);
   if (!m) return t.toLowerCase();
   let base = squash(m[1]);
   const suffix = squash(m[2]).replace(/\s*\(\s*/, '(').replace(/\s*\)/, ')').replace(/\s*,\s*/g, ',');
-  // Zitierte bzw. qualifizierte Typen (eigene Enums) unangetastet lassen
+  // Leave quoted or qualified types (custom enums) untouched
   if (base.includes('"')) return base + suffix;
   base = base.toLowerCase();
   const short = base.includes('.') ? base.slice(base.lastIndexOf('.') + 1) : base;
-  // `timestamp(3) with time zone`: die Praezision steht mitten im Namen
+  // `timestamp(3) with time zone`: the precision sits in the middle of the name
   if (/^timestamp\b/.test(base) || /^time\b/.test(base)) {
     if (/with\s+time\s+zone/.test(base)) return (base.startsWith('timestamp') ? 'timestamp' : 'time') + suffix + ' with time zone';
     if (/without\s+time\s+zone/.test(base)) return (base.startsWith('timestamp') ? 'timestamp' : 'time') + suffix + ' without time zone';
@@ -265,11 +265,11 @@ function normalizeType(raw) {
 }
 
 // ---------------------------------------------------------------------------
-// Modell
+// Model
 // ---------------------------------------------------------------------------
 function createModel() {
   return {
-    tables: new Map(), // "schema.name" -> Tabelle
+    tables: new Map(), // "schema.name" -> table
     enums: new Map(),  // "schema.name" -> { schema, name, values }
     warnings: [],
   };
@@ -290,8 +290,8 @@ function firstWords(s, count = 6) {
 }
 
 function getTable(model, schema, name) {
-  // Ohne Schemaangabe zuerst im Standardschema suchen, dann irgendwo -
-  // Migrationen mischen `public.x` und `x` munter durcheinander.
+  // Without a schema, look in the default schema first, then anywhere -
+  // migrations happily mix `public.x` and `x`.
   const direct = model.tables.get(keyOf(schema, name));
   if (direct) return direct;
   if (schema) return null;
@@ -304,11 +304,11 @@ function findColumn(table, name) {
 }
 
 /**
- * Platzhalter fuer eine Tabelle, die die Migrationen nicht selbst anlegen, auf
- * der sie aber den Zugriff regeln - etwa `storage.objects` bei Supabase. Die
- * Spalten kennen wir nicht (`external: true`), die selbst geschriebenen
- * Policies sind aber sehr wohl Teil des Projekts und gehoeren in den Vergleich:
- * wer welche Dateien lesen darf, ist genau die Art Aenderung, die auffallen soll.
+ * Placeholder for a table the migrations do not create themselves but do
+ * govern access to - such as `storage.objects` in Supabase. We do not know its
+ * columns (`external: true`), but the hand-written policies very much are part
+ * of the project and belong in the comparison: who may read which files is
+ * exactly the kind of change that should stand out.
  */
 function externalTable(model, schema, name) {
   const key = keyOf(schema, name);
@@ -327,7 +327,7 @@ function externalTable(model, schema, name) {
   return table;
 }
 
-/** Postgres-Standardnamen, damit unbenannte Constraints im Diff wiedererkannt werden. */
+/** Postgres default names, so unnamed constraints are recognised again in the diff. */
 function defaultConstraintName(table, kind, columns) {
   const cols = (columns || []).join('_');
   const suffix = { pk: 'pkey', unique: 'key', fk: 'fkey', check: 'check', exclude: 'excl', index: 'idx' }[kind] || kind;
@@ -337,7 +337,7 @@ function defaultConstraintName(table, kind, columns) {
 
 function addConstraint(table, c) {
   if (!c.name) c.name = defaultConstraintName(table, c.kind, c.columns);
-  // Kollision unbenannter Constraints wie Postgres durchnummerieren
+  // Number colliding unnamed constraints the way Postgres does
   if (table.constraints.some((x) => x.name === c.name)) {
     let i = 1;
     while (table.constraints.some((x) => x.name === `${c.name}${i}`)) i++;
@@ -347,15 +347,15 @@ function addConstraint(table, c) {
 }
 
 // ---------------------------------------------------------------------------
-// Spaltendefinition
+// Column definition
 // ---------------------------------------------------------------------------
-// Schluesselwoerter, an denen die Typangabe endet. `with`/`without` fehlen hier
-// bewusst - sie gehoeren zu `timestamp with time zone`.
+// Keywords at which the type specification ends. `with`/`without` are missing
+// here on purpose - they belong to `timestamp with time zone`.
 const COL_STOP_RE = /\b(?:CONSTRAINT|PRIMARY\s+KEY|NOT\s+NULL|NULL|DEFAULT|REFERENCES|UNIQUE|CHECK|GENERATED|COLLATE|DEFERRABLE|INITIALLY|NO\s+INHERIT|STORAGE|COMPRESSION)\b/i;
 
 const REF_ACTION = '(?:NO\\s+ACTION|RESTRICT|CASCADE|SET\\s+NULL|SET\\s+DEFAULT)';
 
-/** Liest MATCH/ON DELETE/ON UPDATE hinter einem REFERENCES. */
+/** Reads MATCH/ON DELETE/ON UPDATE following a REFERENCES. */
 function readRefOptions(s) {
   let rest = s.trimStart();
   let onDelete = null;
@@ -375,8 +375,8 @@ function readRefOptions(s) {
 }
 
 /**
- * Zerlegt `name typ [constraints...]`. Liefert die Spalte und die dabei
- * anfallenden Constraints (PRIMARY KEY, UNIQUE, REFERENCES, CHECK).
+ * Breaks down `name type [constraints...]`. Returns the column and the
+ * constraints that come with it (PRIMARY KEY, UNIQUE, REFERENCES, CHECK).
  */
 function parseColumnDef(text) {
   const id = readIdent(text);
@@ -396,7 +396,7 @@ function parseColumnDef(text) {
     comment: null,
   };
 
-  // SERIAL ist Kurzschrift fuer integer + eigene Sequenz + NOT NULL
+  // SERIAL is shorthand for integer + its own sequence + NOT NULL
   if (SERIAL_RE.test(squash(typeText))) {
     column.identity = true;
     column.nullable = false;
@@ -481,7 +481,7 @@ function parseColumnConstraints(text, column) {
       column.identity = true;
       column.nullable = false;
       s = s.slice(m[0].length).trimStart();
-      const p = readParens(s); // optionale Sequenz-Optionen
+      const p = readParens(s); // optional sequence options
       if (p) s = p.rest.trimStart();
       continue;
     }
@@ -502,7 +502,7 @@ function parseColumnConstraints(text, column) {
       continue;
     }
 
-    // Unbekanntes Schluesselwort: ein Token weiter, damit nichts haengt
+    // Unknown keyword: skip one token so nothing gets stuck
     const tok = /^\S+/.exec(s);
     if (!tok) break;
     s = s.slice(tok[0].length).trimStart();
@@ -511,7 +511,7 @@ function parseColumnConstraints(text, column) {
 }
 
 // ---------------------------------------------------------------------------
-// Constraints auf Tabellenebene
+// Table-level constraints
 // ---------------------------------------------------------------------------
 const TABLE_CONSTRAINT_RE = /^(?:CONSTRAINT\s+(?:"(?:[^"]|"")*"|[A-Za-z_][A-Za-z_0-9$]*)\s+)?(?:PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK|EXCLUDE)\b/i;
 
@@ -564,7 +564,7 @@ function parseTableConstraint(text) {
   return null;
 }
 
-/** Ein Element aus der Klammer eines CREATE TABLE: Spalte oder Constraint. */
+/** One element from the parenthesis of a CREATE TABLE: column or constraint. */
 function addTablePart(model, table, part) {
   if (/^(?:LIKE|INHERITS|PARTITION)\b/i.test(part.trimStart())) return;
 
@@ -579,14 +579,14 @@ function addTablePart(model, table, part) {
         }
       }
     } else {
-      warn(model, `Constraint nicht gelesen: ${firstWords(part)}`);
+      warn(model, `Constraint not parsed: ${firstWords(part)}`);
     }
     return;
   }
 
   const parsed = parseColumnDef(part);
   if (!parsed) {
-    warn(model, `Spalte nicht gelesen: ${firstWords(part)}`);
+    warn(model, `Column not parsed: ${firstWords(part)}`);
     return;
   }
   table.columns.push(parsed.column);
@@ -594,18 +594,18 @@ function addTablePart(model, table, part) {
 }
 
 // ---------------------------------------------------------------------------
-// Anweisungen
+// Statements
 // ---------------------------------------------------------------------------
 
 function createTable(model, rest) {
   const s = rest.replace(/^\s*IF\s+NOT\s+EXISTS\s+/i, '');
   const q = readQualified(s);
-  if (!q) return warn(model, 'CREATE TABLE ohne lesbaren Namen');
+  if (!q) return warn(model, 'CREATE TABLE without a readable name');
 
   const body = readParens(q.rest);
   if (!body) {
-    // CREATE TABLE ... AS SELECT / PARTITION OF: Spalten stehen nicht dabei
-    return warn(model, `CREATE TABLE ${q.name}: keine Spaltenliste`);
+    // CREATE TABLE ... AS SELECT / PARTITION OF: no columns given
+    return warn(model, `CREATE TABLE ${q.name}: no column list`);
   }
 
   const table = {
@@ -634,11 +634,11 @@ function dropTable(model, rest) {
 function alterTable(model, rest) {
   let s = rest.replace(/^\s*IF\s+EXISTS\s+/i, '').replace(/^\s*ONLY\s+/i, '');
   const q = readQualified(s);
-  if (!q) return warn(model, 'ALTER TABLE ohne lesbaren Namen');
+  if (!q) return warn(model, 'ALTER TABLE without a readable name');
   const table = getTable(model, q.schema, q.name);
   s = q.rest.trimStart();
 
-  // RENAME ist keine Aktionsliste, sondern steht allein
+  // RENAME is not an action list, it stands on its own
   let m;
   if ((m = /^RENAME\s+(?:COLUMN\s+)?(?!TO\b|CONSTRAINT\b)/i.exec(s))) {
     const from = readIdent(s.slice(m[0].length));
@@ -682,14 +682,14 @@ function alterTable(model, rest) {
 
   let target = table;
   if (!target) {
-    // `ENABLE ROW LEVEL SECURITY` auf einer fremden Tabelle sagt: die gibt es,
-    // und dieses Projekt regelt ihren Zugriff. Dafuer legen wir einen
-    // Platzhalter an. Alles andere (ADD COLUMN o. ae.) waere hingegen ein Zeichen,
-    // dass wir die Definition verloren haben - das bleibt ein Hinweis.
+    // `ENABLE ROW LEVEL SECURITY` on a foreign table says: it exists, and this
+    // project governs access to it. For that we create a placeholder. Anything
+    // else (ADD COLUMN and the like) would instead be a sign that we lost the
+    // definition - that stays a warning.
     if (/ROW\s+LEVEL\s+SECURITY/i.test(s)) {
       target = externalTable(model, q.schema, q.name);
     } else {
-      return warn(model, `ALTER TABLE ${q.name}: Tabelle unbekannt`);
+      return warn(model, `ALTER TABLE ${q.name}: unknown table`);
     }
   }
   for (const action of splitTopLevel(s)) applyAlterAction(model, target, action);
@@ -707,7 +707,7 @@ function applyAlterAction(model, table, action) {
 
   if ((m = /^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?/i.exec(s))) {
     const body = s.slice(m[0].length);
-    // ADD CONSTRAINT / ADD PRIMARY KEY erkennt man am Schluesselwort
+    // ADD CONSTRAINT / ADD PRIMARY KEY is recognised by the keyword
     if (TABLE_CONSTRAINT_RE.test(body.trimStart()) && !/^ADD\s+COLUMN/i.test(s)) {
       const c = parseTableConstraint(body);
       if (c) {
@@ -718,11 +718,11 @@ function applyAlterAction(model, table, action) {
             if (col) col.nullable = false;
           }
         }
-      } else warn(model, `ADD CONSTRAINT nicht gelesen: ${firstWords(body)}`);
+      } else warn(model, `ADD CONSTRAINT not parsed: ${firstWords(body)}`);
       return;
     }
     const parsed = parseColumnDef(body);
-    if (!parsed) return warn(model, `ADD COLUMN nicht gelesen: ${firstWords(body)}`);
+    if (!parsed) return warn(model, `ADD COLUMN not parsed: ${firstWords(body)}`);
     if (!findColumn(table, parsed.column.name)) table.columns.push(parsed.column);
     for (const c of parsed.constraints) addConstraint(table, c);
     return;
@@ -738,7 +738,7 @@ function applyAlterAction(model, table, action) {
     const id = readIdent(s.slice(m[0].length));
     if (!id) return;
     table.columns = table.columns.filter((c) => c.name !== id.name);
-    // Constraints, die nur diese Spalte betreffen, fallen mit ihr weg
+    // Constraints that only concern this column go away with it
     table.constraints = table.constraints.filter((c) =>
       !(c.columns && c.columns.length === 1 && c.columns[0] === id.name));
     return;
@@ -765,13 +765,13 @@ function applyAlterAction(model, table, action) {
       col.identity = /^ADD/i.test(tail);
       return;
     }
-    return; // SET STORAGE / SET STATISTICS: fuer die Anzeige belanglos
+    return; // SET STORAGE / SET STATISTICS: irrelevant for the display
   }
 
   if (/^ENABLE\s+(?:ROW\s+LEVEL\s+SECURITY)/i.test(s)) { table.rls.enabled = true; return; }
   if (/^DISABLE\s+ROW\s+LEVEL\s+SECURITY/i.test(s)) { table.rls.enabled = false; return; }
   if (/^FORCE\s+ROW\s+LEVEL\s+SECURITY/i.test(s)) { table.rls.forced = true; return; }
-  // OWNER TO, CLUSTER ON, VALIDATE CONSTRAINT, ... : keine Schema-Aussage
+  // OWNER TO, CLUSTER ON, VALIDATE CONSTRAINT, ... : say nothing about the schema
 }
 
 function createType(model, rest) {
@@ -779,7 +779,7 @@ function createType(model, rest) {
   const q = readQualified(s);
   if (!q) return;
   const m = /^\s*AS\s+ENUM\s*(?=\()/i.exec(q.rest);
-  if (!m) return; // Composite-/Range-Typen zeigen wir nicht
+  if (!m) return; // we do not show composite/range types
   const p = readParens(q.rest.slice(m[0].length));
   if (!p) return;
   model.enums.set(keyOf(q.schema, q.name), {
@@ -802,7 +802,7 @@ function alterType(model, rest) {
     if (!lit) return;
     const value = lit[1].replace(/''/g, "'");
     if (e.values.includes(value)) return;
-    // BEFORE/AFTER bestimmt die Sortierung des Enums
+    // BEFORE/AFTER determines the ordering of the enum
     const pos = /\b(BEFORE|AFTER)\s+'((?:[^']|'')*)'/i.exec(tail);
     if (pos) {
       const at = e.values.indexOf(pos[2].replace(/''/g, "'"));
@@ -849,7 +849,7 @@ function stripLiteral(s) {
 
 function createIndex(model, rest, unique) {
   let s = rest.replace(/^\s*CONCURRENTLY\s+/i, '').replace(/^\s*IF\s+NOT\s+EXISTS\s+/i, '');
-  // Der Name ist optional: `CREATE INDEX ON t (...)`
+  // The name is optional: `CREATE INDEX ON t (...)`
   let name = null;
   if (!/^ON\b/i.test(s.trimStart())) {
     const id = readQualified(s);
@@ -905,14 +905,14 @@ function createPolicy(model, rest) {
   if (!onMatch) return;
   const q = readQualified(id.rest.slice(onMatch[0].length));
   if (!q) return;
-  // Auch auf einer fremden Tabelle (`storage.objects`) ist die Policy vom
-  // Projekt geschrieben und gehoert damit ins Schema.
+  // Even on a foreign table (`storage.objects`) the policy is written by the
+  // project and therefore belongs in the schema.
   const table = getTable(model, q.schema, q.name) || externalTable(model, q.schema, q.name);
 
   const tail = q.rest;
   const masked = maskNested(tail);
   const grab = (re) => { const m = re.exec(masked); return m ? m[1] : null; };
-  // Die Ausdruecke stehen in Klammern - dafuer muss im Original gesucht werden
+  // The expressions sit inside parentheses - for those we have to search the original
   const clause = (re) => {
     const m = re.exec(masked);
     if (!m) return null;
@@ -955,7 +955,7 @@ function commentOn(model, rest) {
     return;
   }
   if ((m = /^\s*COLUMN\s+/i.exec(rest))) {
-    // `schema.tabelle.spalte` - die Spalte ist das letzte Glied
+    // `schema.table.column` - the column is the last part
     const parts = [];
     let s = rest.slice(m[0].length);
     for (let i = 0; i < 4; i++) {
@@ -985,7 +985,7 @@ function commentText(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Einstieg
+// Entry point
 // ---------------------------------------------------------------------------
 function applyStatement(model, statement) {
   const s = statement.trimStart();
@@ -1002,17 +1002,17 @@ function applyStatement(model, statement) {
   if ((m = /^CREATE\s+POLICY\b/i.exec(s))) return createPolicy(model, s.slice(m[0].length));
   if ((m = /^DROP\s+POLICY\b/i.exec(s))) return dropPolicy(model, s.slice(m[0].length));
   if ((m = /^COMMENT\s+ON\b/i.exec(s))) return commentOn(model, s.slice(m[0].length));
-  // Alles andere (Funktionen, Trigger, Rechte, Daten) sagt nichts ueber die
-  // Tabellenform aus und wird still uebergangen.
+  // Everything else (functions, triggers, grants, data) says nothing about the
+  // shape of the tables and is silently skipped.
 }
 
-/** Spielt ein SQL-Skript auf dem Modell nach. */
+/** Replays an SQL script onto the model. */
 function applySql(model, sql) {
   for (const statement of splitStatements(sql)) {
     try {
       applyStatement(model, statement);
     } catch (e) {
-      warn(model, `Anweisung übersprungen (${e.message}): ${firstWords(statement)}`);
+      warn(model, `Statement skipped (${e.message}): ${firstWords(statement)}`);
     }
   }
   return model;
@@ -1025,7 +1025,7 @@ module.exports = {
   applyStatement,
   splitStatements,
   normalizeType,
-  // fuer Tests und weitere Plugins
+  // for tests and further plugins
   splitTopLevel,
   readQualified,
   parseColumnDef,

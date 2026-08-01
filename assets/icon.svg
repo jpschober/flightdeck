@@ -1,8 +1,8 @@
-<!-- Programmicon: Papierflieger ueber dem Horizont.
-     Farben und Rundung stammen aus der Palette der App (bg-panel, yellow,
-     green), der Horizont greift den Puls im Kopf der Seitenleiste auf.
+<!-- App icon: paper plane above the horizon.
+     Colours and rounding come from the app's palette (bg-panel, yellow,
+     green), the horizon picks up the pulse in the sidebar header.
 
-     icon.png daraus neu erzeugen:
+     Regenerate icon.png from this:
        rsvg-convert -w 512 -h 512 assets/icon.svg -o assets/icon.png -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
@@ -25,17 +25,17 @@
   <rect x="4" y="4" width="504" height="504" rx="108" fill="none"
         stroke="#262a36" stroke-width="8"/>
 
-  <!-- Horizont: dieselbe Trennung wie im Kopf der Seitenleiste -->
+  <!-- Horizon: the same division as in the sidebar header -->
   <path d="M 74 372 C 150 348, 214 396, 290 372 S 400 340, 438 358"
         fill="none" stroke="url(#horizon)" stroke-width="9" stroke-linecap="round"/>
 
-  <!-- Papierflieger, aufsteigend nach rechts -->
+  <!-- Paper plane, climbing to the right -->
   <g>
-    <!-- obere Flaeche -->
+    <!-- upper surface -->
     <path d="M 424 96 L 96 246 L 214 288 Z" fill="url(#wing)"/>
-    <!-- untere Flaeche, abgesetzt: gibt dem Flieger seine Faltung -->
+    <!-- lower surface, offset: gives the plane its fold -->
     <path d="M 424 96 L 214 288 L 262 400 Z" fill="#b07f2c"/>
-    <!-- Kiel -->
+    <!-- keel -->
     <path d="M 424 96 L 214 288" fill="none" stroke="#161821"
           stroke-width="10" stroke-linecap="round" opacity="0.55"/>
   </g>

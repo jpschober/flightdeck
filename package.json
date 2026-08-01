@@ -2,7 +2,7 @@
   "name": "flightdeck",
   "productName": "Flightdeck",
   "version": "0.1.0",
-  "description": "Warp-aehnliche Terminal-App: mehrere Shell-Sessions, Agenten-Status, Git/PR-Kontextpanel, Datei-Vorschau",
+  "description": "Warp-like terminal app: multiple shell sessions, agent status, git/PR context panel, file preview",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron ."

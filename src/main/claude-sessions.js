@@ -1,6 +1,6 @@
 'use strict';
-// Liest Claude-Code-Sessions aus ~/.claude/projects (JSONL-Dateien), um sie
-// im Session-Browser anzuzeigen und per `claude --resume` fortsetzen zu koennen.
+// Reads Claude Code sessions from ~/.claude/projects (JSONL files) so they can
+// be shown in the session browser and continued via `claude --resume`.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -8,13 +8,13 @@ const os = require('os');
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const cache = new Map(); // filePath -> { mtime, data }
 
-// Claude leitet den Verzeichnisnamen aus dem cwd ab: alles ausser [A-Za-z0-9]
-// wird zu '-'. Ein Worktree unterhalb des Repos landet daher in einem eigenen
-// Verzeichnis, dessen Name mit dem des Repos beginnt.
+// Claude derives the directory name from the cwd: everything except [A-Za-z0-9]
+// becomes '-'. A worktree below the repo therefore ends up in its own
+// directory whose name starts with the repo's.
 function encodeProjectDir(p) { return (p || '').replace(/[^a-zA-Z0-9]/g, '-'); }
 
-// Kopf der Datei lesen: cwd, Slug und erste Nutzer-Nachricht als Vorschau.
-// file-history-snapshot-Zeilen koennen riesig sein und werden uebersprungen.
+// Read the head of the file: cwd, slug and the first user message as a preview.
+// file-history-snapshot lines can be huge and are skipped.
 function readHeadSignals(filePath) {
   try {
     const fd = fs.openSync(filePath, 'r');
@@ -26,7 +26,7 @@ function readHeadSignals(filePath) {
     for (const line of lines) {
       if (!line.trim()) continue;
       let entry;
-      try { entry = JSON.parse(line); } catch { continue; } // letzte Zeile evtl. abgeschnitten
+      try { entry = JSON.parse(line); } catch { continue; } // last line may be cut off
       if (entry.type === 'file-history-snapshot') continue;
       if (!cwd && entry.cwd) cwd = entry.cwd;
       if (!slug && entry.slug) slug = entry.slug;
@@ -38,7 +38,7 @@ function readHeadSignals(filePath) {
           const t = c.find((x) => x && x.type === 'text' && x.text);
           if (t) text = t.text;
         }
-        if (text && !text.startsWith('<')) preview = text; // Meta-Turns ueberspringen
+        if (text && !text.startsWith('<')) preview = text; // skip meta turns
       }
       if (cwd && preview && slug) break;
     }
@@ -48,7 +48,7 @@ function readHeadSignals(filePath) {
   }
 }
 
-// Ende der Datei lesen: der letzte Slug gewinnt (Umbenennung via /rename)
+// Read the end of the file: the last slug wins (renamed via /rename)
 function readTailSlug(filePath) {
   try {
     const size = fs.statSync(filePath).size;
@@ -79,7 +79,7 @@ function listClaudeSessions(limit = 200) {
       const filePath = path.join(dirPath, f);
       let stat;
       try { stat = fs.statSync(filePath); } catch { continue; }
-      if (stat.size < 200) continue; // leere/abgebrochene Sessions
+      if (stat.size < 200) continue; // empty/aborted sessions
       found.push({ id: path.basename(f, '.jsonl'), file: filePath, mtime: stat.mtimeMs, size: stat.size });
     }
   }
@@ -97,22 +97,22 @@ function listClaudeSessions(limit = 200) {
       Object.assign(s, data);
     }
   }
-  // Nur Sessions mit bekanntem Projektpfad sind fortsetzbar
+  // Only sessions with a known project path can be resumed
   return top
     .filter((s) => s.cwd)
     .map(({ id, cwd, slug, preview, mtime }) => ({ id, cwd, slug, preview, mtime }));
 }
 
 // ---------------------------------------------------------------------------
-// Transcript-Bindung: welche Claude-Session laeuft in diesem Terminal?
+// Transcript binding: which Claude session is running in this terminal?
 //
-// Das Transcript ist die einzige Quelle, die verraet, wo der Agent wirklich
-// arbeitet - wechselt er in einen Worktree, bleibt der cwd der Shell stehen.
-// Gebunden wird ueber die Session-ID (UUID), nicht ueber den Dateipfad: beim
-// Wechsel in einen Worktree wandert die Datei in ein anderes Projektverzeichnis.
+// The transcript is the only source that reveals where the agent is really
+// working - if it moves into a worktree, the shell's cwd stays where it was.
+// The binding goes through the session ID (UUID), not the file path: when
+// moving into a worktree the file wanders into a different project directory.
 // ---------------------------------------------------------------------------
 
-// Projektverzeichnisse zu einem cwd: das eigene plus alle Worktrees darunter
+// Project directories for a cwd: its own plus all worktrees below it
 function projectDirsFor(cwd) {
   const prefix = encodeProjectDir(cwd);
   if (!prefix) return [];
@@ -136,22 +136,22 @@ function eachTranscript(cwd, fn) {
   }
 }
 
-// Zustand vor dem Start von `claude` festhalten
+// Capture the state before `claude` starts
 function snapshotTranscripts(cwd) {
   const seen = new Map(); // sessionId -> mtimeMs
   eachTranscript(cwd, (id, stat) => seen.set(id, stat.mtimeMs));
   return seen;
 }
 
-// Nach dem Start: das Transcript, das seither entstanden ist bzw. als erstes
-// geschrieben wurde. Eine neu angelegte Datei ist ein sicheres Signal und
-// schlaegt daher jede bereits vorhandene.
+// After the start: the transcript that has appeared since, or was written to
+// first. A newly created file is a reliable signal and therefore beats any
+// already existing one.
 function detectTranscript(cwd, snapshot, startedAt) {
   let best = null;
   eachTranscript(cwd, (id, stat) => {
     if (stat.size < 200 || stat.mtimeMs < startedAt) return;
     const before = snapshot.get(id);
-    if (before !== undefined && stat.mtimeMs <= before) return; // unveraendert
+    if (before !== undefined && stat.mtimeMs <= before) return; // unchanged
     const fresh = before === undefined;
     if (!best || (fresh && !best.fresh)
         || (fresh === best.fresh && stat.mtimeMs < best.mtime)) {
@@ -161,9 +161,9 @@ function detectTranscript(cwd, snapshot, startedAt) {
   return best ? best.id : null;
 }
 
-// Zuletzt benutzte Session eines Verzeichnisses - das ist die Auswahlregel
-// von `claude --continue`. `before` blendet Schreibvorgaenge aus, die erst
-// nach dem Start passiert sind (etwa die neue Session selbst).
+// The most recently used session of a directory - that is the selection rule
+// of `claude --continue`. `before` masks out writes that only happened after
+// the start (such as the new session itself).
 function newestTranscript(cwd, before) {
   let best = null;
   eachTranscript(cwd, (id, stat) => {
@@ -180,13 +180,13 @@ function findTranscriptById(sessionId) {
   try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { return null; }
   for (const d of dirs) {
     const fp = path.join(PROJECTS_DIR, d, sessionId + '.jsonl');
-    try { if (fs.statSync(fp).size > 0) return fp; } catch { /* nicht hier */ }
+    try { if (fs.statSync(fp).size > 0) return fp; } catch { /* not here */ }
   }
   return null;
 }
 
-// Letztes im Transcript vermerktes cwd = aktuelles Arbeitsverzeichnis des
-// Agenten (bei Worktree-Wechsel zieht es mitten in der Datei um).
+// The last cwd noted in the transcript = the agent's current working directory
+// (on a worktree switch it moves halfway through the file).
 const CWD_RE = /"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
 
 function readAgentCwd(sessionId) {

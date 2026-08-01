@@ -1,35 +1,34 @@
 'use strict';
-// Agenten-Plugin fuer Claude Code.
+// Agent plugin for Claude Code.
 //
-// Ein Plugin bringt beides selbst mit: die Erkennung ("laeuft hier etwas, das
-// ich zaehlen kann?") und das Zaehlen. Der Senser kennt nur diese
-// Schnittstelle:
+// A plugin brings both parts itself: the detection ("is something running here
+// that I can count?") and the counting. The sensor only knows this interface:
 //
 //   id, label
 //   detect(ctx) -> { confidence, evidence[] } | null
 //   read(ctx)   -> { agents: [...] }
 //
-// Claude Code legt jeden Subagenten einer Session als eigenes Paar ab:
+// Claude Code stores every subagent of a session as its own pair:
 //
-//   ~/.claude/projects/<projekt>/<session-uuid>/subagents/
-//       agent-<id>.jsonl       Transcript des Agenten
-//       agent-<id>.meta.json   Auftrag, Typ, Worktree - beim Start geschrieben
+//   ~/.claude/projects/<project>/<session-uuid>/subagents/
+//       agent-<id>.jsonl       transcript of the agent
+//       agent-<id>.meta.json   task, type, worktree - written on start
 //
-// Einen Status ("arbeitet noch") gibt es dort nicht. Er ergibt sich aus drei
-// Signalen, und erst zusammen sind sie belastbar:
+// There is no status ("still working") in there. It follows from three
+// signals, and only together are they reliable:
 //
-//   Start    die meta.json entsteht in dem Moment, in dem der Agent
-//            losgeschickt wird - ihre mtime ist der Startzeitpunkt.
-//   Stopp    eine <task-notification> im Transcript des Auftraggebers. Das
-//            tool_result des Agent-Aufrufs taugt dafuer nicht: Agenten laufen
-//            asynchron, es meldet nur "launched successfully" und steht schon
-//            drei Sekunden nach dem Start da.
-//   Erneut   ein SendMessage an denselben Agenten. Danach arbeitet er wieder,
-//            und die vorige Abschlussmeldung ist verbraucht.
+//   Start    the meta.json is created the moment the agent is dispatched -
+//            its mtime is the start time.
+//   Stop     a <task-notification> in the transcript of the caller. The
+//            tool_result of the agent call is no good for this: agents run
+//            asynchronously, it only reports "launched successfully" and is
+//            already there three seconds after the start.
+//   Resume   a SendMessage to the same agent. Afterwards it is working again,
+//            and the previous completion message is spent.
 //
-// Das ist alles undokumentiertes internes Format. Aendert Claude Code daran
-// etwas, faellt hier nichts um: dann findet das Plugin keine Agenten und
-// meldet null - die Anzeige verschwindet, statt falsch zu werden.
+// All of this is undocumented internal format. If Claude Code changes it,
+// nothing breaks here: the plugin simply finds no agents and reports null -
+// the display disappears instead of becoming wrong.
 
 const fs = require('fs');
 const path = require('path');
@@ -38,13 +37,13 @@ const { findTranscriptById } = require('../../claude-sessions');
 const id = 'claude';
 const label = 'Claude Code';
 
-// Ohne Abschlussmeldung wuerde ein Agent ewig als "arbeitet" stehenbleiben -
-// etwa wenn Claude abstuerzt oder hart beendet wird. Wer so lange nichts mehr
-// geschrieben hat, gilt deshalb als verwaist. Grosszuegig bemessen: ein Agent,
-// der auf einen langen Build wartet, schreibt zwischendurch auch nichts.
+// Without a completion message an agent would stay at "working" forever - for
+// instance when Claude crashes or is killed. Anything that has not written for
+// this long therefore counts as orphaned. Generously sized: an agent waiting
+// on a long build writes nothing in between either.
 const SILENCE_MS = 15 * 60 * 1000;
 
-// Erkennung ohne gebundene Session (s. detect)
+// Detection without a bound session (see detect)
 const CLAUDE_CMD_RE = /(?:^|[\s/\\])claude(?:\s|$)/i;
 
 const META_RE = /^agent-(.+)\.meta\.json$/;
@@ -52,21 +51,21 @@ const NOTIF_TASK_RE = /<task-id>([^<]+)<\/task-id>/;
 const NOTIF_STATUS_RE = /<status>([^<]+)<\/status>/;
 
 // ---------------------------------------------------------------------------
-// Ablage der Session
+// Where the session is stored
 // ---------------------------------------------------------------------------
-// Gebunden wird ueber die Session-ID, nicht ueber den Pfad: wechselt der Agent
-// in einen Worktree, wandert das Transcript in ein anderes Projektverzeichnis.
+// The binding goes through the session ID, not the path: if the agent moves
+// into a worktree, the transcript wanders into a different project directory.
 function subagentsDir(sessionId) {
   const transcript = findTranscriptById(sessionId);
   if (!transcript) return null;
   return path.join(path.dirname(transcript), sessionId, 'subagents');
 }
 
-const metaCache = new Map(); // Pfad -> { mtimeMs, data }
+const metaCache = new Map(); // path -> { mtimeMs, data }
 const META_CACHE_MAX = 400;
 
-// Die meta.json wird beim Start geschrieben und danach nicht mehr angefasst;
-// gelesen wird sie trotzdem nur, wenn sich die mtime bewegt hat.
+// The meta.json is written on start and never touched again; even so it is
+// only read when its mtime has moved.
 function readMeta(file) {
   let stat;
   try { stat = fs.statSync(file); } catch { return null; }
@@ -84,7 +83,7 @@ function readMeta(file) {
       startedAt: stat.mtimeMs,
     };
   } catch {
-    return null; // halb geschriebene Datei - beim naechsten Durchlauf nochmal
+    return null; // half-written file - try again on the next pass
   }
   metaCache.delete(file);
   metaCache.set(file, { mtimeMs: stat.mtimeMs, data });
@@ -93,12 +92,12 @@ function readMeta(file) {
 }
 
 // ---------------------------------------------------------------------------
-// Stopp- und Wiederaufnahme-Signale aus den Transcripts
+// Stop and resume signals from the transcripts
 // ---------------------------------------------------------------------------
-// Transcripts wachsen nur hinten an. Gemerkt wird deshalb pro Datei, bis wohin
-// sie gelesen ist: der erste Durchlauf kostet einmal die ganze Datei, jeder
-// weitere nur noch den neuen Rest. Ohne das waere ein Megabyte alle vier
-// Sekunden faellig.
+// Transcripts only ever grow at the end. So for each file we remember how far
+// it has been read: the first pass costs the whole file once, every further
+// one only the new remainder. Without that, a megabyte would be due every four
+// seconds.
 const scans = new Map(); // sessionId -> { offsets: Map, events: Map }
 const SCAN_MAX = 20;
 
@@ -128,8 +127,8 @@ function messageText(entry) {
 }
 
 function applyLine(state, line) {
-  // Vorfiltern, bevor geparst wird: die allermeisten Zeilen sind fuer uns
-  // uninteressant, und JSON.parse auf jede waere der teuerste Teil.
+  // Pre-filter before parsing: the vast majority of lines are of no interest
+  // to us, and running JSON.parse on each would be the most expensive part.
   const notif = line.includes('<task-notification>');
   if (!notif && !line.includes('"SendMessage"')) return;
 
@@ -141,8 +140,8 @@ function applyLine(state, line) {
     const text = messageText(entry);
     const m = NOTIF_TASK_RE.exec(text);
     if (m) {
-      // Jede Meldung heisst "haelt an" - der Status sagt nur, wie. Ein Agent,
-      // der weitermachen soll, wird per SendMessage neu angestossen.
+      // Every notification means "stops" - the status only says how. An agent
+      // that is meant to carry on is nudged again via SendMessage.
       const ev = eventOf(state, m[1]);
       if (at > ev.stoppedAt) {
         ev.stoppedAt = at;
@@ -168,7 +167,7 @@ function scanFile(state, file) {
   try { stat = fs.statSync(file); } catch { return; }
 
   let from = state.offsets.get(file) || 0;
-  if (stat.size < from) from = 0; // Datei ersetzt oder gekuerzt -> von vorn
+  if (stat.size < from) from = 0; // file replaced or truncated -> start over
   if (stat.size === from) return;
 
   const len = stat.size - from;
@@ -181,9 +180,9 @@ function scanFile(state, file) {
     return;
   }
 
-  // Nur bis zur letzten vollstaendigen Zeile auswerten. Der Rest wird gerade
-  // geschrieben und kommt beim naechsten Durchlauf - der Zeilenumbruch ist
-  // zugleich die Grenze, an der das Gelesene sicher gueltiges UTF-8 ist.
+  // Only evaluate up to the last complete line. The rest is being written right
+  // now and will come on the next pass - the line break is at the same time the
+  // boundary at which what we read is guaranteed to be valid UTF-8.
   const text = buf.toString('utf8', 0, n);
   const end = text.lastIndexOf('\n');
   if (end < 0) return;
@@ -195,33 +194,34 @@ function scanFile(state, file) {
 }
 
 // ---------------------------------------------------------------------------
-// Schnittstelle zum Senser
+// Interface to the sensor
 // ---------------------------------------------------------------------------
 
 /**
- * Zustaendig ist das Plugin, sobald eine Claude-Session am Terminal haengt.
- * Die Bindung Terminal -> Session stellt die Shell-Beobachtung her (sie sieht
- * den Start von `claude` und weiss, welches Transcript daraufhin entstanden
- * ist); das Plugin nimmt sie als Beleg und macht den Rest selbst.
+ * The plugin is responsible as soon as a Claude session hangs off the
+ * terminal. The binding terminal -> session is established by the shell
+ * observation (it sees `claude` start and knows which transcript appeared as a
+ * result); the plugin takes that as evidence and does the rest itself.
  */
 function detect(ctx) {
   if (ctx.claudeSessionId) {
     const dir = subagentsDir(ctx.claudeSessionId);
-    const evidence = [`Session ${ctx.claudeSessionId.slice(0, 8)}`];
+    const evidence = [`session ${ctx.claudeSessionId.slice(0, 8)}`];
     if (dir && fs.existsSync(dir)) evidence.push('subagents/');
     return { confidence: 0.95, evidence };
   }
-  // Claude laeuft sichtbar, aber die Bindung ans Transcript fehlt (Start ohne
-  // Shell-Integration). Zaehlen laesst sich dann nichts - aber die Zustaendigkeit
-  // steht fest, und ein Plugin, das hier mehr kann, gewinnt mit hoeherem Wert.
+  // Claude is visibly running, but the binding to the transcript is missing
+  // (started without shell integration). Nothing can be counted then - but the
+  // responsibility is settled, and a plugin that can do more here wins with a
+  // higher value.
   if (ctx.command && CLAUDE_CMD_RE.test(ctx.command)) {
-    return { confidence: 0.3, evidence: ['Kommando `claude`, keine Session gebunden'] };
+    return { confidence: 0.3, evidence: ['`claude` command, no session bound'] };
   }
   return null;
 }
 
 /**
- * Alle Subagenten der gebundenen Session, jeder mit `running`.
+ * All subagents of the bound session, each with `running`.
  */
 function read(ctx) {
   if (!ctx.claudeSessionId) return { agents: [] };
@@ -243,8 +243,8 @@ function read(ctx) {
   const state = scanState(ctx.claudeSessionId);
   const transcript = findTranscriptById(ctx.claudeSessionId);
   if (transcript) scanFile(state, transcript);
-  // Ein verschachtelter Agent meldet seinen Abschluss an seinen Auftraggeber -
-  // und der ist selbst ein Subagent. Nur dann sind deren Transcripts noetig.
+  // A nested agent reports its completion to its caller - and that caller is
+  // itself a subagent. Only then are their transcripts needed.
   if (metas.some((m) => m.spawnDepth > 1)) {
     for (const m of metas) scanFile(state, path.join(dir, `agent-${m.id}.jsonl`));
   }
@@ -252,8 +252,8 @@ function read(ctx) {
   const now = Date.now();
   const agents = metas.map((m) => {
     const ev = state.events.get(m.id) || {};
-    // Wiederaufnahme setzt den Startzeitpunkt neu - eine Abschlussmeldung von
-    // davor ist damit verbraucht.
+    // A resume resets the start time - a completion message from before it is
+    // thereby spent.
     const startedAt = Math.max(m.startedAt, ev.resumedAt || 0);
     const stopped = Boolean(ev.stoppedAt && ev.stoppedAt >= startedAt);
 
@@ -261,7 +261,7 @@ function read(ctx) {
     try {
       const stat = fs.statSync(path.join(dir, `agent-${m.id}.jsonl`));
       if (stat.mtimeMs > lastActivity) lastActivity = stat.mtimeMs;
-    } catch { /* Transcript noch nicht angelegt */ }
+    } catch { /* transcript not created yet */ }
 
     return {
       id: m.id,

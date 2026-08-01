@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
@@ -9,17 +9,17 @@
 </head>
 <body>
   <div id="layout">
-    <!-- Linke Seitenleiste: Sessions -->
+    <!-- Left sidebar: sessions -->
     <aside id="sidebar">
       <div id="sidebar-header">
         <canvas id="pulse-canvas" aria-hidden="true"></canvas>
         <span class="app-name">Flightdeck</span>
         <div class="header-actions">
-          <button id="btn-grid" class="icon-btn" title="Grid-Übersicht aller Sessions (Strg+G)" aria-label="Grid-Übersicht">⊞</button>
-          <button id="btn-claude-sessions" class="icon-btn" title="Claude-Sessions durchsuchen &amp; fortsetzen" aria-label="Claude-Sessions">⟲</button>
+          <button id="btn-grid" class="icon-btn" title="Grid overview of all sessions (Ctrl+G)" aria-label="Grid overview">⊞</button>
+          <button id="btn-claude-sessions" class="icon-btn" title="Browse &amp; resume Claude sessions" aria-label="Claude sessions">⟲</button>
           <div class="new-session-wrap">
-            <button id="btn-new" title="Neue Session (Standard-Shell)" aria-label="Neue Session">+</button>
-            <button id="btn-new-menu" title="Shell auswählen" aria-label="Shell auswählen">▾</button>
+            <button id="btn-new" title="New session (default shell)" aria-label="New session">+</button>
+            <button id="btn-new-menu" title="Choose shell" aria-label="Choose shell">▾</button>
             <div id="shell-menu" class="menu hidden"></div>
           </div>
         </div>
@@ -28,41 +28,41 @@
     </aside>
     <div class="divider" id="divider-left"></div>
 
-    <!-- Mitte: Terminals -->
+    <!-- Centre: terminals -->
     <main id="terminal-area">
       <div id="terminals"></div>
       <div id="empty-state" class="hidden">
-        <p>Keine Session aktiv.</p>
-        <p><kbd>+</kbd> klicken oder <kbd>Strg</kbd>+<kbd>T</kbd> drücken.</p>
+        <p>No active session.</p>
+        <p>Click <kbd>+</kbd> or press <kbd>Ctrl</kbd>+<kbd>T</kbd>.</p>
       </div>
-      <!-- Grid-Übersicht: alle Sessions als Live-Kacheln -->
+      <!-- Grid overview: all sessions as live tiles -->
       <div id="grid-view" class="hidden">
         <div id="grid-container"></div>
       </div>
     </main>
     <div class="divider" id="divider-right"></div>
 
-    <!-- Rechtes Panel: Git-Kontext, Verlauf und Notizen als Tabs -->
+    <!-- Right panel: git context, history and notes as tabs -->
     <aside id="context-panel">
       <nav id="panel-tabs">
         <button class="panel-tab active" data-tab="git">Git<span class="tab-badge hidden" id="badge-git"></span></button>
-        <button class="panel-tab" data-tab="history">Verlauf<span class="tab-badge hidden" id="badge-history"></span></button>
-        <button class="panel-tab" data-tab="dbschema">DB-Schema<span class="tab-badge hidden" id="badge-dbschema"></span></button>
-        <button class="panel-tab" data-tab="todos">Notizen<span class="tab-badge hidden" id="badge-todos"></span></button>
-        <button class="panel-tab" data-tab="usage">Nutzung<span class="tab-dot hidden" id="dot-usage"></span></button>
-        <button id="btn-panel-zoom" class="icon-btn" title="Panel vergrößern" aria-label="Panel vergrößern">⤢</button>
+        <button class="panel-tab" data-tab="history">History<span class="tab-badge hidden" id="badge-history"></span></button>
+        <button class="panel-tab" data-tab="dbschema">DB schema<span class="tab-badge hidden" id="badge-dbschema"></span></button>
+        <button class="panel-tab" data-tab="todos">Notes<span class="tab-badge hidden" id="badge-todos"></span></button>
+        <button class="panel-tab" data-tab="usage">Usage<span class="tab-dot hidden" id="dot-usage"></span></button>
+        <button id="btn-panel-zoom" class="icon-btn" title="Enlarge panel" aria-label="Enlarge panel">⤢</button>
       </nav>
       <div class="panel-page" id="page-git">
-        <!-- Hinweis, wenn der Agent in einem Worktree arbeitet und Branch und
-             Dateiliste daher nicht zum Verzeichnis der Shell gehören -->
+        <!-- Notice when the agent works in a worktree and branch and file list
+             therefore do not belong to the shell's directory -->
         <div id="wt-banner" class="hidden"></div>
         <section id="pr-section">
           <h2>Pull Request</h2>
-          <div id="pr-card"><div class="muted">Keine Session ausgewählt</div></div>
+          <div id="pr-card"><div class="muted">No session selected</div></div>
           <div id="pr-extra"></div>
         </section>
         <section id="files-section">
-          <h2>Geänderte Dateien</h2>
+          <h2>Changed files</h2>
           <div id="file-list"></div>
         </section>
       </div>
@@ -74,38 +74,38 @@
       </div>
       <div class="panel-page hidden" id="page-todos">
         <div id="todo-list"></div>
-        <input id="todo-input" type="text" placeholder="Neue Notiz… (Enter)" />
+        <input id="todo-input" type="text" placeholder="New note… (Enter)" />
       </div>
       <div class="panel-page hidden" id="page-dbschema">
         <div id="db-head"></div>
         <div id="db-signal"></div>
-        <input id="db-search" type="text" placeholder="Tabelle oder Spalte suchen…" />
+        <input id="db-search" type="text" placeholder="Search table or column…" />
         <div id="db-tables"><div class="muted">—</div></div>
       </div>
     </aside>
   </div>
-  <!-- Abdunklung hinter dem vergrößerten Kontextpanel -->
+  <!-- Dimming behind the enlarged context panel -->
   <div id="panel-backdrop" class="hidden"></div>
 
-  <!-- Datei-Vorschau -->
+  <!-- File preview -->
   <div id="preview-overlay" class="hidden">
     <div id="preview-window">
       <div id="preview-header">
         <span id="preview-title"></span>
-        <div id="preview-modes" role="tablist" aria-label="Ansicht"></div>
-        <button id="preview-close" title="Schließen (Esc)" aria-label="Vorschau schließen">✕</button>
+        <div id="preview-modes" role="tablist" aria-label="View"></div>
+        <button id="preview-close" title="Close (Esc)" aria-label="Close preview">✕</button>
       </div>
       <div id="preview-content"></div>
     </div>
   </div>
 
-  <!-- DB-Schema: Vorher/Nachher nebeneinander -->
+  <!-- DB schema: before/after side by side -->
   <div id="dbdiff-overlay" class="hidden">
     <div id="dbdiff-window">
       <div id="dbdiff-header">
         <span id="dbdiff-title"></span>
-        <div id="dbdiff-modes" role="tablist" aria-label="Umfang"></div>
-        <button id="dbdiff-close" title="Schließen (Esc)" aria-label="Vergleich schließen">✕</button>
+        <div id="dbdiff-modes" role="tablist" aria-label="Scope"></div>
+        <button id="dbdiff-close" title="Close (Esc)" aria-label="Close comparison">✕</button>
       </div>
       <div id="dbdiff-cols">
         <div class="dbd-head old" id="dbdiff-head-old"></div>
@@ -115,24 +115,24 @@
     </div>
   </div>
 
-  <!-- Claude-Session-Browser -->
+  <!-- Claude session browser -->
   <div id="sessions-overlay" class="hidden">
     <div id="sessions-window">
       <div id="sessions-header">
-        <input id="sessions-search" type="text" placeholder="Sessions durchsuchen (Name, Prompt, Projekt)…" />
-        <button id="sessions-close" title="Schließen (Esc)" aria-label="Session-Browser schließen">✕</button>
+        <input id="sessions-search" type="text" placeholder="Search sessions (name, prompt, project)…" />
+        <button id="sessions-close" title="Close (Esc)" aria-label="Close session browser">✕</button>
       </div>
       <div id="sessions-list"></div>
     </div>
   </div>
 
-  <!-- Popover: Titel/Label bearbeiten -->
+  <!-- Popover: edit title/label -->
   <div id="meta-popover" class="hidden">
-    <label>Titel <input id="meta-title" type="text" placeholder="(automatisch)" /></label>
-    <label>Label <input id="meta-label" type="text" placeholder="z. B. Ticket-Nr." /></label>
+    <label>Title <input id="meta-title" type="text" placeholder="(automatic)" /></label>
+    <label>Label <input id="meta-label" type="text" placeholder="e.g. ticket no." /></label>
     <div class="popover-actions">
-      <button id="meta-save">Speichern</button>
-      <button id="meta-cancel">Abbrechen</button>
+      <button id="meta-save">Save</button>
+      <button id="meta-cancel">Cancel</button>
     </div>
   </div>
 

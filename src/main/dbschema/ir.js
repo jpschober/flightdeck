@@ -1,9 +1,8 @@
 'use strict';
-// Das standardisierte Schema-Format ("IR"), auf das sich alle Plugins
-// einigen. Nur diese Form geht ueber IPC in den Renderer, und nur sie
-// vergleicht der Diff - was ein Plugin intern liest (SQL-Migrationen,
-// TypeScript-Definitionen, eine laufende Datenbank), spielt danach keine
-// Rolle mehr.
+// The standardised schema format ("IR") that all plugins agree on. Only this
+// shape travels over IPC into the renderer, and only this shape is compared by
+// the diff - what a plugin reads internally (SQL migrations, TypeScript
+// definitions, a running database) no longer matters afterwards.
 //
 //   {
 //     plugin, label, root, files[], watch[], warnings[],
@@ -16,32 +15,32 @@
 //     } ]
 //   }
 //
-// `kind` ist eines von: pk, unique, fk, check, index, exclude.
+// `kind` is one of: pk, unique, fk, check, index, exclude.
 
 const { DEFAULT_SCHEMA } = require('./sql-ddl');
 
-// Reihenfolge in der Anzeige: erst was die Zeile identifiziert, dann Regeln
+// Display order: first what identifies the row, then the rules
 const KIND_RANK = { pk: 0, unique: 1, fk: 2, check: 3, exclude: 4, index: 5 };
 
 function byName(a, b) {
-  return String(a.name).localeCompare(String(b.name), 'de');
+  return String(a.name).localeCompare(String(b.name), 'en');
 }
 
 function qualify(schema, name) {
   return `${schema || DEFAULT_SCHEMA}.${name}`;
 }
 
-/** Baut aus dem Modell des DDL-Lesers das IR. */
+/** Builds the IR from the DDL reader's model. */
 function fromModel(model, meta = {}) {
   const tables = [...model.tables.values()].map((t) => ({
     id: qualify(t.schema, t.name),
     schema: t.schema || DEFAULT_SCHEMA,
     name: t.name,
     comment: t.comment || null,
-    // Tabelle, die das Projekt nicht selbst anlegt, auf der es aber Regeln
-    // definiert - Spalten sind hier unbekannt, nicht leer.
+    // A table the project does not create itself but does define rules on -
+    // its columns are unknown here, not empty.
     external: Boolean(t.external),
-    // Spaltenreihenfolge ist Absicht des Autors und bleibt, wie sie ist.
+    // Column order is the author's intent and stays as it is.
     columns: t.columns.map((c) => ({
       name: c.name,
       type: c.type || '',
@@ -69,8 +68,8 @@ function fromModel(model, meta = {}) {
         unique: c.unique === undefined ? null : Boolean(c.unique),
         method: c.method || null,
       }))
-      // Constraints haben keine sinnvolle Eigenreihenfolge; stabil sortieren,
-      // damit der Diff nicht auf Umsortierungen anspringt.
+      // Constraints have no meaningful order of their own; sort them stably so
+      // the diff does not trip over reordering.
       .sort((a, b) => (KIND_RANK[a.kind] - KIND_RANK[b.kind]) || byName(a, b)),
     rls: {
       enabled: Boolean(t.rls && t.rls.enabled),
@@ -83,14 +82,14 @@ function fromModel(model, meta = {}) {
         check: p.check || null,
       })).sort(byName),
     },
-  })).sort((a, b) => a.schema.localeCompare(b.schema, 'de') || byName(a, b));
+  })).sort((a, b) => a.schema.localeCompare(b.schema, 'en') || byName(a, b));
 
   const enums = [...model.enums.values()].map((e) => ({
     id: qualify(e.schema, e.name),
     schema: e.schema || DEFAULT_SCHEMA,
     name: e.name,
     values: e.values.slice(),
-  })).sort((a, b) => a.schema.localeCompare(b.schema, 'de') || byName(a, b));
+  })).sort((a, b) => a.schema.localeCompare(b.schema, 'en') || byName(a, b));
 
   return {
     plugin: meta.plugin || null,
@@ -104,7 +103,7 @@ function fromModel(model, meta = {}) {
   };
 }
 
-/** Leeres IR - fuer "hier ist noch nichts" bzw. die Basis eines neuen Projekts. */
+/** Empty IR - for "nothing here yet" or the baseline of a new project. */
 function empty(meta = {}) {
   return {
     plugin: meta.plugin || null,
@@ -119,20 +118,20 @@ function empty(meta = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Vergleichbare Kurzform einzelner Bestandteile. Diff und Anzeige muessen sich
-// darueber einig sein, was "gleich" heisst - deshalb steht es hier, nicht dort.
+// Comparable short forms of individual parts. Diff and display have to agree
+// on what "equal" means - which is why it lives here, not there.
 // ---------------------------------------------------------------------------
 
-/** Die Eigenschaften einer Spalte, die der Diff einzeln ausweist. */
+/** The properties of a column that the diff reports individually. */
 const COLUMN_FIELDS = ['type', 'nullable', 'default', 'identity', 'generated', 'comment'];
 
 const FIELD_LABEL = {
-  type: 'Typ',
-  nullable: 'NULL erlaubt',
-  default: 'Vorgabewert',
-  identity: 'Identität',
-  generated: 'berechnet',
-  comment: 'Kommentar',
+  type: 'type',
+  nullable: 'NULL allowed',
+  default: 'default',
+  identity: 'identity',
+  generated: 'generated',
+  comment: 'comment',
 };
 
 function constraintSignature(c) {

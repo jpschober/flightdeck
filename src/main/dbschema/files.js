@@ -1,18 +1,18 @@
 'use strict';
-// Dateizugriff fuer die Schema-Plugins.
+// File access for the schema plugins.
 //
-// Ein Plugin soll nicht wissen muessen, ob es das Arbeitsverzeichnis oder einen
-// Git-Stand liest - sonst koennte es sein Schema nur fuer "jetzt" liefern und
-// der Vorher/Nachher-Vergleich waere nicht moeglich. Deshalb bekommt es immer
-// dieselbe kleine Schnittstelle:
+// A plugin should not have to know whether it is reading the working directory
+// or a git state - otherwise it could only deliver its schema for "now" and
+// the before/after comparison would be impossible. It therefore always gets
+// the same small interface:
 //
 //   exists(relPath)              -> boolean
 //   read(relPath)                -> string | null
-//   list(relDir, { ext })        -> string[]  (rekursiv, sortiert)
-//   stamp(relPaths)              -> string    (Fingerabdruck fuer den Cache)
+//   list(relDir, { ext })        -> string[]  (recursive, sorted)
+//   stamp(relPaths)              -> string    (fingerprint for the cache)
 //
-// Pfade sind immer relativ zur Repo-Wurzel und mit Schraegstrich getrennt -
-// so wie git sie meldet, damit dieselben Pfade auf beiden Seiten passen.
+// Paths are always relative to the repo root and separated by forward slashes -
+// the way git reports them, so the same paths match on both sides.
 
 const fs = require('fs');
 const path = require('path');
@@ -25,14 +25,14 @@ function toRel(p) {
 }
 
 // ---------------------------------------------------------------------------
-// Arbeitsverzeichnis: der Stand, der gerade auf der Platte liegt
+// Working directory: the state currently on disk
 // ---------------------------------------------------------------------------
 function worktreeProvider(root) {
   const abs = (rel) => path.join(root, ...toRel(rel).split('/').filter(Boolean));
 
   return {
     kind: 'worktree',
-    label: 'Arbeitsverzeichnis',
+    label: 'working directory',
     root,
 
     async exists(rel) {
@@ -69,9 +69,9 @@ function worktreeProvider(root) {
       return out.sort();
     },
 
-    // Aendert sich der Fingerabdruck nicht, muss nicht neu geparst werden.
-    // Verzeichnisse zaehlen mit: ihre mtime springt, wenn eine Migration
-    // dazukommt oder verschwindet.
+    // If the fingerprint does not change, nothing has to be parsed again.
+    // Directories count too: their mtime jumps when a migration is added or
+    // disappears.
     async stamp(paths) {
       const parts = [];
       for (const rel of paths) {
@@ -88,10 +88,10 @@ function worktreeProvider(root) {
 }
 
 // ---------------------------------------------------------------------------
-// Git-Stand: derselbe Zugriff, aber auf einen Commit
+// Git state: the same access, but against a commit
 // ---------------------------------------------------------------------------
 function gitProvider(root, ref, label) {
-  let treeCache = null; // Set<relPath>, einmal pro Provider geladen
+  let treeCache = null; // Set<relPath>, loaded once per provider
 
   async function tree() {
     if (treeCache) return treeCache;
@@ -129,7 +129,7 @@ function gitProvider(root, ref, label) {
       return out.sort();
     },
 
-    // Ein Commit ist unveraenderlich - die Ref-Angabe genuegt als Fingerabdruck.
+    // A commit is immutable - the ref alone is enough as a fingerprint.
     async stamp() {
       return `git:${ref}`;
     },

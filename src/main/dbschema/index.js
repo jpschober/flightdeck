@@ -1,12 +1,12 @@
 'use strict';
-// Der "Senser": prueft, welches Plugin sich fuer ein Arbeitsverzeichnis
-// zustaendig fuehlt, laesst es das Schema lesen und stellt dem Panel den
-// aktuellen Stand samt Vorher/Nachher-Vergleich hin.
+// The "sensor": checks which plugin feels responsible for a working directory,
+// lets it read the schema and hands the panel the current state including the
+// before/after comparison.
 //
-// Der Senser selbst weiss nichts ueber Supabase, Drizzle oder SQL. Er kennt nur
-// die Plugin-Schnittstelle - Erkennung und Lesen stecken vollstaendig im
-// Plugin. Ein weiteres Plugin einzuhaengen heisst: Datei anlegen, in PLUGINS
-// eintragen, fertig.
+// The sensor itself knows nothing about Supabase, Drizzle or SQL. It only
+// knows the plugin interface - detection and reading live entirely in the
+// plugin. Adding another plugin means: create a file, register it in PLUGINS,
+// done.
 
 const path = require('path');
 const { run } = require('../gitinfo');
@@ -21,11 +21,11 @@ const PLUGINS = [
 // ---------------------------------------------------------------------------
 // Cache
 // ---------------------------------------------------------------------------
-// Das Panel fragt regelmaessig nach, damit die Anzeige am Tab stimmt, ohne dass
-// man den Tab offen haben muss. Ein Schema neu zu lesen heisst aber, alle
-// Migrationen zu parsen - das darf nicht alle vier Sekunden passieren. Deshalb
-// wird pro Stand ein Fingerabdruck der beteiligten Dateien mitgefuehrt: bleibt
-// er gleich, bleibt das Ergebnis stehen.
+// The panel polls regularly so the indicator on the tab is right without
+// having to keep the tab open. Re-reading a schema means parsing all
+// migrations, though - that must not happen every four seconds. So a
+// fingerprint of the involved files is carried along per state: as long as it
+// stays the same, the result stays too.
 const cache = new Map(); // key -> { stamp, stampPaths, at, result }
 const CACHE_MAX = 60;
 const NO_PLUGIN_TTL = 15_000;
@@ -37,7 +37,7 @@ function cachePut(key, entry) {
 }
 
 // ---------------------------------------------------------------------------
-// Erkennung und Lesen
+// Detection and reading
 // ---------------------------------------------------------------------------
 async function detectAll(provider) {
   const found = [];
@@ -46,7 +46,7 @@ async function detectAll(provider) {
     try {
       d = await plugin.detect(provider);
     } catch (e) {
-      // Ein kaputtes Plugin darf die anderen nicht mitnehmen
+      // A broken plugin must not take the others down with it
       d = null;
     }
     if (d && d.confidence > 0) {
@@ -58,13 +58,13 @@ async function detectAll(provider) {
       });
     }
   }
-  // Das ueberzeugteste Plugin gewinnt; bei Gleichstand die Reihenfolge oben.
+  // The most confident plugin wins; on a tie, the order above decides.
   return found.sort((a, b) => b.confidence - a.confidence);
 }
 
 /**
- * Liest das Schema hinter `provider` - mit Cache. Liefert immer ein Objekt,
- * auch wenn sich kein Plugin zustaendig fuehlt (dann `plugin: null`).
+ * Reads the schema behind `provider` - with cache. Always returns an object,
+ * even if no plugin feels responsible (then `plugin: null`).
  */
 async function loadSchema(provider, key, force = false) {
   const hit = cache.get(key);
@@ -86,7 +86,7 @@ async function loadSchema(provider, key, force = false) {
       candidates: found.map((f) => ({ id: f.plugin.id, label: f.plugin.label })),
       schema: ir.empty({ root: provider.root }),
     };
-    // Die Wurzel im Blick behalten: kommt ein `supabase/` dazu, springt ihre mtime
+    // Keep an eye on the root: if a `supabase/` appears, its mtime jumps
     stampPaths = ['.'];
   } else {
     let schema;
@@ -94,7 +94,7 @@ async function loadSchema(provider, key, force = false) {
       schema = await winner.plugin.read(provider);
     } catch (e) {
       schema = ir.empty({ plugin: winner.plugin.id, label: winner.plugin.label, root: provider.root });
-      schema.warnings.push(`Lesen fehlgeschlagen: ${e.message}`);
+      schema.warnings.push(`Reading failed: ${e.message}`);
     }
     result = {
       plugin: {
@@ -119,7 +119,7 @@ async function loadSchema(provider, key, force = false) {
 }
 
 // ---------------------------------------------------------------------------
-// Basis fuer den Vergleich
+// Baseline for the comparison
 // ---------------------------------------------------------------------------
 const defaultBranchCache = new Map(); // root -> ref | null
 
@@ -140,15 +140,15 @@ async function defaultBranch(root) {
 }
 
 /**
- * Die moeglichen Vergleichsbasen, beste zuerst. Mehr als eine anzubieten ist
- * kein Luxus: "was habe ich gerade geaendert" (HEAD) und "was aendert dieser
- * Branch insgesamt" (Abzweigpunkt) sind verschiedene Fragen, und beim Pruefen
- * eines PR ist die zweite die richtige.
+ * The possible comparison baselines, best first. Offering more than one is not
+ * a luxury: "what did I just change" (HEAD) and "what does this branch change
+ * in total" (branch point) are different questions, and when reviewing a PR the
+ * second one is the right one.
  */
 async function baselineOptions(root, pr) {
   const headOut = await run('git', ['rev-parse', 'HEAD'], root);
   const head = headOut && headOut.trim() ? headOut.trim() : null;
-  if (!head) return []; // kein Commit, also kein "vorher"
+  if (!head) return []; // no commit, so no "before"
 
   const options = [];
   const seen = new Set();
@@ -158,9 +158,9 @@ async function baselineOptions(root, pr) {
     options.push(opt);
   };
 
-  // Ein Abzweigpunkt, der auf HEAD liegt, ist keine eigene Basis: man steht auf
-  // dem Zielbranch, "alle Änderungen des Branches" sind dann die nicht
-  // committeten - und dafuer ist HEAD die ehrlichere Beschriftung.
+  // A branch point that sits on HEAD is not a baseline of its own: you are
+  // standing on the target branch, "all changes on the branch" are then the
+  // uncommitted ones - and for those HEAD is the more honest label.
   const branchPoint = async (ref) => {
     const mb = await run('git', ['merge-base', 'HEAD', ref], root);
     const sha = mb && mb.trim() ? mb.trim() : null;
@@ -173,8 +173,8 @@ async function baselineOptions(root, pr) {
       push({
         mode: 'pr',
         ref,
-        label: `PR #${pr.number} · gegen ${pr.baseRefName}`,
-        hint: 'alle Änderungen dieses Pull Requests',
+        label: `PR #${pr.number} · against ${pr.baseRefName}`,
+        hint: 'all changes in this pull request',
       });
     }
   }
@@ -186,8 +186,8 @@ async function baselineOptions(root, pr) {
       push({
         mode: 'branch',
         ref,
-        label: `Abzweig von ${def.replace(/^origin\//, '')}`,
-        hint: 'alle Änderungen dieses Branches',
+        label: `branch point from ${def.replace(/^origin\//, '')}`,
+        hint: 'all changes on this branch',
       });
     }
   }
@@ -195,22 +195,22 @@ async function baselineOptions(root, pr) {
   push({
     mode: 'head',
     ref: head,
-    label: 'letzter Commit (HEAD)',
-    hint: 'nur was noch nicht committet ist',
+    label: 'last commit (HEAD)',
+    hint: 'only what is not committed yet',
   });
 
   return options;
 }
 
 // ---------------------------------------------------------------------------
-// Einstieg fuer das Panel
+// Entry point for the panel
 // ---------------------------------------------------------------------------
 
 /**
- * Kompletter Stand fuer den DB-Schema-Tab: erkanntes Plugin, aktuelles Schema,
- * Vergleichsbasis und Diff.
+ * Complete state for the DB schema tab: detected plugin, current schema,
+ * comparison baseline and diff.
  *
- * @param {string} root       Repo-Wurzel bzw. Arbeitsverzeichnis
+ * @param {string} root       repo root or working directory
  * @param {object} opts       { pr, baseline: 'auto'|'pr'|'branch'|'head', force }
  */
 async function getSchemaView(root, opts = {}) {
@@ -236,7 +236,7 @@ async function getSchemaView(root, opts = {}) {
 
   if (!current.plugin) return view;
 
-  // Ohne Git gibt es kein "vorher" - das Schema zeigen wir trotzdem.
+  // Without git there is no "before" - we still show the schema.
   const baselines = await baselineOptions(root, opts.pr);
   view.baselines = baselines.map(({ mode, label, hint }) => ({ mode, label, hint }));
   if (!baselines.length) return view;
@@ -247,8 +247,8 @@ async function getSchemaView(root, opts = {}) {
   const chosen = wanted || baselines[0];
 
   const baseProvider = gitProvider(root, chosen.ref, chosen.label);
-  // Die Basis bekommt ihre eigene Erkennung: wer Supabase gerade erst
-  // einfuehrt, hat vorher kein Plugin - dann ist schlicht alles neu.
+  // The baseline gets its own detection: whoever is only just introducing
+  // Supabase had no plugin before - then simply everything is new.
   const base = await loadSchema(baseProvider, `ref|${root}|${chosen.ref}`, false);
 
   view.base = base.schema;

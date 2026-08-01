@@ -1,11 +1,12 @@
 'use strict';
-// Nutzungslimits des Claude-Abos. Die Zahlen kommen von /api/oauth/usage -
-// derselben Quelle, aus der sich /usage in Claude Code speist. Die Transcripts
-// taugen dafuer nicht: sie enthalten Token-Zaehler, aber keinen Limit-Stand.
+// Usage limits of the Claude subscription. The numbers come from
+// /api/oauth/usage - the same source that feeds /usage in Claude Code. The
+// transcripts are no good for this: they contain token counters, but no limit
+// state.
 //
-// Der Endpoint ist nicht dokumentiert und kann sich ohne Ankuendigung aendern.
-// Deshalb wird alles defensiv gelesen und ein Fehler sichtbar gemeldet, statt
-// stillschweigend veraltete Zahlen anzuzeigen.
+// The endpoint is undocumented and can change without notice. Everything is
+// therefore read defensively, and an error is reported visibly instead of
+// silently showing stale numbers.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -22,11 +23,11 @@ const WINDOWS = {
   seven_day_sonnet: 7 * 24 * 60 * 60 * 1000,
 };
 
-// Unterhalb dieses Anteils des Fensters ist die Hochrechnung reines Rauschen -
-// ein einziger Prompt in der ersten Minute ergaebe sonst "500 % projiziert".
+// Below this fraction of the window the projection is pure noise - a single
+// prompt in the first minute would otherwise yield "500 % projected".
 const MIN_FRACTION = 0.05;
 
-// Ab wie viel Prozent ueber dem Ziel die Ampel umschlaegt
+// How many percent above target the traffic light flips
 const AMBER_AT = 100;
 const RED_AT = 115;
 
@@ -37,30 +38,30 @@ function readToken() {
   try {
     raw = fs.readFileSync(CREDENTIALS, 'utf8');
   } catch {
-    return { error: 'Keine Claude-Anmeldung gefunden (~/.claude/.credentials.json).' };
+    return { error: 'No Claude login found (~/.claude/.credentials.json).' };
   }
   let json;
   try {
     json = JSON.parse(raw);
   } catch {
-    return { error: 'Anmeldedaten sind unlesbar.' };
+    return { error: 'Credentials are unreadable.' };
   }
   const oauth = json.claudeAiOauth || {};
-  if (!oauth.accessToken) return { error: 'Kein OAuth-Token hinterlegt - in Claude Code anmelden.' };
-  // expiresAt ist ein Millisekunden-Zeitstempel; abgelaufene Token koennen wir
-  // nicht selbst erneuern, das macht Claude Code beim naechsten Start.
+  if (!oauth.accessToken) return { error: 'No OAuth token stored - sign in via Claude Code.' };
+  // expiresAt is a millisecond timestamp; we cannot refresh expired tokens
+  // ourselves, Claude Code does that on its next start.
   if (oauth.expiresAt && Number(oauth.expiresAt) < Date.now()) {
-    return { error: 'Token abgelaufen - Claude Code einmal starten, um es zu erneuern.' };
+    return { error: 'Token expired - start Claude Code once to refresh it.' };
   }
   return { token: oauth.accessToken, plan: oauth.subscriptionType || null };
 }
 
-// resets_at kommt als ISO-String; aeltere Fassungen liefern Epoch-Sekunden
+// resets_at arrives as an ISO string; older versions deliver epoch seconds
 function parseReset(value) {
   if (value == null) return null;
   const asNumber = typeof value === 'number' ? value : Number(value);
-  // Zahlen anhand der Groessenordnung unterscheiden: alles ab ~2001 in
-  // Millisekunden liegt ueber 1e12, Sekunden-Zeitstempel darunter.
+  // Tell numbers apart by magnitude: anything from ~2001 onwards is above 1e12
+  // in milliseconds, second timestamps stay below that.
   if (Number.isFinite(asNumber) && asNumber > 1e9) {
     return asNumber > 1e12 ? asNumber : asNumber * 1000;
   }
@@ -69,9 +70,9 @@ function parseReset(value) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-// Kern der Anzeige: Ist-Verbrauch gegen den Anteil des Fensters, der schon
-// vorbei ist. Nach 3 von 7 Tagen sind 3/7 = 42,9 % das Soll - wer darueber
-// liegt, reisst das Limit, wenn das Tempo bleibt.
+// The heart of the display: actual usage against the fraction of the window
+// that has already passed. After 3 of 7 days, 3/7 = 42.9 % is the target -
+// anyone above that will blow the limit if the pace holds.
 function pace(limit, windowMs) {
   const used = typeof limit.utilization === 'number' ? limit.utilization : null;
   const resetsAt = parseReset(limit.resets_at);
@@ -81,20 +82,20 @@ function pace(limit, windowMs) {
   const startedAt = resetsAt - windowMs;
   const elapsed = Math.min(Math.max(Date.now() - startedAt, 0), windowMs);
   const fraction = elapsed / windowMs;
-  const budget = fraction * 100;          // erlaubter Maximalwert zum Jetzt-Zeitpunkt
-  const headroom = budget - used;         // positiv = Luft, negativ = drueber
+  const budget = fraction * 100;          // maximum value allowed as of now
+  const headroom = budget - used;         // positive = room, negative = over
 
-  // Limit bereits ausgeschoepft - das ist unabhaengig von jeder Hochrechnung rot
+  // Limit already exhausted - that is red regardless of any projection
   if (used >= 100) {
     return { ...base, startedAt, fraction, budget, headroom, projected: 100, status: 'over' };
   }
 
-  // Zu frueh im Fenster fuer eine belastbare Hochrechnung
+  // Too early in the window for a meaningful projection
   if (fraction < MIN_FRACTION) {
     return { ...base, startedAt, fraction, budget, headroom, projected: null, status: 'early' };
   }
 
-  const projected = used / fraction;      // Verbrauch am Fensterende bei gleichem Tempo
+  const projected = used / fraction;      // usage at the end of the window at the same pace
   let status = 'ok';
   if (projected > RED_AT) status = 'over';
   else if (projected > AMBER_AT) status = 'warn';
@@ -114,13 +115,13 @@ async function fetchUsage(token) {
       signal: controller.signal,
     });
     if (res.status === 401 || res.status === 403) {
-      return { error: 'Token wurde abgelehnt - in Claude Code neu anmelden.' };
+      return { error: 'Token was rejected - sign in again via Claude Code.' };
     }
-    if (!res.ok) return { error: `Abruf fehlgeschlagen (HTTP ${res.status}).` };
+    if (!res.ok) return { error: `Request failed (HTTP ${res.status}).` };
     return { json: await res.json() };
   } catch (err) {
-    if (err.name === 'AbortError') return { error: 'Zeitueberschreitung beim Abruf.' };
-    return { error: 'Netzwerkfehler: ' + err.message };
+    if (err.name === 'AbortError') return { error: 'Request timed out.' };
+    return { error: 'Network error: ' + err.message };
   } finally {
     clearTimeout(timer);
   }
@@ -150,7 +151,7 @@ async function getUsage(force = false) {
 
   const res = await fetchUsage(creds.token);
   if (res.error) {
-    // Letzten guten Stand behalten, aber als veraltet kennzeichnen
+    // Keep the last good state, but mark it as stale
     if (cache.data) return { ...cache.data, error: res.error, stale: true };
     return { error: res.error };
   }

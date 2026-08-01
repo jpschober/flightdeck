@@ -1,27 +1,27 @@
 'use strict';
-// Schema-Plugin fuer Supabase.
+// Schema plugin for Supabase.
 //
-// Ein Plugin bringt beides selbst mit: die Erkennung ("bin ich hier
-// zustaendig?") und das Lesen. Der Senser kennt nur diese Schnittstelle:
+// A plugin brings both parts itself: the detection ("am I responsible here?")
+// and the reading. The sensor only knows this interface:
 //
 //   id, label
 //   detect(provider) -> { confidence, evidence[], watch[] } | null
 //   read(provider)   -> IR
 //
-// Supabase legt sein Schema als durchnummerierte SQL-Migrationen ab. Die sind
-// die Quelle der Wahrheit im Repo - anders als eine laufende Datenbank sind sie
-// da, ohne dass etwas gestartet sein muss, und sie liegen im Git, womit auch
-// der Vorher/Nachher-Vergleich funktioniert.
+// Supabase stores its schema as numbered SQL migrations. Those are the source
+// of truth in the repo - unlike a running database they are there without
+// anything having to be started, and they live in git, which is what makes the
+// before/after comparison work.
 
 const ddl = require('../sql-ddl');
 const ir = require('../ir');
 
 const MIGRATIONS_DIR = 'supabase/migrations';
 const CONFIG = 'supabase/config.toml';
-// Von `supabase db dump` bzw. aelteren Projekten: ein Schema-Abzug am Stueck
+// From `supabase db dump` or older projects: a schema dump in one piece
 const DUMPS = ['supabase/schema.sql', 'supabase/dump.sql'];
 
-// Schemata, die Supabase selbst mitbringt und verwaltet
+// Schemas that Supabase ships and manages itself
 const MANAGED_SCHEMA = /^(auth|storage|realtime|supabase_\w+|graphql\w*|extensions|vault|pgsodium\w*|net|cron)$/;
 
 const id = 'supabase';
@@ -38,9 +38,9 @@ async function detect(provider) {
 
   const migrations = await provider.list(MIGRATIONS_DIR, { ext: '.sql' });
   if (migrations.length) {
-    evidence.push(`${MIGRATIONS_DIR} (${migrations.length} Migrationen)`);
-    // Migrationen sind das eigentliche Schema; ohne sie kann das Plugin nichts
-    // liefern, auch wenn eine config.toml herumliegt.
+    evidence.push(`${MIGRATIONS_DIR} (${migrations.length} migrations)`);
+    // The migrations are the actual schema; without them the plugin cannot
+    // deliver anything, even if a config.toml is lying around.
     confidence = Math.max(confidence, 0.95);
   }
 
@@ -55,7 +55,7 @@ async function detect(provider) {
   return {
     confidence,
     evidence,
-    // Woran der Senser merkt, dass neu gelesen werden muss
+    // How the sensor notices that a re-read is due
     watch: [MIGRATIONS_DIR, CONFIG, ...DUMPS],
   };
 }
@@ -64,9 +64,8 @@ async function read(provider) {
   const model = ddl.createModel();
   const files = [];
 
-  // Reihenfolge ist alles: die Migrationen bauen aufeinander auf. Supabase
-  // stellt den Zeitstempel voran, damit die Namenssortierung der zeitlichen
-  // Reihenfolge entspricht.
+  // Order is everything: the migrations build on one another. Supabase puts the
+  // timestamp first so that sorting by name matches the chronological order.
   const migrations = (await provider.list(MIGRATIONS_DIR, { ext: '.sql' })).sort();
 
   for (const rel of migrations) {
@@ -76,7 +75,7 @@ async function read(provider) {
     ddl.applySql(model, sql);
   }
 
-  // Ohne Migrationen: ein Schema-Abzug am Stueck ist der naechstbeste Stand
+  // Without migrations: a schema dump in one piece is the next best state
   if (!files.length) {
     for (const rel of DUMPS) {
       const sql = await provider.read(rel);
@@ -86,10 +85,10 @@ async function read(provider) {
     }
   }
 
-  // Die von Supabase selbst verwalteten Schemata sind nicht Sache des Projekts
-  // und wuerden die Anzeige nur zumuellen. Ausnahme: hat das Projekt dort eigene
-  // RLS-Policies definiert (typisch `storage.objects` fuer Datei-Zugriff), dann
-  // gehoeren die sehr wohl dazu - eine Aenderung daran will man sehen.
+  // The schemas Supabase manages itself are none of the project's business and
+  // would only clutter the display. Exception: if the project has defined its
+  // own RLS policies there (typically `storage.objects` for file access), those
+  // very much belong - a change to them is something you want to see.
   for (const [key, table] of model.tables) {
     if (!MANAGED_SCHEMA.test(table.schema)) continue;
     if (table.rls.policies.length) continue;

@@ -1,5 +1,5 @@
 'use strict';
-// Sammelt Git- und Pull-Request-Informationen fuer ein Arbeitsverzeichnis.
+// Collects git and pull request information for a working directory.
 const { execFile } = require('child_process');
 const fs = require('fs');
 
@@ -19,13 +19,13 @@ function parseStatus(porcelain) {
     if (!line.trim()) continue;
     const xy = line.slice(0, 2);
     let p = line.slice(3);
-    // Rename: "R  alt -> neu" -> nur den neuen Pfad anzeigen
+    // Rename: "R  old -> new" -> only show the new path
     const arrow = p.indexOf(' -> ');
     if (arrow !== -1) p = p.slice(arrow + 4);
     if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
     const code = xy === '??' ? '?' : (xy.trim()[0] || 'M');
-    // git meldet unversionierte Verzeichnisse mit Schraegstrich am Ende. Die
-    // sind keine Datei - eine Vorschau darauf scheitert zwangslaeufig.
+    // git reports untracked directories with a trailing slash. Those are not
+    // files - a preview of them is bound to fail.
     files.push({ status: code, path: p, untracked: xy === '??', dir: p.endsWith('/') });
   }
   return files;
@@ -44,23 +44,24 @@ async function getGitInfo(cwd) {
   };
 }
 
-// --- Pull Request via GitHub CLI (gh), gecacht pro Repo+Branch ---
+// --- Pull request via the GitHub CLI (gh), cached per repo+branch ---
 //
-// ZWEISTUFIG, und zwar aus Kostengruenden. `gh pr view --json ...` ist eine
-// GraphQL-Abfrage, und GitHub rechnet sie nach der Zahl angeforderter Knoten ab --
-// nicht pro Aufruf. Felder wie `comments`, `reviews`, `files` und `commits` sind
-// Connections: Ihr Preis waechst mit dem PR. Ein lebhafter Review-PR kostet damit
-// ein Vielfaches eines frischen, und das GraphQL-Kontingent (5000 Punkte/Stunde,
-// pro NUTZER, nicht pro Repo) ist schneller leer, als man denkt -- geteilt mit
-// jedem anderen Werkzeug, das im selben Konto `gh` benutzt.
+// TWO-STAGE, and for cost reasons. `gh pr view --json ...` is a GraphQL query,
+// and GitHub bills it by the number of requested nodes -- not per call. Fields
+// like `comments`, `reviews`, `files` and `commits` are connections: their price
+// grows with the PR. A busy review PR therefore costs a multiple of a fresh one,
+// and the GraphQL quota (5000 points/hour, per USER, not per repo) runs out
+// faster than you would think -- shared with every other tool that uses `gh`
+// under the same account.
 //
-// Deshalb zwei Abfragen mit getrennten Lebensdauern:
-//   * LIGHT -- was sich staendig aendert (CI-Status, Draft, Titel, Zeilenzahlen).
-//     Klein, weil ohne Connections ausser dem Check-Rollup. Bleibt engmaschig.
-//   * HEAVY -- Dateien, Commits, Kommentare, Reviews, Body. Aendert sich in Minuten,
-//     nicht in Sekunden, und ist der eigentliche Kostentreiber.
+// Hence two queries with separate lifetimes:
+//   * LIGHT -- what changes constantly (CI status, draft, title, line counts).
+//     Small, because it has no connections apart from the check rollup. Stays
+//     fine-grained.
+//   * HEAVY -- files, commits, comments, reviews, body. Changes in minutes, not
+//     seconds, and is the actual cost driver.
 //
-// Das zusammengesetzte Ergebnis hat dieselbe Form wie vorher; Aufrufer merken nichts.
+// The assembled result has the same shape as before; callers notice nothing.
 const prCache = new Map(); // key -> { pr, lightAt, heavyAt }
 const PR_LIGHT_TTL = 45_000;
 const PR_TTL = 300_000;
@@ -71,7 +72,7 @@ const HEAVY_FIELDS = 'files,body,commits,comments,reviews';
 
 async function fetchPrJson(cwd, fields) {
   const out = await run('gh', ['pr', 'view', '--json', fields], cwd, 15000);
-  if (!out) return null; // kein PR / gh nicht eingerichtet
+  if (!out) return null; // no PR / gh not set up
   try {
     return JSON.parse(out);
   } catch {
@@ -118,7 +119,7 @@ function mapHeavy(j) {
   };
 }
 
-/** Leere Huelle fuer die schweren Felder -- damit ein PR nie ohne sie herauskommt. */
+/** Empty shell for the heavy fields -- so a PR never comes out without them. */
 const EMPTY_HEAVY = { files: [], body: '', commits: [], comments: [], reviews: [] };
 
 async function getPrInfo(cwd, root, branch, force = false) {
@@ -138,8 +139,8 @@ async function getPrInfo(cwd, root, branch, force = false) {
   if (!lightFresh) {
     const j = await fetchPrJson(cwd, LIGHT_FIELDS);
     if (j === null) {
-      // Kein PR (oder gh nicht eingerichtet). Beide Zeitstempel setzen, damit der
-      // Fall nicht bei jedem Tick erneut abgefragt wird.
+      // No PR (or gh not set up). Set both timestamps so this case is not
+      // queried again on every tick.
       prCache.set(key, { pr: null, lightAt: now, heavyAt: now });
       return null;
     }
@@ -149,8 +150,8 @@ async function getPrInfo(cwd, root, branch, force = false) {
 
   if (pr && !heavyFresh) {
     const j = await fetchPrJson(cwd, HEAVY_FIELDS);
-    // Scheitert nur die schwere Haelfte, bleibt der zuletzt bekannte Stand stehen --
-    // veraltete Kommentare sind besser als ein Panel, das leer springt.
+    // If only the heavy half fails, the last known state stays -- stale
+    // comments are better than a panel that jumps to empty.
     if (j !== null) {
       pr = { ...pr, ...mapHeavy(j) };
       heavyAt = now;
@@ -161,7 +162,7 @@ async function getPrInfo(cwd, root, branch, force = false) {
   return pr;
 }
 
-// CI-Checks auf success/failure/pending/neutral eindampfen
+// Boil CI checks down to success/failure/pending/neutral
 function summarizeChecks(rollup) {
   const norm = (c) => {
     const v = (c.conclusion || c.state || c.status || '').toUpperCase();

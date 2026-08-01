@@ -18,7 +18,7 @@ const sessions = new Map(); // id -> session
 let nextId = 1;
 
 // ---------------------------------------------------------------------------
-// Shell-Erkennung
+// Shell detection
 // ---------------------------------------------------------------------------
 function firstExisting(paths) {
   return paths.find((p) => { try { return fs.existsSync(p); } catch { return false; } });
@@ -40,21 +40,21 @@ function detectShells() {
       path.join(os.homedir(), 'AppData\\Local\\Programs\\Git\\bin\\bash.exe'),
     ]);
     if (gitBash) shells.push({ id: 'gitbash', name: 'Git Bash', file: gitBash });
-    shells.push({ id: 'cmd', name: 'Eingabeaufforderung', file: 'cmd.exe' });
+    shells.push({ id: 'cmd', name: 'Command Prompt', file: 'cmd.exe' });
     if (firstExisting(['C:\\Windows\\System32\\wsl.exe'])) {
       shells.push({ id: 'wsl', name: 'WSL', file: 'wsl.exe' });
     }
   } else {
-    // Was das System als Login-Shell anbietet, plus die eigene Standard-Shell.
-    // /etc/shells listet oft mehrere Pfade auf dieselbe Binary (/bin/fish und
-    // /usr/bin/fish) - die id entscheidet, jede Shell kommt nur einmal vor.
+    // Whatever the system offers as a login shell, plus the user's own default
+    // shell. /etc/shells often lists several paths to the same binary
+    // (/bin/fish and /usr/bin/fish) - the id decides, every shell appears once.
     const candidates = [];
     try {
       for (const line of fs.readFileSync('/etc/shells', 'utf8').split('\n')) {
         const p = line.trim();
         if (p && !p.startsWith('#')) candidates.push(p);
       }
-    } catch { /* kein /etc/shells (z. B. minimaler Container) */ }
+    } catch { /* no /etc/shells (e.g. a minimal container) */ }
     candidates.push(process.env.SHELL || '');
     for (const name of ['bash', 'zsh', 'fish', 'nu', 'elvish', 'xonsh', 'ksh', 'tcsh', 'dash']) {
       candidates.push('/usr/bin/' + name, '/bin/' + name, '/usr/local/bin/' + name);
@@ -70,7 +70,7 @@ function detectShells() {
     }
     if (!shells.length) shells.push({ id: 'sh', name: 'sh', file: '/bin/sh' });
 
-    // Standard-Shell des Nutzers nach vorn - sie ist die neue Session
+    // The user's default shell goes first - it is the new session
     const preferred = path.basename(process.env.SHELL || '');
     const idx = shells.findIndex((s) => path.basename(s.file) === preferred);
     if (idx > 0) shells.unshift(shells.splice(idx, 1)[0]);
@@ -78,7 +78,7 @@ function detectShells() {
   return shells;
 }
 
-// Shells, die als interaktives Terminal nichts taugen bzw. keine Shell sind
+// Shells that are no good as an interactive terminal, or are not shells at all
 const SHELL_BLOCKLIST = new Set([
   'nologin', 'false', 'sync', 'git-shell', 'rbash',
   'systemd-home-fallback-shell', 'screen', 'tmux',
@@ -92,8 +92,8 @@ const SHELL_NAMES = {
 const availableShells = detectShells();
 
 // ---------------------------------------------------------------------------
-// Shell-Integration: OSC 7 = aktuelles Verzeichnis, OSC 133 = Busy-/Idle-Status
-// (133;C = Kommando gestartet, 133;A/D = Prompt sichtbar, wartet auf Eingabe)
+// Shell integration: OSC 7 = current directory, OSC 133 = busy/idle state
+// (133;C = command started, 133;A/D = prompt visible, waiting for input)
 const PS_INIT = [
   'function Global:prompt {',
   '  $p = $ExecutionContext.SessionState.Path.CurrentLocation.ProviderPath',
@@ -117,11 +117,12 @@ const PS_INIT = [
 ].join('\n');
 const PS_ENCODED = Buffer.from(PS_INIT, 'utf16le').toString('base64');
 
-// Claude-Wrapper: vergibt die Session-ID selbst und meldet sie, bevor Claude
-// startet. Nur so ist die Zuordnung Terminal -> Transcript eindeutig; ohne sie
-// bliebe nur, ueber Zeitstempel zu raten - und wer zufaellig im selben Moment
-// in einem anderen Fenster arbeitet, bekaeme das falsche Transcript.
-// OSC 7771: session;<uuid> = exakt, continue;= aelteste Session des Ordners.
+// Claude wrapper: assigns the session ID itself and reports it before Claude
+// starts. Only that makes the mapping terminal -> transcript unambiguous;
+// without it, the only option left would be guessing via timestamps - and
+// anyone who happens to be working in another window at the same moment would
+// get the wrong transcript.
+// OSC 7771: session;<uuid> = exact, continue; = the folder's latest session.
 const SH_CLAUDE_WRAPPER = `
 __flightdeck_uuid() {
   if [ -r /proc/sys/kernel/random/uuid ]; then
@@ -171,9 +172,9 @@ PROMPT_COMMAND=__flightdeck_prompt
 trap __flightdeck_preexec DEBUG
 `;
 
-// Fish kennt kein --rcfile, aber -C fuehrt Kommandos vor der ersten Prompt aus.
-// Die Events fish_prompt/fish_preexec liefern dasselbe wie PROMPT_COMMAND +
-// DEBUG-Trap in Bash.
+// Fish has no --rcfile, but -C runs commands before the first prompt. The
+// events fish_prompt/fish_preexec deliver the same as PROMPT_COMMAND + the
+// DEBUG trap in Bash.
 const FISH_RC = `
 function __flightdeck_prompt --on-event fish_prompt
     printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' $hostname $PWD
@@ -213,11 +214,11 @@ function claude
 end
 `;
 
-// Zsh laedt seine Konfiguration aus $ZDOTDIR. Wir zeigen dorthin auf ein
-// temporaeres Verzeichnis, das erst die echte Konfiguration des Nutzers laedt
-// und danach die Hooks setzt.
-// Wichtig: ZDOTDIR muss nach dem Laden der Nutzer-.zshenv wieder auf unser
-// Verzeichnis zeigen, sonst findet zsh unsere .zshrc im naechsten Schritt nicht.
+// Zsh loads its configuration from $ZDOTDIR. We point that at a temporary
+// directory which first loads the user's real configuration and then installs
+// the hooks.
+// Important: after loading the user's .zshenv, ZDOTDIR must point back at our
+// directory, otherwise zsh will not find our .zshrc in the next step.
 const ZSH_ENV = `
 __flightdeck_rcdir="$ZDOTDIR"
 ZDOTDIR="\${FLIGHTDECK_ZDOTDIR:-$HOME}"
@@ -242,8 +243,8 @@ add-zsh-hook precmd __flightdeck_prompt
 add-zsh-hook preexec __flightdeck_preexec
 `;
 
-// Integrationsdateien liegen in einem eigenen Verzeichnis unter tmp; zsh
-// braucht ein Verzeichnis (ZDOTDIR), die anderen nur eine Datei.
+// The integration files live in their own directory under tmp; zsh needs a
+// directory (ZDOTDIR), the others only a file.
 let rcDir = null;
 function getRcDir() {
   if (!rcDir) {
@@ -297,7 +298,7 @@ function spawnArgsFor(shell) {
 }
 
 // ---------------------------------------------------------------------------
-// OSC-Parsing: aktuelles Verzeichnis aus dem PTY-Datenstrom extrahieren
+// OSC parsing: extract the current directory from the PTY data stream
 // ---------------------------------------------------------------------------
 const OSC7_RE = /\x1b\]7;file:\/\/[^/\x07\x1b]*([^\x07\x1b]+)(?:\x07|\x1b\\)/g;
 const OSC99_RE = /\x1b\]9;9;"?([^"\x07\x1b]+)"?(?:\x07|\x1b\\)/g;
@@ -305,12 +306,12 @@ const OSC133_RE = /\x1b\]133;([A-D])[^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const OSCCMD_RE = /\x1b\]7770;cmd;([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)/g;
 const OSCSESS_RE = /\x1b\]7771;([a-z]+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
 const OSC_ANY_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-// Claude Code (als iTerm angesprochen): OSC 0/2 = Titel, OSC 9 = Notification
+// Claude Code (addressed as iTerm): OSC 0/2 = title, OSC 9 = notification
 const OSC_TITLE_RE = /\x1b\](?:0|2);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
 const OSC9_RE = /\x1b\]9;([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
 
-// Kommandos, bei denen "still = wartet auf Eingabe" gilt (agentische TUIs:
-// arbeiten = permanentes Rendern von Spinner/Timer/Streaming)
+// Commands for which "quiet = waiting for input" holds (agentic TUIs:
+// working = continuously rendering a spinner/timer/streaming output)
 const WATCHED_CMD_RE = /(^|[\s\\/"'])(claude|codex|aider)([\s"'.]|$)/i;
 const ATTENTION_QUIET_MS = 2000;
 
@@ -321,7 +322,7 @@ function normalizeOscPath(raw) {
     // file://localhost/C:/Users/... -> C:\Users\...
     p = p.slice(1).replace(/\//g, '\\');
   } else if (process.platform === 'win32' && /^\/[a-z]\//.test(p)) {
-    // Git-Bash-Stil /c/Users/... -> C:\Users\...
+    // Git Bash style /c/Users/... -> C:\Users\...
     p = p[1].toUpperCase() + ':' + p.slice(2).replace(/\//g, '\\');
   }
   return p;
@@ -337,7 +338,7 @@ function extractCwd(text) {
 }
 
 // ---------------------------------------------------------------------------
-// Busy-/Idle-Status
+// Busy/idle state
 // ---------------------------------------------------------------------------
 function setState(session, state) {
   if (session.state === state || session.exited) return;
@@ -345,9 +346,9 @@ function setState(session, state) {
   if (win && !win.isDestroyed()) win.webContents.send('session:state', session.id, state);
 }
 
-// "Wartet auf dich" gilt erst, nachdem der Agent ueberhaupt einen Auftrag
-// bekommen hat. Direkt nach `claude` steht er per Definition am Prompt - das
-// als Aufmerksamkeitsmeldung zu verschicken, waere jedes Mal ein Fehlalarm.
+// "Waiting for you" only applies once the agent has actually received a task.
+// Right after `claude` it sits at the prompt by definition - sending that out
+// as an attention notice would be a false alarm every single time.
 function setAttention(session) {
   if (!session.agentPrompted) return false;
   if (session.state === 'idle') return false;
@@ -355,31 +356,31 @@ function setAttention(session) {
   return true;
 }
 
-// Wertet OSC 133/7770 im Datenstrom aus; Matches, die komplett im bereits
-// verarbeiteten Tail liegen, werden uebersprungen (keine Doppelverarbeitung).
+// Evaluates OSC 133/7770 in the data stream; matches that lie entirely within
+// the already processed tail are skipped (no double processing).
 function applyStateFromData(session, text, tailLen, rawData) {
   let saw = false; let m;
 
-  // Kommandozeile des gestarteten Befehls (von der Shell-Integration gemeldet)
+  // Command line of the started command (reported by the shell integration)
   OSCCMD_RE.lastIndex = 0;
   while ((m = OSCCMD_RE.exec(text)) !== null) {
     if (m.index + m[0].length <= tailLen) continue;
     let cmd = '';
-    try { cmd = Buffer.from(m[1], 'base64').toString('utf8'); } catch { /* egal */ }
+    try { cmd = Buffer.from(m[1], 'base64').toString('utf8'); } catch { /* never mind */ }
     session.currentCmd = cmd;
     session.cmdWatched = WATCHED_CMD_RE.test(cmd);
     if (session.cmdWatched) {
       beginAgentBinding(session, cmd);
-      // Frisch gestartet: der Agent zeigt seine Oberflaeche und wartet auf den
-      // ersten Prompt. Das ist kein "braucht dich", sondern der Normalzustand -
-      // erst ab dem ersten Prompt sind Aufmerksamkeitsmeldungen sinnvoll.
+      // Freshly started: the agent shows its interface and waits for the first
+      // prompt. That is not a "needs you" but the normal state - attention
+      // notices only make sense from the first prompt onwards.
       session.agentPrompted = false;
     }
     addHistory(session, cmd, 'shell');
   }
 
-  // Meldung des claude-Wrappers - muss nach OSC 7770 ausgewertet werden,
-  // weil beginAgentBinding() die Bindung zuruecksetzt.
+  // Report from the claude wrapper - has to be evaluated after OSC 7770,
+  // because beginAgentBinding() resets the binding.
   OSCSESS_RE.lastIndex = 0;
   while ((m = OSCSESS_RE.exec(text)) !== null) {
     if (m.index + m[0].length <= tailLen) continue;
@@ -398,40 +399,40 @@ function applyStateFromData(session, text, tailLen, rawData) {
       session.cmdWatched = false;
       session.hasClaudeOsc = false;
       clearTimeout(session.attnTimer);
-      // Zurueck am Prompt: ggf. vorgemerktes Kommando starten (Session-Browser)
+      // Back at the prompt: run a queued command if there is one (session browser)
       if (session.pendingCommand) {
         const cmd = session.pendingCommand;
         session.pendingCommand = null;
-        try { session.proc.write(cmd + '\r'); } catch { /* Session weg */ }
+        try { session.proc.write(cmd + '\r'); } catch { /* session gone */ }
       }
     }
   }
 
-  // Native Claude-Signale (Titel: Spinner = arbeitet, U+2733 = wartet auf dich)
+  // Native Claude signals (title: spinner = working, U+2733 = waiting for you)
   OSC_TITLE_RE.lastIndex = 0;
   while ((m = OSC_TITLE_RE.exec(text)) !== null) {
     if (m.index + m[0].length <= tailLen) continue;
     const first = m[1].charAt(0);
     if (!first) continue;
     const code = first.charCodeAt(0);
-    if (code >= 0x2800 && code <= 0x28ff) {          // Braille-Spinner
+    if (code >= 0x2800 && code <= 0x28ff) {          // braille spinner
       session.hasClaudeOsc = true;
       clearTimeout(session.attnTimer);
       setState(session, 'busy');
-    } else if (first === '✳') {                  // Stern: Eingabe erwartet
+    } else if (first === '✳') {                  // asterisk: input expected
       session.hasClaudeOsc = true;
       clearTimeout(session.attnTimer);
       setAttention(session);
     }
   }
 
-  // OSC 9: Fortschritt (9;4;...) bzw. explizite Notifications von Claude
+  // OSC 9: progress (9;4;...) or explicit notifications from Claude
   OSC9_RE.lastIndex = 0;
   while ((m = OSC9_RE.exec(text)) !== null) {
     if (m.index + m[0].length <= tailLen) continue;
     const payload = m[1];
-    if (payload.startsWith('9;')) continue;           // ConEmu-cwd, s. OSC99_RE
-    if (payload.startsWith('4;')) {                   // Fortschrittsanzeige
+    if (payload.startsWith('9;')) continue;           // ConEmu cwd, see OSC99_RE
+    if (payload.startsWith('4;')) {                   // progress indicator
       const level = payload.split(';')[1];
       if (level === '1' || level === '2' || level === '3') {
         session.hasClaudeOsc = true;
@@ -439,7 +440,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
       }
       continue;
     }
-    // Explizite Meldung ("Claude needs your attention", Permission-Anfrage, ...)
+    // Explicit notification ("Claude needs your attention", permission request, ...)
     if (setAttention(session) && win && !win.isDestroyed()) {
       win.webContents.send('session:notify', session.id, payload.slice(0, 200));
     }
@@ -448,9 +449,9 @@ function applyStateFromData(session, text, tailLen, rawData) {
     session.hasOsc133 = true;
     clearTimeout(session.idleTimer);
   } else if (!session.hasOsc133) {
-    // Fallback ohne Shell-Integration (cmd, WSL): Ausgabe = arbeitet,
-    // 500 ms Stille = wartet auf Eingabe. Laeuft eine Vollbild-TUI
-    // (Alternate Screen), bleibt der Status stehen statt zu flackern.
+    // Fallback without shell integration (cmd, WSL): output = working,
+    // 500 ms of silence = waiting for input. While a full-screen TUI is running
+    // (alternate screen), the state stays put instead of flickering.
     setState(session, 'busy');
     clearTimeout(session.idleTimer);
     if (!session.altScreen) {
@@ -458,16 +459,16 @@ function applyStateFromData(session, text, tailLen, rawData) {
     }
   }
 
-  // Stille-Heuristik fuer beobachtete TUIs - nur solange Claude keine
-  // nativen Signale liefert (hasClaudeOsc), die sind praeziser.
+  // Silence heuristic for the watched TUIs - only as long as Claude delivers
+  // no native signals (hasClaudeOsc), those are more precise.
   if (session.hasOsc133 && session.cmdWatched && !session.hasClaudeOsc && session.state !== 'idle') {
     const visible = rawData.replace(OSC_ANY_RE, '');
     if (visible.includes('\x07')) {
-      // Terminal-Bell: Claude meldet Fertigstellung/Rueckfrage
+      // Terminal bell: Claude reports completion or a question
       setAttention(session);
       clearTimeout(session.attnTimer);
     } else {
-      // Echo des eigenen Tippens (Claude rendert die Eingabezeile) zaehlt nicht
+      // The echo of your own typing (Claude renders the input line) does not count
       const isEcho = Date.now() - (session.lastInputAt || 0) < 300;
       if (visible.length && !isEcho) setState(session, 'busy');
       clearTimeout(session.attnTimer);
@@ -481,11 +482,11 @@ function applyStateFromData(session, text, tailLen, rawData) {
 }
 
 // ---------------------------------------------------------------------------
-// Agent-Bindung: welches Claude-Transcript gehoert zu dieser Session?
+// Agent binding: which Claude transcript belongs to this session?
 //
-// Ohne diese Bindung raet die App ueber "juengste Datei im Projektverzeichnis"
-// - laufen mehrere Chats im selben Repo, zeigt der Report den falschen an, und
-// ein Worktree-Wechsel des Agenten bleibt unsichtbar.
+// Without this binding the app guesses via "newest file in the project
+// directory" - with several chats running in the same repo the report shows the
+// wrong one, and a worktree switch by the agent stays invisible.
 // ---------------------------------------------------------------------------
 const RESUME_RE = /(?:--resume|--session-id|(?:^|\s)-r)[= ]+([0-9a-f-]{36})/i;
 
@@ -495,9 +496,9 @@ function bindAgentSession(session, sessionId, exact) {
   session.transcriptSnapshot = null;
 }
 
-// `claude --continue` setzt die zuletzt benutzte Session des Verzeichnisses
-// fort. Dieselbe Regel wenden wir im Moment des Starts an - das ist keine
-// Heuristik, sondern die Auswahl, die Claude selbst trifft.
+// `claude --continue` resumes the directory's most recently used session. We
+// apply the same rule at the moment of the start - that is not a heuristic but
+// the very selection Claude itself makes.
 function bindContinuedSession(session) {
   const id = newestTranscript(session.cwd, session.claudeStartedAt);
   if (id) bindAgentSession(session, id, true);
@@ -508,19 +509,19 @@ function beginAgentBinding(session, cmd) {
   session.bindingExact = false;
   session.agentCwd = null;
   session.transcriptSnapshot = snapshotTranscripts(session.cwd);
-  session.claudeStartedAt = Date.now() - 1000; // Uhrendrift/mtime-Granularitaet
+  session.claudeStartedAt = Date.now() - 1000; // clock drift / mtime granularity
   session.bindingBase = session.cwd;
 
-  // Nennt die Kommandozeile die ID selbst, ist nichts weiter zu tun. Bei
-  // --fork-session entsteht dagegen eine neue ID - dann greift der Wrapper.
+  // If the command line names the ID itself, there is nothing more to do. With
+  // --fork-session a new ID is created instead - then the wrapper takes over.
   const m = RESUME_RE.exec(cmd);
   if (m && !/--fork-session/.test(cmd)) bindAgentSession(session, m[1], true);
 }
 
 function updateAgentBinding(session) {
   if (!session.bindingBase) return;
-  // Verlaesst die Shell das Verzeichnis, in dem `claude` gestartet wurde,
-  // passt die Bindung nicht mehr.
+  // If the shell leaves the directory in which `claude` was started, the
+  // binding no longer fits.
   if (session.cwd !== session.bindingBase) {
     session.claudeSessionId = null;
     session.bindingExact = false;
@@ -529,10 +530,10 @@ function updateAgentBinding(session) {
     session.transcriptSnapshot = null;
     return;
   }
-  // Notnagel fuer Faelle ohne Wrapper-Meldung (`command claude`, npx, eine
-  // Shell ohne Integration): ueber Zeitstempel raten. Das kann danebengehen,
-  // wenn zeitgleich in einem anderen Fenster gearbeitet wird - deshalb bleibt
-  // die Bindung als unsicher markiert und der Report weist darauf hin.
+  // Last resort for cases without a wrapper report (`command claude`, npx, a
+  // shell without integration): guess via timestamps. That can go wrong if
+  // somebody is working in another window at the same time - which is why the
+  // binding stays marked as uncertain and the report points that out.
   if (!session.claudeSessionId && session.transcriptSnapshot) {
     const id = detectTranscript(
       session.bindingBase, session.transcriptSnapshot, session.claudeStartedAt,
@@ -542,8 +543,8 @@ function updateAgentBinding(session) {
   if (!session.claudeSessionId) return;
 
   const agentCwd = readAgentCwd(session.claudeSessionId);
-  // Nur uebernehmen, wenn es unterhalb des Shell-Verzeichnisses liegt (also
-  // ein Worktree o. ae.) - alles andere waere ein fremdes Transcript.
+  // Only adopt it if it lies below the shell's directory (i.e. a worktree or
+  // similar) - anything else would be a foreign transcript.
   if (agentCwd && agentCwd !== session.cwd
       && agentCwd.startsWith(session.cwd.replace(/[\\/]+$/, '') + path.sep)
       && fs.existsSync(agentCwd)) {
@@ -554,8 +555,8 @@ function updateAgentBinding(session) {
 }
 
 // ---------------------------------------------------------------------------
-// Eingabe-Verlauf: Shell-Kommandos kommen exakt via OSC 7770; Prompts an
-// beobachtete TUIs (Claude) werden aus dem Tastatur-Strom rekonstruiert.
+// Input history: shell commands arrive verbatim via OSC 7770; prompts to the
+// watched TUIs (Claude) are reconstructed from the keyboard stream.
 // ---------------------------------------------------------------------------
 const HISTORY_MAX = 200;
 
@@ -569,32 +570,32 @@ function addHistory(session, text, kind) {
 }
 
 function feedInputRecon(session, data) {
-  // Bracketed-Paste-Marker entfernen, eingefuegten Inhalt behalten
+  // Strip bracketed-paste markers, keep the pasted content
   data = data.replace(/\x1b\[20[01]~/g, '');
   let buf = session.inputBuf;
   for (let i = 0; i < data.length; i++) {
     const ch = data[i];
     if (ch === '\r') {
       const text = buf; buf = '';
-      // Shell-Kommandos kommen exakt ueber OSC 7770 - hier nur Agent-Prompts
+      // Shell commands arrive verbatim via OSC 7770 - only agent prompts here
       if (session.cmdWatched) {
         session.agentPrompted = true;
         addHistory(session, text, 'agent');
       }
     } else if (ch === '\x7f' || ch === '\b') {
       buf = buf.slice(0, -1);
-    } else if (ch === '\x03' || ch === '\x15') { // Ctrl+C / Ctrl+U: Zeile verwerfen
+    } else if (ch === '\x03' || ch === '\x15') { // Ctrl+C / Ctrl+U: discard the line
       buf = '';
-    } else if (ch === '\x17') { // Ctrl+W: letztes Wort loeschen
+    } else if (ch === '\x17') { // Ctrl+W: delete the last word
       buf = buf.replace(/\S+\s*$/, '');
     } else if (ch === '\x1b') {
-      if (data[i + 1] === '[' || data[i + 1] === 'O') { // CSI/SS3 ueberspringen
+      if (data[i + 1] === '[' || data[i + 1] === 'O') { // skip CSI/SS3
         let j = i + 2;
         while (j < data.length && (data.charCodeAt(j) < 0x40 || data.charCodeAt(j) > 0x7e)) j++;
         i = j;
       }
     } else if (ch === '\n') {
-      buf += '\n'; // Teil eines Multiline-Paste
+      buf += '\n'; // part of a multi-line paste
     } else if (ch >= ' ') {
       buf += ch;
     }
@@ -603,7 +604,7 @@ function feedInputRecon(session, data) {
 }
 
 // ---------------------------------------------------------------------------
-// TODO-Notizen: pro Projekt (Repo-Root) persistiert
+// TODO notes: persisted per project (repo root)
 // ---------------------------------------------------------------------------
 let todosStore = null;
 function todosPath() { return path.join(app.getPath('userData'), 'flightdeck-todos.json'); }
@@ -611,7 +612,7 @@ function loadTodos() {
   if (!todosStore) {
     try { todosStore = JSON.parse(fs.readFileSync(todosPath(), 'utf8')); }
     catch {
-      // Migration von der frueheren "aibash"-Installation
+      // Migration from the earlier "aibash" installation
       try {
         const oldPath = path.join(app.getPath('userData'), '..', 'aibash', 'aibash-todos.json');
         todosStore = JSON.parse(fs.readFileSync(oldPath, 'utf8'));
@@ -627,9 +628,9 @@ function rootKeyOf(session) {
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
-// Umgebung fuer die Shells: geerbte Variablen entfernen, die Farben abschalten
-// oder von einem umgebenden Tool (Claude Code, Warp) stammen und in einer
-// frischen interaktiven Session nichts verloren haben.
+// Environment for the shells: remove inherited variables that switch colours
+// off or come from a surrounding tool (Claude Code, Warp) and have no business
+// being in a fresh interactive session.
 function buildPtyEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const key of Object.keys(env)) {
@@ -638,13 +639,13 @@ function buildPtyEnv(extra) {
   delete env.NO_COLOR;
   delete env.CLAUDECODE;
   delete env.GIT_TERMINAL_PROMPT;
-  // Claude Code prueft TERM_PROGRAM und sendet nur bei iTerm die OSC-0-Titel
-  // (Spinner = arbeitet, Stern = wartet) und OSC-9-Notifications ("needs your
-  // attention"). Wir geben uns daher als iTerm aus; FLIGHTDECK bleibt als Marker.
+  // Claude Code checks TERM_PROGRAM and only sends the OSC 0 titles (spinner =
+  // working, asterisk = waiting) and OSC 9 notifications ("needs your
+  // attention") for iTerm. So we pose as iTerm; FLIGHTDECK stays as a marker.
   env.TERM_PROGRAM = 'iTerm.app';
   env.TERM_PROGRAM_VERSION = '3.6.6';
   env.FLIGHTDECK = '1';
-  env.COLORTERM = 'truecolor'; // xterm.js kann Truecolor
+  env.COLORTERM = 'truecolor'; // xterm.js can do truecolor
   return env;
 }
 
@@ -668,19 +669,19 @@ function createSession(shellId, opts = {}) {
     shellName: shell.name,
     proc,
     cwd,
-    title: null,   // manuell gesetzter Titel
-    label: null,   // manuell gesetztes Label
+    title: null,   // manually set title
+    label: null,   // manually set label
     oscTail: '',
     lastInfoJson: '',
     branch: null,
     gitRoot: null,
     files: [],
-    fileMemory: new Map(),   // Pfad -> Eintrag; ueberlebt Commits
+    fileMemory: new Map(),   // path -> entry; survives commits
     pr: null,
-    claudeSessionId: null,   // Transcript der laufenden Claude-Session
-    bindingExact: false,     // ID vom Wrapper gemeldet statt ueber Zeitstempel
-    agentCwd: null,          // Arbeitsverzeichnis des Agenten (ggf. Worktree)
-    agents: null,            // laufende Subagenten (vom Agenten-Senser)
+    claudeSessionId: null,   // transcript of the running Claude session
+    bindingExact: false,     // ID reported by the wrapper instead of guessed via timestamps
+    agentCwd: null,          // the agent's working directory (a worktree, if any)
+    agents: null,            // running subagents (from the agent sensor)
     bindingBase: null,
     transcriptSnapshot: null,
     claudeStartedAt: 0,
@@ -707,14 +708,14 @@ function createSession(shellId, opts = {}) {
   proc.onData((data) => {
     if (win && !win.isDestroyed()) win.webContents.send('session:data', id, data);
 
-    // Scrollback-Puffer fuer die Grid-Vorschau (max. 256 KB)
+    // Scrollback buffer for the grid preview (max. 256 KB)
     session.outputBuffer.push(data);
     session.outputBufferSize += data.length;
     while (session.outputBufferSize > 262144 && session.outputBuffer.length > 1) {
       session.outputBufferSize -= session.outputBuffer.shift().length;
     }
 
-    // Alternate-Screen-Modus (Vollbild-TUIs wie vim, htop, Claude-Dialoge)
+    // Alternate screen mode (full-screen TUIs such as vim, htop, Claude dialogs)
     if (data.includes('\x1b[?')) {
       if (data.includes('\x1b[?1049h') || data.includes('\x1b[?47h')) session.altScreen = true;
       if (data.includes('\x1b[?1049l') || data.includes('\x1b[?47l')) session.altScreen = false;
@@ -738,13 +739,13 @@ function createSession(shellId, opts = {}) {
     if (win && !win.isDestroyed()) win.webContents.send('session:exit', id);
   });
 
-  // Fallback fuer Shells ohne Prompt-Erkennung: Startkommando nach 4 s senden
+  // Fallback for shells without prompt detection: send the start command after 4 s
   if (session.pendingCommand) {
     setTimeout(() => {
       if (session.pendingCommand && !session.exited) {
         const cmd = session.pendingCommand;
         session.pendingCommand = null;
-        try { proc.write(cmd + '\r'); } catch { /* Session weg */ }
+        try { proc.write(cmd + '\r'); } catch { /* session gone */ }
       }
     }, 4000);
   }
@@ -755,7 +756,7 @@ function createSession(shellId, opts = {}) {
 
 async function refreshSession(session, force = false) {
   if (session.exited) return;
-  // Ueberlappende Refreshes vermeiden; bei cwd-Wechsel wird sofort neu angestossen
+  // Avoid overlapping refreshes; on a cwd change a new one is triggered right away
   if (session.refreshing) { session.refreshQueued = session.refreshQueued || force; return; }
   session.refreshing = true;
   const cwdAtStart = session.cwd;
@@ -770,10 +771,10 @@ async function refreshSession(session, force = false) {
   }
 }
 
-// Waehrend der Arbeit wird zwischendurch committet - dann verschwinden die
-// Dateien aus `git status` und die Liste springt auf leer. Was einmal drin
-// stand, bleibt deshalb stehen und wird als committet markiert, bis das
-// Verzeichnis wechselt oder ein PR die Liste uebernimmt.
+// While working, commits happen in between - then the files disappear from
+// `git status` and the list jumps to empty. Whatever was once in there
+// therefore stays and is marked as committed, until the directory changes or a
+// PR takes over the list.
 function mergeFileMemory(session, current) {
   if (!session.fileMemory) session.fileMemory = new Map();
   const memory = session.fileMemory;
@@ -786,7 +787,7 @@ function mergeFileMemory(session, current) {
   for (const [p, entry] of memory) {
     if (!seen.has(p)) memory.set(p, { ...entry, committed: true });
   }
-  // Reihenfolge: offene Aenderungen zuerst, committete darunter
+  // Order: open changes first, committed ones below
   return [...memory.values()].sort((a, b) => {
     if (a.committed !== b.committed) return a.committed ? 1 : -1;
     return a.path.localeCompare(b.path);
@@ -799,13 +800,13 @@ function resetFileMemory(session) {
 
 async function doRefresh(session, force, cwdAtStart) {
   updateAgentBinding(session);
-  // Arbeitet der Agent in einem Worktree, zaehlt dessen Branch - nicht der
-  // der Shell, die im Repo stehen geblieben ist.
+  // If the agent works in a worktree, that worktree's branch counts - not the
+  // one of the shell that stayed behind in the repo.
   const gitCwd = session.agentCwd || cwdAtStart;
   const git = await getGitInfo(gitCwd);
-  if (session.cwd !== cwdAtStart || session.exited) return; // veraltet -> verwerfen
-  // Wechselt Repo oder Branch, faengt das Gedaechtnis von vorn an - sonst
-  // schleppte man Dateien eines fremden Zweigs mit.
+  if (session.cwd !== cwdAtStart || session.exited) return; // stale -> discard
+  // If the repo or branch changes, the memory starts over - otherwise one would
+  // drag along files from a foreign branch.
   if (git && (session.gitRoot !== git.root || session.branch !== git.branch)) {
     resetFileMemory(session);
   }
@@ -814,11 +815,12 @@ async function doRefresh(session, force, cwdAtStart) {
   if (!git) resetFileMemory(session);
   session.files = git ? mergeFileMemory(session, git.files) : [];
   const pr = git ? await getPrInfo(gitCwd, git.root, git.branch, force) : null;
-  if (session.cwd !== cwdAtStart || session.exited) return; // waehrenddessen cd -> verwerfen
+  if (session.cwd !== cwdAtStart || session.exited) return; // cd in the meantime -> discard
   session.pr = pr;
 
-  // Wer arbeitet hier gerade? Die Frage stellt der Senser den Plugins - welche
-  // Agenten-CLI im Terminal laeuft, geht den Refresh nichts an.
+  // Who is working here right now? The sensor puts that question to the
+  // plugins - which agent CLI runs in the terminal is none of the refresh's
+  // business.
   session.agents = await getAgentView({
     cwd: cwdAtStart,
     agentCwd: session.agentCwd,
@@ -850,13 +852,13 @@ async function doRefresh(session, force, cwdAtStart) {
   }
 }
 
-// periodischer Refresh (Branch-Wechsel, neue Aenderungen, PR-Status)
+// periodic refresh (branch switches, new changes, PR status)
 setInterval(() => {
   for (const s of sessions.values()) refreshSession(s);
 }, 4000);
 
 // ---------------------------------------------------------------------------
-// Datei-Vorschau
+// File preview
 // ---------------------------------------------------------------------------
 const MAX_PREVIEW = 512 * 1024;
 
@@ -864,18 +866,18 @@ async function previewFile(session, relPath, source, opts = {}) {
   const root = session.gitRoot || session.cwd;
   const abs = path.resolve(root, relPath);
 
-  // Die Vorschau kann den Dateiinhalt statt des Diffs anfordern - fuer die
-  // gerenderte Markdown-Ansicht, die auf dem Diff nichts anzeigen koennte.
+  // The preview can request the file content instead of the diff - for the
+  // rendered markdown view, which could show nothing based on the diff.
   if (opts.content) {
     try {
       const stat = fs.statSync(abs);
-      if (stat.isDirectory()) return { kind: 'error', path: relPath, text: 'Das ist ein Verzeichnis.' };
+      if (stat.isDirectory()) return { kind: 'error', path: relPath, text: 'That is a directory.' };
       if (stat.size > MAX_PREVIEW) {
-        return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n… (gekuerzt)' };
+        return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n… (truncated)' };
       }
       return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
     } catch (e) {
-      return { kind: 'error', path: relPath, text: 'Datei konnte nicht gelesen werden: ' + e.message };
+      return { kind: 'error', path: relPath, text: 'Could not read the file: ' + e.message };
     }
   }
 
@@ -893,11 +895,11 @@ async function previewFile(session, relPath, source, opts = {}) {
   try {
     const stat = fs.statSync(abs);
     if (stat.size > MAX_PREVIEW) {
-      return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n… (gekuerzt)' };
+      return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n… (truncated)' };
     }
     return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
   } catch (e) {
-    return { kind: 'error', path: relPath, text: 'Datei konnte nicht gelesen werden: ' + e.message };
+    return { kind: 'error', path: relPath, text: 'Could not read the file: ' + e.message };
   }
 }
 
@@ -916,9 +918,9 @@ ipcMain.handle('claude:sessions', () => listClaudeSessions());
 
 ipcMain.handle('usage:get', (e, force) => getUsage(Boolean(force)));
 
-// DB-Schema: der Senser sucht das zustaendige Plugin und vergleicht gegen die
-// gewuenschte Basis. Der Repo-Root ist die richtige Wurzel - arbeitet der Agent
-// in einem Worktree, zeigt gitRoot bereits dorthin.
+// DB schema: the sensor looks for the responsible plugin and compares against
+// the requested baseline. The repo root is the right root - if the agent works
+// in a worktree, gitRoot already points there.
 ipcMain.handle('dbschema:get', async (e, id, opts = {}) => {
   const s = sessions.get(id);
   if (!s) return { ok: false, reason: 'no-session' };
@@ -943,9 +945,9 @@ ipcMain.on('app:focus', () => {
   }
 });
 
-// Zwischenablage ueber den Hauptprozess: `navigator.clipboard.readText()`
-// braucht im Renderer die Berechtigung `clipboard-read`, die Electron ohne
-// eigenen Permission-Handler verweigert - das Einfuegen scheiterte lautlos.
+// Clipboard via the main process: in the renderer `navigator.clipboard.readText()`
+// needs the `clipboard-read` permission, which Electron denies without a custom
+// permission handler - pasting failed silently.
 ipcMain.on('clipboard:write', (e, text) => {
   if (typeof text === 'string' && text) clipboard.writeText(text);
 });
@@ -957,7 +959,7 @@ ipcMain.on('session:input', (e, id, data) => {
   if (s && !s.exited) {
     s.lastInputAt = Date.now();
     feedInputRecon(s, data);
-    // Fallback ohne Shell-Integration: Enter = Kommando gestartet
+    // Fallback without shell integration: Enter = command started
     if (!s.hasOsc133 && data.includes('\r')) setState(s, 'busy');
     s.proc.write(data);
   }
@@ -966,14 +968,14 @@ ipcMain.on('session:input', (e, id, data) => {
 ipcMain.on('session:resize', (e, id, cols, rows) => {
   const s = sessions.get(id);
   if (s && !s.exited && cols > 0 && rows > 0) {
-    try { s.proc.resize(cols, rows); } catch { /* Race beim Beenden */ }
+    try { s.proc.resize(cols, rows); } catch { /* race while shutting down */ }
   }
 });
 
 ipcMain.handle('session:close', (e, id) => {
   const s = sessions.get(id);
   if (s) {
-    try { s.proc.kill(); } catch { /* bereits beendet */ }
+    try { s.proc.kill(); } catch { /* already terminated */ }
     sessions.delete(id);
   }
 });
@@ -988,7 +990,7 @@ ipcMain.handle('session:setMeta', (e, id, meta) => {
 
 ipcMain.handle('file:preview', (e, id, relPath, source, opts) => {
   const s = sessions.get(id);
-  if (!s) return { kind: 'error', path: relPath, text: 'Session nicht gefunden' };
+  if (!s) return { kind: 'error', path: relPath, text: 'Session not found' };
   return previewFile(s, relPath, source, opts || {});
 });
 
@@ -1016,13 +1018,13 @@ ipcMain.handle('todos:set', (e, id, todos) => {
   if (todos.length) store[key] = todos;
   else delete store[key];
   try { fs.writeFileSync(todosPath(), JSON.stringify(store, null, 2)); }
-  catch { /* Platte voll o. ae. - Notizen bleiben im Speicher */ }
+  catch { /* disk full or similar - the notes stay in memory */ }
   if (win && !win.isDestroyed()) win.webContents.send('todos:changed', key, todos);
   return true;
 });
 
 // ---------------------------------------------------------------------------
-// Fenster
+// Window
 // ---------------------------------------------------------------------------
 function createWindow() {
   win = new BrowserWindow({
@@ -1046,7 +1048,7 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
-  for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* egal */ } }
-  if (rcDir) { try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch { /* egal */ } }
+  for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* never mind */ } }
+  if (rcDir) { try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch { /* never mind */ } }
   app.quit();
 });

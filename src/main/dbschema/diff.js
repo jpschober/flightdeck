@@ -1,20 +1,19 @@
 'use strict';
-// Vergleich zweier Schema-Staende (IR gegen IR).
+// Comparison of two schema states (IR against IR).
 //
-// Der Zweck ist nicht Vollstaendigkeit, sondern Aufmerksamkeit: eine
-// Schemaaenderung soll auffallen, damit jemand sie anschaut. Deshalb wird
-// nicht nur gezaehlt, sondern pro Tabelle festgehalten, *was* sich geaendert
-// hat - genau das braucht die Vorher/Nachher-Ansicht, um die richtigen Zeilen
-// zu markieren.
+// The purpose is not completeness but attention: a schema change should stand
+// out so that somebody looks at it. That is why we do not just count, but
+// record per table *what* has changed - which is exactly what the before/after
+// view needs in order to mark the right rows.
 //
-// Ausgabe:
+// Output:
 //   {
 //     changed, summary: { tables:{added,removed,changed}, columns:{...}, ... },
 //     tables: [ { id, status, columns: [...], constraints: [...], policies: [...],
 //                 rlsChanged, commentChanged } ],
 //     enums:  [ { id, status, added[], removed[] } ],
 //   }
-// `status` ist 'added' | 'removed' | 'changed' | 'same'.
+// `status` is 'added' | 'removed' | 'changed' | 'same'.
 
 const { COLUMN_FIELDS, constraintSignature, policySignature } = require('./ir');
 
@@ -25,17 +24,16 @@ function indexBy(list, key) {
 }
 
 /**
- * Bringt zwei Namenslisten in eine gemeinsame Reihenfolge: die neue Reihenfolge
- * gibt den Takt vor, entfallene Namen werden dort eingefuegt, wo sie vorher
- * standen. So kann die Vorher/Nachher-Ansicht beide Seiten Zeile fuer Zeile
- * nebeneinander legen.
+ * Brings two name lists into a common order: the new order sets the beat,
+ * dropped names are inserted where they used to stand. That lets the
+ * before/after view lay out both sides row by row.
  */
 function alignNames(oldNames, newNames) {
   const inNew = new Set(newNames);
   const out = [];
   let oi = 0;
   for (const name of newNames) {
-    // Alles, was vorher vor diesem Namen stand und heute fehlt, kommt davor
+    // Everything that used to come before this name and is gone today goes ahead of it
     while (oi < oldNames.length && oldNames[oi] !== name) {
       if (!inNew.has(oldNames[oi])) out.push(oldNames[oi]);
       oi++;
@@ -109,8 +107,8 @@ function diffEnums(oldEnums, newEnums) {
     if (!a) return { id, name: b.name, schema: b.schema, status: 'removed', values: b.values, added: [], removed: b.values };
     const added = a.values.filter((v) => !b.values.includes(v));
     const removed = b.values.filter((v) => !a.values.includes(v));
-    // Reine Umsortierung eines Enums ist eine echte Aenderung (die Sortierung
-    // haengt daran), zaehlt aber nicht als hinzugefuegt oder entfernt.
+    // Merely reordering an enum is a real change (the sort order depends on
+    // it), but it does not count as added or removed.
     const reordered = !added.length && !removed.length
       && (b.values.length !== a.values.length
         || b.values.some((v, i) => v !== a.values[i]));
@@ -153,8 +151,8 @@ function diff(baseIr, currentIr) {
     }
 
     if (status !== 'same') summary.tables[status]++;
-    // Bei neuen und entfernten Tabellen waeren alle Spalten "neu" bzw. "weg" -
-    // das sagt nichts, was die Tabellenzeile nicht schon sagt.
+    // For new and removed tables every column would be "new" or "gone" - that
+    // says nothing the table row does not already say.
     if (status === 'changed') {
       for (const c of columns) if (c.status !== 'same') summary.columns[c.status]++;
       for (const c of constraints) if (c.status !== 'same') summary.constraints[c.status]++;
@@ -182,20 +180,20 @@ function diff(baseIr, currentIr) {
   return { changed, summary, tables, enums };
 }
 
-/** Kurzer Satz fuer die Anzeige am Tab bzw. im Kopf des Panels. */
+/** Short sentence for the display on the tab or in the panel header. */
 function describe(result) {
-  if (!result || !result.changed) return 'Schema unverändert';
+  if (!result || !result.changed) return 'Schema unchanged';
   const s = result.summary;
   const bits = [];
   const add = (n, one, many) => { if (n) bits.push(`${n} ${n === 1 ? one : many}`); };
-  add(s.tables.added, 'neue Tabelle', 'neue Tabellen');
-  add(s.tables.removed, 'entfernte Tabelle', 'entfernte Tabellen');
-  add(s.tables.changed, 'geänderte Tabelle', 'geänderte Tabellen');
-  add(s.enums.added + s.enums.changed + s.enums.removed, 'Enum-Änderung', 'Enum-Änderungen');
-  return bits.join(' · ') || 'Schema geändert';
+  add(s.tables.added, 'new table', 'new tables');
+  add(s.tables.removed, 'removed table', 'removed tables');
+  add(s.tables.changed, 'changed table', 'changed tables');
+  add(s.enums.added + s.enums.changed + s.enums.removed, 'enum change', 'enum changes');
+  return bits.join(' · ') || 'Schema changed';
 }
 
-/** Zahl der Aenderungen - fuer das Zaehlerchen am Tab. */
+/** Number of changes - for the little counter on the tab. */
 function countChanges(result) {
   if (!result || !result.changed) return 0;
   const s = result.summary;

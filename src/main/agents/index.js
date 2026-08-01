@@ -1,32 +1,31 @@
 'use strict';
-// Der "Senser" fuer Agenten: prueft, welches Plugin sich fuer ein Terminal
-// zustaendig fuehlt, und laesst es zaehlen, wie viele Agenten dort gerade
-// arbeiten.
+// The "sensor" for agents: checks which plugin feels responsible for a
+// terminal and lets it count how many agents are working there right now.
 //
-// Wie beim DB-Schema weiss der Senser nichts ueber die Technik dahinter - kein
-// Wort ueber Claude, Transcripts oder Subagenten-Verzeichnisse. Er kennt nur
-// die Plugin-Schnittstelle:
+// As with the DB schema, the sensor knows nothing about the technology behind
+// it - not a word about Claude, transcripts or subagent directories. It only
+// knows the plugin interface:
 //
 //   id, label
 //   detect(ctx) -> { confidence, evidence[] } | null
 //   read(ctx)   -> { agents: [...] }
 //
-// `ctx` ist, was die Shell-Beobachtung ueber das Terminal hergibt: Verzeichnis,
-// laufendes Kommando, gebundene Session. Welche dieser Angaben ein Plugin
-// braucht, ist seine Sache - das Claude-Plugin erkennt sich an der gebundenen
-// Session, ein Plugin fuer eine andere Agenten-CLI koennte am Kommando gehen.
+// `ctx` is whatever the shell observation can tell about the terminal:
+// directory, running command, bound session. Which of those a plugin needs is
+// its own business - the Claude plugin recognises itself by the bound session,
+// a plugin for a different agent CLI could go by the command.
 //
-// Ein weiteres Plugin einzuhaengen heisst: Datei unter plugins/ anlegen, in
-// PLUGINS eintragen, fertig.
+// Adding another plugin means: create a file under plugins/, register it in
+// PLUGINS, done.
 
 const PLUGINS = [
   require('./plugins/claude'),
 ];
 
-// Anders als beim Schema wird das Ergebnis hier *nicht* zwischengespeichert:
-// "arbeitet gerade" ist eine Aussage ueber den Augenblick, ein gecachter Stand
-// waere sofort gelogen. Teuer ist ohnehin nur das Aufarbeiten der Historie -
-// und das haelt das Plugin selbst fest.
+// Unlike the schema, the result is *not* cached here: "currently working" is a
+// statement about this very moment, and a cached one would be a lie right
+// away. The only expensive part is working through the history anyway - and
+// the plugin holds on to that itself.
 
 async function detectAll(ctx) {
   const found = [];
@@ -35,21 +34,21 @@ async function detectAll(ctx) {
     try {
       d = await plugin.detect(ctx);
     } catch (e) {
-      // Ein kaputtes Plugin darf die anderen nicht mitnehmen
+      // A broken plugin must not take the others down with it
       d = null;
     }
     if (d && d.confidence > 0) {
       found.push({ plugin, confidence: d.confidence, evidence: d.evidence || [] });
     }
   }
-  // Das ueberzeugteste Plugin gewinnt; bei Gleichstand die Reihenfolge oben.
+  // The most confident plugin wins; on a tie, the order above decides.
   return found.sort((a, b) => b.confidence - a.confidence);
 }
 
 /**
- * Wie viele Agenten arbeiten in diesem Terminal? `null`, wenn sich kein Plugin
- * zustaendig fuehlt - dann laeuft dort nichts, wovon wir wissen, und die
- * Anzeige bleibt leer.
+ * How many agents are working in this terminal? `null` if no plugin feels
+ * responsible - then nothing we know about is running there, and the display
+ * stays empty.
  *
  * @param {object} ctx  { cwd, agentCwd, command, claudeSessionId }
  */
@@ -77,16 +76,16 @@ async function getAgentView(ctx) {
     const r = await winner.plugin.read(ctx);
     agents = (r && r.agents) || [];
   } catch (e) {
-    // Zaehlen fehlgeschlagen heisst nicht "keine Agenten" - lieber gar keine
-    // Zahl zeigen als eine falsche.
+    // Counting failed does not mean "no agents" - better to show no number at
+    // all than a wrong one.
     return { ...view, error: e.message };
   }
 
   view.total = agents.length;
-  // An die Oberflaeche geht nur, was dort auch gebraucht wird: die laufenden
-  // Agenten mit ihrem Auftrag. `lastActivity` bleibt hier - der Wert aendert
-  // sich staendig und wuerde den Vergleich "hat sich etwas getan?" im Refresh
-  // bei jedem Durchlauf ausloesen.
+  // Only what is actually needed there goes to the surface: the running agents
+  // with their task. `lastActivity` stays here - the value changes constantly
+  // and would trip the "did anything happen?" comparison in the refresh on
+  // every single pass.
   view.agents = agents
     .filter((a) => a.running)
     .map(({ id, description, type, worktree, depth, startedAt }) => ({
