@@ -13,6 +13,8 @@
 // reported as a warning - an incomplete schema with a note is usable, a crash
 // is not.
 
+const { t } = require('../../i18n');
+
 const DEFAULT_SCHEMA = 'public';
 
 // ---------------------------------------------------------------------------
@@ -579,14 +581,14 @@ function addTablePart(model, table, part) {
         }
       }
     } else {
-      warn(model, `Constraint not parsed: ${firstWords(part)}`);
+      warn(model, t('ddl.warn.constraint', { text: firstWords(part) }));
     }
     return;
   }
 
   const parsed = parseColumnDef(part);
   if (!parsed) {
-    warn(model, `Column not parsed: ${firstWords(part)}`);
+    warn(model, t('ddl.warn.column', { text: firstWords(part) }));
     return;
   }
   table.columns.push(parsed.column);
@@ -600,12 +602,12 @@ function addTablePart(model, table, part) {
 function createTable(model, rest) {
   const s = rest.replace(/^\s*IF\s+NOT\s+EXISTS\s+/i, '');
   const q = readQualified(s);
-  if (!q) return warn(model, 'CREATE TABLE without a readable name');
+  if (!q) return warn(model, t('ddl.warn.createNoName'));
 
   const body = readParens(q.rest);
   if (!body) {
     // CREATE TABLE ... AS SELECT / PARTITION OF: no columns given
-    return warn(model, `CREATE TABLE ${q.name}: no column list`);
+    return warn(model, t('ddl.warn.createNoColumns', { name: q.name }));
   }
 
   const table = {
@@ -634,7 +636,7 @@ function dropTable(model, rest) {
 function alterTable(model, rest) {
   let s = rest.replace(/^\s*IF\s+EXISTS\s+/i, '').replace(/^\s*ONLY\s+/i, '');
   const q = readQualified(s);
-  if (!q) return warn(model, 'ALTER TABLE without a readable name');
+  if (!q) return warn(model, t('ddl.warn.alterNoName'));
   const table = getTable(model, q.schema, q.name);
   s = q.rest.trimStart();
 
@@ -689,7 +691,7 @@ function alterTable(model, rest) {
     if (/ROW\s+LEVEL\s+SECURITY/i.test(s)) {
       target = externalTable(model, q.schema, q.name);
     } else {
-      return warn(model, `ALTER TABLE ${q.name}: unknown table`);
+      return warn(model, t('ddl.warn.alterUnknown', { name: q.name }));
     }
   }
   for (const action of splitTopLevel(s)) applyAlterAction(model, target, action);
@@ -718,11 +720,11 @@ function applyAlterAction(model, table, action) {
             if (col) col.nullable = false;
           }
         }
-      } else warn(model, `ADD CONSTRAINT not parsed: ${firstWords(body)}`);
+      } else warn(model, t('ddl.warn.addConstraint', { text: firstWords(body) }));
       return;
     }
     const parsed = parseColumnDef(body);
-    if (!parsed) return warn(model, `ADD COLUMN not parsed: ${firstWords(body)}`);
+    if (!parsed) return warn(model, t('ddl.warn.addColumn', { text: firstWords(body) }));
     if (!findColumn(table, parsed.column.name)) table.columns.push(parsed.column);
     for (const c of parsed.constraints) addConstraint(table, c);
     return;
@@ -1012,7 +1014,7 @@ function applySql(model, sql) {
     try {
       applyStatement(model, statement);
     } catch (e) {
-      warn(model, `Statement skipped (${e.message}): ${firstWords(statement)}`);
+      warn(model, t('ddl.warn.skipped', { message: e.message, text: firstWords(statement) }));
     }
   }
   return model;

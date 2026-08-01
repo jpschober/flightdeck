@@ -15,11 +15,13 @@
         <canvas id="pulse-canvas" aria-hidden="true"></canvas>
         <span class="app-name">Flightdeck</span>
         <div class="header-actions">
-          <button id="btn-grid" class="icon-btn" title="Grid overview of all sessions (Ctrl+G)" aria-label="Grid overview">⊞</button>
-          <button id="btn-claude-sessions" class="icon-btn" title="Browse &amp; resume Claude sessions" aria-label="Claude sessions">⟲</button>
+          <div class="more-wrap">
+            <button id="btn-more" class="icon-btn" data-i18n-title="header.more" data-i18n-aria="header.more" title="More actions" aria-label="More actions">⋯</button>
+            <div id="more-menu" class="menu hidden"></div>
+          </div>
           <div class="new-session-wrap">
-            <button id="btn-new" title="New session (default shell)" aria-label="New session">+</button>
-            <button id="btn-new-menu" title="Choose shell" aria-label="Choose shell">▾</button>
+            <button id="btn-new" data-i18n-title="header.new.title" data-i18n-aria="header.new.aria" title="New session (default shell)" aria-label="New session">+</button>
+            <button id="btn-new-menu" data-i18n-title="header.shell.title" data-i18n-aria="header.shell.title" title="Choose shell" aria-label="Choose shell">▾</button>
             <div id="shell-menu" class="menu hidden"></div>
           </div>
         </div>
@@ -32,8 +34,8 @@
     <main id="terminal-area">
       <div id="terminals"></div>
       <div id="empty-state" class="hidden">
-        <p>No active session.</p>
-        <p>Click <kbd>+</kbd> or press <kbd>Ctrl</kbd>+<kbd>T</kbd>.</p>
+        <p data-i18n="empty.title">No active session.</p>
+        <p id="empty-hint">Click <kbd>+</kbd> or press <kbd>Ctrl</kbd>+<kbd>T</kbd>.</p>
       </div>
       <!-- Grid overview: all sessions as live tiles -->
       <div id="grid-view" class="hidden">
@@ -45,24 +47,24 @@
     <!-- Right panel: git context, history and notes as tabs -->
     <aside id="context-panel">
       <nav id="panel-tabs">
-        <button class="panel-tab active" data-tab="git">Git<span class="tab-badge hidden" id="badge-git"></span></button>
-        <button class="panel-tab" data-tab="history">History<span class="tab-badge hidden" id="badge-history"></span></button>
-        <button class="panel-tab" data-tab="dbschema">DB schema<span class="tab-badge hidden" id="badge-dbschema"></span></button>
-        <button class="panel-tab" data-tab="todos">Notes<span class="tab-badge hidden" id="badge-todos"></span></button>
-        <button class="panel-tab" data-tab="usage">Usage<span class="tab-dot hidden" id="dot-usage"></span></button>
-        <button id="btn-panel-zoom" class="icon-btn" title="Enlarge panel" aria-label="Enlarge panel">⤢</button>
+        <button class="panel-tab active" data-tab="git"><span data-i18n="tabs.git">Git</span><span class="tab-badge hidden" id="badge-git"></span></button>
+        <button class="panel-tab" data-tab="history"><span data-i18n="tabs.history">History</span><span class="tab-badge hidden" id="badge-history"></span></button>
+        <button class="panel-tab" data-tab="dbschema"><span data-i18n="tabs.dbschema">DB schema</span><span class="tab-badge hidden" id="badge-dbschema"></span></button>
+        <button class="panel-tab" data-tab="todos"><span data-i18n="tabs.notes">Notes</span><span class="tab-badge hidden" id="badge-todos"></span></button>
+        <button class="panel-tab" data-tab="usage"><span data-i18n="tabs.usage">Usage</span><span class="tab-dot hidden" id="dot-usage"></span></button>
+        <button id="btn-panel-zoom" class="icon-btn" data-i18n-title="panel.enlarge" data-i18n-aria="panel.enlarge" title="Enlarge panel" aria-label="Enlarge panel">⤢</button>
       </nav>
       <div class="panel-page" id="page-git">
         <!-- Notice when the agent works in a worktree and branch and file list
              therefore do not belong to the shell's directory -->
         <div id="wt-banner" class="hidden"></div>
         <section id="pr-section">
-          <h2>Pull Request</h2>
-          <div id="pr-card"><div class="muted">No session selected</div></div>
+          <h2 data-i18n="git.heading.pr">Pull Request</h2>
+          <div id="pr-card"><div class="muted" data-i18n="common.noSession">No session selected</div></div>
           <div id="pr-extra"></div>
         </section>
         <section id="files-section">
-          <h2>Changed files</h2>
+          <h2 data-i18n="git.heading.files">Changed files</h2>
           <div id="file-list"></div>
         </section>
       </div>
@@ -74,12 +76,12 @@
       </div>
       <div class="panel-page hidden" id="page-todos">
         <div id="todo-list"></div>
-        <input id="todo-input" type="text" placeholder="New note… (Enter)" />
+        <input id="todo-input" type="text" data-i18n-placeholder="notes.placeholder" placeholder="New note… (Enter)" />
       </div>
       <div class="panel-page hidden" id="page-dbschema">
         <div id="db-head"></div>
         <div id="db-signal"></div>
-        <input id="db-search" type="text" placeholder="Search table or column…" />
+        <input id="db-search" type="text" data-i18n-placeholder="db.search" placeholder="Search table or column…" />
         <div id="db-tables"><div class="muted">—</div></div>
       </div>
     </aside>
@@ -92,8 +94,8 @@
     <div id="preview-window">
       <div id="preview-header">
         <span id="preview-title"></span>
-        <div id="preview-modes" role="tablist" aria-label="View"></div>
-        <button id="preview-close" title="Close (Esc)" aria-label="Close preview">✕</button>
+        <div id="preview-modes" role="tablist" data-i18n-aria="preview.view" aria-label="View"></div>
+        <button id="preview-close" data-i18n-title="preview.close" data-i18n-aria="preview.close.aria" title="Close (Esc)" aria-label="Close preview">✕</button>
       </div>
       <div id="preview-content"></div>
     </div>
@@ -104,8 +106,8 @@
     <div id="dbdiff-window">
       <div id="dbdiff-header">
         <span id="dbdiff-title"></span>
-        <div id="dbdiff-modes" role="tablist" aria-label="Scope"></div>
-        <button id="dbdiff-close" title="Close (Esc)" aria-label="Close comparison">✕</button>
+        <div id="dbdiff-modes" role="tablist" data-i18n-aria="dbdiff.scope" aria-label="Scope"></div>
+        <button id="dbdiff-close" data-i18n-title="dbdiff.close" data-i18n-aria="dbdiff.close.aria" title="Close (Esc)" aria-label="Close comparison">✕</button>
       </div>
       <div id="dbdiff-cols">
         <div class="dbd-head old" id="dbdiff-head-old"></div>
@@ -119,8 +121,8 @@
   <div id="sessions-overlay" class="hidden">
     <div id="sessions-window">
       <div id="sessions-header">
-        <input id="sessions-search" type="text" placeholder="Search sessions (name, prompt, project)…" />
-        <button id="sessions-close" title="Close (Esc)" aria-label="Close session browser">✕</button>
+        <input id="sessions-search" type="text" data-i18n-placeholder="browser.search" placeholder="Search sessions (name, prompt, project)…" />
+        <button id="sessions-close" data-i18n-title="browser.close" data-i18n-aria="browser.close.aria" title="Close (Esc)" aria-label="Close session browser">✕</button>
       </div>
       <div id="sessions-list"></div>
     </div>
@@ -128,14 +130,15 @@
 
   <!-- Popover: edit title/label -->
   <div id="meta-popover" class="hidden">
-    <label>Title <input id="meta-title" type="text" placeholder="(automatic)" /></label>
-    <label>Label <input id="meta-label" type="text" placeholder="e.g. ticket no." /></label>
+    <label><span data-i18n="meta.title">Title</span> <input id="meta-title" type="text" data-i18n-placeholder="meta.title.placeholder" placeholder="(automatic)" /></label>
+    <label><span data-i18n="meta.label">Label</span> <input id="meta-label" type="text" data-i18n-placeholder="meta.label.placeholder" placeholder="e.g. ticket no." /></label>
     <div class="popover-actions">
-      <button id="meta-save">Save</button>
-      <button id="meta-cancel">Cancel</button>
+      <button id="meta-save" data-i18n="meta.save">Save</button>
+      <button id="meta-cancel" data-i18n="meta.cancel">Cancel</button>
     </div>
   </div>
 
+  <script src="../i18n/runtime.js"></script>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>

@@ -9,6 +9,9 @@ clearance for takeoff.
 - **Multiple shell sessions in parallel**: PowerShell, PowerShell 7, Git Bash,
   CMD, WSL (Windows) or Bash/Zsh (Linux). New session via `+` (default shell)
   or `▾` (shell picker), `Ctrl+T` / `Ctrl+Shift+W`.
+- **Sidebar header**: `+` / `▾` start a session, everything rarer (grid
+  overview, Claude session browser, interface language) sits in the `⋯` menu —
+  a permanent button each turned the header into a row of competing icons.
 - **Session list on the left** – every tab shows:
   - **Status**: 🟡 working · ⭕ waiting for a command · 🔵 agent (e.g. Claude
     Code) is waiting for *your* input — you see at a glance who needs you
@@ -48,9 +51,47 @@ src/main/main.js     Electron main: PTY sessions (node-pty), shell detection,
 src/main/gitinfo.js  git status/branch + PR info via gh (cached)
 src/main/agents/     Running agents: plugin registry ("sensor") + plugins
 src/main/dbschema/   DB schema: plugin registry ("sensor"), DDL reader, diff
+src/main/settings.js persisted settings (interface language)
+src/i18n/            interface languages: runtime, registry, one file per language
 src/preload.js       contextBridge API for the renderer
 src/renderer/        UI: sidebar, xterm terminals, tab panel, preview
 ```
+
+### Languages
+
+The interface ships in English, German, French, Italian and Spanish. On first
+start it follows the system language and falls back to English for anything
+else; the `⋯` menu in the sidebar header switches at any time and the choice is
+remembered.
+
+```
+src/i18n/runtime.js     plural forms and placeholders (used by both processes)
+src/i18n/index.js       registry, current language, English as the fallback
+src/i18n/locales/*.js   one file per language, flat key -> text
+```
+
+English is the source language and the fallback: a key a translation has not
+filled in yet comes out English rather than blank, so an incomplete language
+file degrades into a mixed interface instead of a broken one. Plural forms come
+from `Intl.PluralRules`, so every language brings its own rule - French counts
+zero as singular, the others do not, and none of that is hard-coded.
+
+A string entry is either plain text or a set of plural forms:
+
+```js
+'notes.empty':    'No notes',
+'session.agents': { one: '{count} agent working', other: '{count} agents working' },
+```
+
+Switching does **not** reload the window. The terminals hang off live PTYs in
+the main process, and a reload would drop the whole session list - so the
+visible text is replaced in place. Strings the main process builds itself
+(schema warnings, comparison baselines, the shell name `Command Prompt`) are
+translated there; a switch therefore clears the schema cache, because those
+strings were translated when the cache was filled.
+
+Adding a language means: copy `locales/en.js`, translate it, register it in
+`LOCALES` in `src/i18n/index.js`, done.
 
 ### Shell integration
 

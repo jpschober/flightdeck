@@ -9,6 +9,7 @@
 // done.
 
 const path = require('path');
+const { t } = require('../../i18n');
 const { run } = require('../gitinfo');
 const { worktreeProvider, gitProvider } = require('./files');
 const { diff, describe, countChanges } = require('./diff');
@@ -29,6 +30,16 @@ const PLUGINS = [
 const cache = new Map(); // key -> { stamp, stampPaths, at, result }
 const CACHE_MAX = 60;
 const NO_PLUGIN_TTL = 15_000;
+
+/**
+ * Drops everything cached. Schemas carry translated warnings and the baselines
+ * carry translated labels, so a language switch makes the cache wrong - not
+ * stale, wrong. The next request reads again in the new language.
+ */
+function clearCache() {
+  cache.clear();
+  defaultBranchCache.clear();
+}
 
 function cachePut(key, entry) {
   cache.delete(key);
@@ -94,7 +105,7 @@ async function loadSchema(provider, key, force = false) {
       schema = await winner.plugin.read(provider);
     } catch (e) {
       schema = ir.empty({ plugin: winner.plugin.id, label: winner.plugin.label, root: provider.root });
-      schema.warnings.push(`Reading failed: ${e.message}`);
+      schema.warnings.push(t('db.readFailed', { message: e.message }));
     }
     result = {
       plugin: {
@@ -173,8 +184,8 @@ async function baselineOptions(root, pr) {
       push({
         mode: 'pr',
         ref,
-        label: `PR #${pr.number} · against ${pr.baseRefName}`,
-        hint: 'all changes in this pull request',
+        label: t('baseline.pr', { number: pr.number, base: pr.baseRefName }),
+        hint: t('baseline.pr.hint'),
       });
     }
   }
@@ -186,8 +197,8 @@ async function baselineOptions(root, pr) {
       push({
         mode: 'branch',
         ref,
-        label: `branch point from ${def.replace(/^origin\//, '')}`,
-        hint: 'all changes on this branch',
+        label: t('baseline.branch', { branch: def.replace(/^origin\//, '') }),
+        hint: t('baseline.branch.hint'),
       });
     }
   }
@@ -195,8 +206,8 @@ async function baselineOptions(root, pr) {
   push({
     mode: 'head',
     ref: head,
-    label: 'last commit (HEAD)',
-    hint: 'only what is not committed yet',
+    label: t('baseline.head'),
+    hint: t('baseline.head.hint'),
   });
 
   return options;
@@ -259,4 +270,4 @@ async function getSchemaView(root, opts = {}) {
   return view;
 }
 
-module.exports = { getSchemaView, PLUGINS };
+module.exports = { getSchemaView, clearCache, PLUGINS };

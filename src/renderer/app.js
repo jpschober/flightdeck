@@ -1,5 +1,20 @@
 'use strict';
-/* global Terminal, FitAddon, WebLinksAddon */
+/* global Terminal, FitAddon, WebLinksAddon, I18nRuntime */
+
+// ---------------------------------------------------------------------------
+// Language
+//
+// The dictionary arrives ready-made from the main process (see preload.js) and
+// the plural/placeholder logic is the same runtime the main process uses - the
+// renderer only has to know how to reach it.
+//
+// Switching does not reload the page: the terminals hang off live PTYs in the
+// main process, and a reload would drop the whole session list. So the visible
+// text is replaced in place instead - see retranslate().
+// ---------------------------------------------------------------------------
+let locale = window.api.i18n.locale;
+const locales = window.api.i18n.locales;
+let t = I18nRuntime.createT(window.api.i18n.dict, locale);
 
 const sessions = new Map(); // id -> { meta..., term, fit, paneEl, itemEl }
 let activeId = null;
@@ -7,6 +22,8 @@ let shells = [];
 
 const $ = (sel) => document.querySelector(sel);
 const sessionListEl = $('#session-list');
+const shellMenu = $('#shell-menu');
+const moreMenu = $('#more-menu');
 const terminalsEl = $('#terminals');
 const emptyStateEl = $('#empty-state');
 const prCardEl = $('#pr-card');
@@ -157,6 +174,119 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// index.html carries the English wording so the file reads on its own; these
+// attributes say which key takes its place.
+function applyStaticI18n() {
+  for (const el of document.querySelectorAll('[data-i18n]')) {
+    el.textContent = t(el.dataset.i18n);
+  }
+  for (const el of document.querySelectorAll('[data-i18n-title]')) {
+    el.title = t(el.dataset.i18nTitle);
+  }
+  for (const el of document.querySelectorAll('[data-i18n-aria]')) {
+    el.setAttribute('aria-label', t(el.dataset.i18nAria));
+  }
+  for (const el of document.querySelectorAll('[data-i18n-placeholder]')) {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  }
+  // The hint has two keys inside it. The surrounding text is ours, so the
+  // markup can be assembled here - only the keys are substituted, nothing
+  // from outside gets in.
+  $('#empty-hint').innerHTML = escapeHtml(t('empty.hint', { plus: '\u0000', shortcut: '\u0001' }))
+    .replace('\u0000', '<kbd>+</kbd>')
+    .replace('\u0001', `<kbd>${escapeHtml(t('key.ctrl'))}</kbd>+<kbd>T</kbd>`);
+}
+
+/**
+ * Everything visible, again in the new language. Panels that are closed are
+ * rebuilt too - their content is what the badge on the tab counts.
+ */
+async function retranslate() {
+  applyStaticI18n();
+  for (const s of sessions.values()) updateSessionItem(s);
+  buildMoreMenu();
+  buildShellMenu();
+  panelZoomBtn.title = panelZoomed ? t('panel.shrink') : t('panel.enlarge');
+
+  const active = activeId ? sessions.get(activeId) : null;
+  renderContextPanel();
+  renderHistory(active);
+  renderTodos(active);
+  // The main process builds the schema warnings and baseline labels itself and
+  // has just dropped its cache - so this has to go out again, not come from
+  // the renderer's own copy.
+  dbState.lastJson = '';
+  await Promise.all([
+    loadDbSchema(true).catch(() => {}),
+    loadUsage(true).catch(() => {}),
+  ]);
+  if (!previewOverlay.classList.contains('hidden') && previewState) {
+    renderPreviewModes(Boolean(previewState.cache.default
+      && previewState.cache.default.kind === 'diff'));
+    renderPreview();
+  }
+}
+
+async function setLanguage(code) {
+  if (code === locale) return;
+  const res = await window.api.setLocale(code);
+  locale = res.locale;
+  t = I18nRuntime.createT(res.dict, locale);
+  await retranslate();
+}
+
+// The shells come from the main process and one of them ("Command Prompt") is
+// translated there, so the menu is rebuilt rather than relabelled.
+async function buildShellMenu() {
+  shells = await window.api.listShells();
+  shellMenu.innerHTML = '';
+  for (const sh of shells) {
+    const b = document.createElement('button');
+    b.textContent = sh.name;
+    b.addEventListener('click', () => {
+      shellMenu.classList.add('hidden');
+      newSession(sh.id);
+    });
+    shellMenu.appendChild(b);
+  }
+}
+
+// Everything that is not "start a new session" lives in one menu. Those are
+// the rare moves - a permanent button each turned the header into a row of
+// competing icons, and the shortcut belongs next to the entry anyway.
+function buildMoreMenu() {
+  moreMenu.innerHTML = '';
+
+  const entry = (className, icon, label, shortcut, onClick) => {
+    const b = document.createElement('button');
+    b.className = className;
+    b.innerHTML = '<span class="mi-icon"></span><span class="mi-label"></span><span class="mi-key"></span>';
+    b.querySelector('.mi-icon').textContent = icon;
+    b.querySelector('.mi-label').textContent = label;
+    b.querySelector('.mi-key').textContent = shortcut;
+    b.addEventListener('click', () => { moreMenu.classList.add('hidden'); onClick(); });
+    moreMenu.appendChild(b);
+  };
+
+  entry('menu-item', '⊞', t('header.grid.aria'), `${t('key.ctrl')}+G`, toggleGrid);
+  entry('menu-item', '⟲', t('header.sessions.aria'), '', openSessionBrowser);
+
+  const sep = document.createElement('div');
+  sep.className = 'menu-sep';
+  moreMenu.appendChild(sep);
+  const title = document.createElement('div');
+  title.className = 'menu-title';
+  title.textContent = t('header.language.title');
+  moreMenu.appendChild(title);
+
+  for (const l of locales) {
+    const active = l.code === locale;
+    // The endonym is not translated - see the registry in src/i18n/index.js.
+    entry(`menu-item lang${active ? ' active' : ''}`, active ? '✓' : '', l.name, '',
+      () => setLanguage(l.code));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Create / activate / close sessions
 // ---------------------------------------------------------------------------
@@ -306,7 +436,7 @@ function buildSessionItem(s) {
       <span class="si-cwd"></span>
       <span class="si-branch hidden"></span>
     </div>
-    <button class="si-close" title="Close session" aria-label="Close session">✕</button>`;
+    <button class="si-close"></button>`;
   el.addEventListener('click', (e) => {
     if (e.target.closest('.si-close')) return;
     setActive(s.id);
@@ -321,13 +451,16 @@ function buildSessionItem(s) {
 function updateSessionItem(s) {
   const el = s.itemEl;
   if (!el) return;
+  const closeEl = el.querySelector('.si-close');
+  closeEl.textContent = '✕';
+  closeEl.title = t('session.close');
+  closeEl.setAttribute('aria-label', t('session.close'));
   el.classList.toggle('exited', s.exited);
   const statusEl = el.querySelector('.si-status');
   const state = s.exited ? 'exited' : (s.state || 'idle');
   statusEl.className = 'si-status ' + state;
-  statusEl.title = state === 'busy' ? 'Working…'
-    : state === 'attention' ? 'Input expected – it is your turn'
-    : state === 'exited' ? 'Exited' : 'Waiting for input';
+  statusEl.title = t('session.state.' + (
+    state === 'busy' || state === 'attention' || state === 'exited' ? state : 'idle'));
   el.querySelector('.si-title').textContent =
     s.title || `${basename(s.cwd) || s.shellName}`;
   const labelEl = el.querySelector('.si-label');
@@ -354,7 +487,7 @@ function updateAgentChip(el, agents) {
     const what = a.description || a.type || a.id.slice(0, 8);
     return `• ${what}${a.worktree ? ` (⑂ ${a.worktree})` : ''}`;
   });
-  el.title = [`${n} ${n === 1 ? 'agent working' : 'agents working'}`, ...lines].join('\n');
+  el.title = [t('session.agents', { count: n }), ...lines].join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +497,7 @@ function renderContextPanel() {
   const s = activeId ? sessions.get(activeId) : null;
   const wtBannerEl = $('#wt-banner');
   if (!s) {
-    prCardEl.innerHTML = '<div class="muted">No session selected</div>';
+    prCardEl.innerHTML = `<div class="muted">${escapeHtml(t('common.noSession'))}</div>`;
     $('#pr-extra').innerHTML = '';
     fileListEl.innerHTML = '';
     wtBannerEl.classList.add('hidden');
@@ -379,9 +512,9 @@ function renderContextPanel() {
   if (s.worktree) {
     wtBannerEl.innerHTML = `
       <span class="wt-icon">⑂</span>
-      <span class="wt-text">Agent is working in worktree
+      <span class="wt-text">${escapeHtml(t('git.worktree.notice'))}
         <code>${escapeHtml(s.worktree)}</code></span>
-      <span class="wt-sub" title="${escapeHtml(s.agentCwd || '')}">Shell: ${escapeHtml(s.cwd)}</span>`;
+      <span class="wt-sub" title="${escapeHtml(s.agentCwd || '')}">${escapeHtml(t('git.worktree.shell', { path: s.cwd }))}</span>`;
   }
 
   // --- PR card ---
@@ -398,10 +531,10 @@ function renderContextPanel() {
          </div>`
       : '';
     prCardEl.innerHTML = `
-      <div class="pr-title" title="Open in browser">#${pr.number} ${escapeHtml(pr.title)}</div>
+      <div class="pr-title" title="${escapeHtml(t('git.pr.open'))}">#${pr.number} ${escapeHtml(pr.title)}</div>
       <div class="pr-meta">
         <span class="pr-state ${stateClass}">${escapeHtml(stateText)}</span>
-        ${pr.author ? `<span>by ${escapeHtml(pr.author)}</span>` : ''}
+        ${pr.author ? `<span>${escapeHtml(t('git.pr.by', { author: pr.author }))}</span>` : ''}
         ${checks}
       </div>
       <div class="pr-branches">${escapeHtml(pr.headRefName)} → ${escapeHtml(pr.baseRefName)}</div>
@@ -412,10 +545,11 @@ function renderContextPanel() {
     prTitleEl.addEventListener('click', () => window.api.openExternal(pr.url));
     renderPrExtra(prExtraEl, pr);
   } else if (s.branch) {
-    prCardEl.innerHTML = `<div class="muted">No pull request for <code>${escapeHtml(s.branch)}</code></div>`;
+    prCardEl.innerHTML = `<div class="muted">${
+      escapeHtml(t('git.pr.none', { branch: '\u0000' })).replace('\u0000', `<code>${escapeHtml(s.branch)}</code>`)}</div>`;
     prExtraEl.innerHTML = '';
   } else {
-    prCardEl.innerHTML = '<div class="muted">Not a git repository</div>';
+    prCardEl.innerHTML = `<div class="muted">${escapeHtml(t('git.noRepo'))}</div>`;
     prExtraEl.innerHTML = '';
   }
 
@@ -428,10 +562,10 @@ function renderContextPanel() {
   const hasPr = Boolean(s.pr && s.pr.files && s.pr.files.length);
 
   if (hasPr) {
-    const t = document.createElement('div');
-    t.className = 'file-group-title';
-    t.textContent = `In the pull request (${s.pr.files.length})`;
-    frag.appendChild(t);
+    const t2 = document.createElement('div');
+    t2.className = 'file-group-title';
+    t2.textContent = t('git.files.inPr', { count: s.pr.files.length });
+    frag.appendChild(t2);
     for (const f of s.pr.files) {
       frag.appendChild(buildFileItem(s, f, 'pr'));
     }
@@ -439,17 +573,17 @@ function renderContextPanel() {
     const open = s.files.filter((f) => !f.committed);
     const done = s.files.filter((f) => f.committed);
     if (open.length) {
-      const t = document.createElement('div');
-      t.className = 'file-group-title';
-      t.textContent = 'Working directory';
-      frag.appendChild(t);
+      const t2 = document.createElement('div');
+      t2.className = 'file-group-title';
+      t2.textContent = t('git.files.worktree');
+      frag.appendChild(t2);
       for (const f of open) frag.appendChild(buildFileItem(s, f, 'wt'));
     }
     if (done.length) {
-      const t = document.createElement('div');
-      t.className = 'file-group-title';
-      t.textContent = `Committed (${done.length})`;
-      frag.appendChild(t);
+      const t2 = document.createElement('div');
+      t2.className = 'file-group-title';
+      t2.textContent = t('git.files.committed', { count: done.length });
+      frag.appendChild(t2);
       for (const f of done) frag.appendChild(buildFileItem(s, f, 'wt'));
     }
   }
@@ -457,7 +591,7 @@ function renderContextPanel() {
   if (!frag.childNodes.length) {
     const d = document.createElement('div');
     d.className = 'muted';
-    d.textContent = s.branch ? 'No changes' : '—';
+    d.textContent = s.branch ? t('git.files.none') : '—';
     frag.appendChild(d);
   }
   fileListEl.appendChild(frag);
@@ -486,19 +620,21 @@ function renderPrExtra(container, pr) {
   const frag = document.createDocumentFragment();
 
   if (pr.body && pr.body.trim()) {
-    frag.appendChild(buildDetails('body', 'Description', `<div class="md">${mdToHtml(pr.body)}</div>`));
+    frag.appendChild(buildDetails('body', t('git.pr.description'), `<div class="md">${mdToHtml(pr.body)}</div>`));
   }
 
   if (pr.checks && pr.checks.total) {
     const rows = pr.checks.items.map((c) =>
       `<div class="check-row"><span class="check-dot ${c.status}"></span>${escapeHtml(c.name)}</div>`).join('');
-    frag.appendChild(buildDetails('checks', `Checks (${pr.checks.success}✓ ${pr.checks.failure}✗ ${pr.checks.pending}●)`, rows));
+    frag.appendChild(buildDetails('checks', t('git.pr.checks', {
+      success: pr.checks.success, failure: pr.checks.failure, pending: pr.checks.pending,
+    }), rows));
   }
 
   if (pr.commits && pr.commits.length) {
     const rows = pr.commits.slice().reverse().map((c) =>
       `<div class="commit-row"><code class="commit-sha">${escapeHtml(c.sha)}</code>${escapeHtml(c.message)}</div>`).join('');
-    frag.appendChild(buildDetails('commits', `Commits (${pr.commits.length})`, rows));
+    frag.appendChild(buildDetails('commits', t('git.pr.commits', { count: pr.commits.length }), rows));
   }
 
   const feedback = [
@@ -511,11 +647,11 @@ function renderPrExtra(container, pr) {
         <div class="fb-head">
           <strong>${escapeHtml(f.author || '?')}</strong>
           ${f.kind === 'review' ? `<span class="fb-state ${escapeHtml((f.state || '').toLowerCase())}">${escapeHtml(f.state || '')}</span>` : ''}
-          <span class="fb-date">${f.at ? new Date(f.at).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+          <span class="fb-date">${f.at ? new Date(f.at).toLocaleString(locale, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
         </div>
         ${f.body ? `<div class="md">${mdToHtml(f.body)}</div>` : ''}
       </div>`).join('');
-    frag.appendChild(buildDetails('feedback', `Comments & reviews (${feedback.length})`, rows));
+    frag.appendChild(buildDetails('feedback', t('git.pr.feedback', { count: feedback.length }), rows));
   }
 
   container.appendChild(frag);
@@ -532,9 +668,7 @@ function buildFileItem(s, f, source) {
   el.className = 'file-item'
     + (f.committed ? ' committed' : '')
     + (isDir ? ' is-dir' : '');
-  el.title = isDir
-    ? `${filePath} — directory, no preview`
-    : filePath;
+  el.title = isDir ? t('git.files.dir', { path: filePath }) : filePath;
 
   const stat = (f.additions !== undefined || f.deletions !== undefined)
     ? `<span class="file-diffstat"><span class="add">+${f.additions ?? 0}</span> <span class="del">−${f.deletions ?? 0}</span></span>`
@@ -561,21 +695,21 @@ const historyListEl = $('#history-list');
 function renderHistory(s) {
   historyListEl.innerHTML = '';
   if (!s || !s.history.length) {
-    historyListEl.innerHTML = '<div class="muted">No input yet</div>';
+    historyListEl.innerHTML = `<div class="muted">${escapeHtml(t('history.empty'))}</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
   for (const entry of [...s.history].reverse()) {
     const el = document.createElement('div');
     el.className = 'hist-item';
-    const time = new Date(entry.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const time = new Date(entry.ts).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
     el.innerHTML = `
       <span class="hist-time">${time}</span>
-      <span class="hist-kind ${entry.kind}" title="${entry.kind === 'agent' ? 'Prompt to an agent (e.g. Claude)' : 'Shell command'}">${entry.kind === 'agent' ? '✳' : '$'}</span>
+      <span class="hist-kind ${entry.kind}" title="${escapeHtml(t(entry.kind === 'agent' ? 'history.agent' : 'history.shell'))}">${entry.kind === 'agent' ? '✳' : '$'}</span>
       <span class="hist-text"></span>
-      <button class="hist-send" title="Insert into the terminal input line" aria-label="Insert into terminal">↩</button>`;
+      <button class="hist-send" title="${escapeHtml(t('history.send'))}" aria-label="${escapeHtml(t('history.send.aria'))}">↩</button>`;
     el.querySelector('.hist-text').textContent = entry.text;
-    el.title = 'Click: copy\n\n' + entry.text;
+    el.title = t('history.copy') + '\n\n' + entry.text;
     makeKeyActivatable(el);
     el.addEventListener('click', async (e) => {
       if (e.target.closest('.hist-send')) return;
@@ -619,18 +753,18 @@ function renderTodos(s) {
   // A single funnel for both: note ticked off and session switched
   pulseWake();
   if (!todos.length) {
-    todoListEl.innerHTML = '<div class="muted">No notes</div>';
+    todoListEl.innerHTML = `<div class="muted">${escapeHtml(t('notes.empty'))}</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
-  todos.forEach((t, idx) => {
+  todos.forEach((todo, idx) => {
     const el = document.createElement('div');
-    el.className = 'todo-item' + (t.done ? ' done' : '');
+    el.className = 'todo-item' + (todo.done ? ' done' : '');
     el.innerHTML = `
-      <input type="checkbox" ${t.done ? 'checked' : ''} title="Done" />
+      <input type="checkbox" ${todo.done ? 'checked' : ''} title="${escapeHtml(t('notes.done'))}" />
       <span class="todo-text"></span>
-      <button class="todo-del" title="Delete" aria-label="Delete note">✕</button>`;
-    el.querySelector('.todo-text').textContent = t.text;
+      <button class="todo-del" title="${escapeHtml(t('notes.delete'))}" aria-label="${escapeHtml(t('notes.delete.aria'))}">✕</button>`;
+    el.querySelector('.todo-text').textContent = todo.text;
     el.querySelector('input').addEventListener('change', (e) => {
       s.todos[idx].done = e.target.checked;
       saveTodos(s);
@@ -715,16 +849,19 @@ const dbState = {
 let dbTimer = null;
 
 const STATUS_MARK = { added: '+', removed: '−', changed: '~', same: '' };
-const STATUS_WORD = { added: 'new', removed: 'removed', changed: 'changed', same: '' };
+// The status word is looked up per render - a language switch has to reach it.
+const STATUS_WORD = (status) => (status === 'same' ? '' : t('db.status.' + status));
 
-// Short tags for the constraints that affect a column
+// Short tags for the constraints that affect a column. The abbreviations stay
+// as they are - they are read as symbols, and a two-letter marker that changes
+// with the language would lose that. The tooltip carries the translation.
 const KIND_TAG = {
-  pk: { tag: 'PK', title: 'primary key' },
-  fk: { tag: 'FK', title: 'foreign key' },
-  unique: { tag: 'UQ', title: 'unique' },
-  check: { tag: 'CK', title: 'check constraint' },
-  index: { tag: 'IX', title: 'index' },
-  exclude: { tag: 'EX', title: 'exclusion constraint' },
+  pk: { tag: 'PK', key: 'db.tag.pk' },
+  fk: { tag: 'FK', key: 'db.tag.fk' },
+  unique: { tag: 'UQ', key: 'db.tag.unique' },
+  check: { tag: 'CK', key: 'db.tag.check' },
+  index: { tag: 'IX', key: 'db.tag.index' },
+  exclude: { tag: 'EX', key: 'db.tag.exclude' },
 };
 
 function fmtDefault(v) {
@@ -736,7 +873,7 @@ function colMeta(col) {
   const out = [];
   if (!col.nullable) out.push('NOT NULL');
   if (col.identity) out.push('identity');
-  if (col.generated) out.push('generated');
+  if (col.generated) out.push(t('db.col.generated'));
   if (col.default) out.push('= ' + fmtDefault(col.default));
   return out;
 }
@@ -763,7 +900,7 @@ function constraintText(c) {
 function policyText(p) {
   const bits = [p.command];
   if (!p.permissive) bits.push('restrictive');
-  if (p.roles && p.roles.length) bits.push('for ' + p.roles.join(', '));
+  if (p.roles && p.roles.length) bits.push(t('db.policy.for', { roles: p.roles.join(', ') }));
   if (p.using) bits.push('using ' + p.using);
   if (p.check) bits.push('check ' + p.check);
   return bits.join(' · ');
@@ -782,7 +919,7 @@ function tagsForColumn(table, colName) {
 }
 
 function tagsHtml(tags) {
-  return tags.map((t) => `<span class="db-tag ${t.tag.toLowerCase()}" title="${escapeHtml(t.title)}">${t.tag}</span>`).join('');
+  return tags.map((tag) => `<span class="db-tag ${tag.tag.toLowerCase()}" title="${escapeHtml(t(tag.key))}">${tag.tag}</span>`).join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -841,8 +978,8 @@ function renderDbPanel() {
     dbHeadEl.innerHTML = '';
     dbSignalEl.innerHTML = '';
     dbSearchEl.classList.add('hidden');
-    dbTablesEl.innerHTML = `<div class="muted">${view && view.error
-      ? escapeHtml(view.error) : 'No session selected'}</div>`;
+    dbTablesEl.innerHTML = `<div class="muted">${escapeHtml(view && view.error
+      ? view.error : t('common.noSession'))}</div>`;
     setDbBadge(0);
     return;
   }
@@ -852,11 +989,10 @@ function renderDbPanel() {
     dbSignalEl.innerHTML = '';
     dbSearchEl.classList.add('hidden');
     dbTablesEl.innerHTML = `
-      <div class="muted">No DB schema detected.</div>
-      <div class="db-hint">No plugin feels responsible for
-        <code>${escapeHtml(view.project || view.root || '')}</code>.
-        Currently recognised are Supabase projects
-        (<code>supabase/migrations</code>).</div>`;
+      <div class="muted">${escapeHtml(t('db.none'))}</div>
+      <div class="db-hint">${escapeHtml(t('db.none.hint', { project: '\u0000', path: '\u0001' }))
+        .replace('\u0000', `<code>${escapeHtml(view.project || view.root || '')}</code>`)
+        .replace('\u0001', '<code>supabase/migrations</code>')}</div>`;
     setDbBadge(0);
     return;
   }
@@ -871,25 +1007,25 @@ function renderDbPanel() {
 function renderDbHead(view) {
   const files = view.schema.files.length;
   const baseSel = view.baselines.length
-    ? `<label class="db-base">Baseline
+    ? `<label class="db-base">${escapeHtml(t('db.baseline'))}
          <select id="db-baseline">
            ${view.baselines.map((b) => `<option value="${escapeHtml(b.mode)}"${
              view.baseline && view.baseline.mode === b.mode ? ' selected' : ''
            } title="${escapeHtml(b.hint || '')}">${escapeHtml(b.label)}</option>`).join('')}
          </select>
        </label>`
-    : '<span class="muted">no git state to compare against</span>';
+    : `<span class="muted">${escapeHtml(t('db.baseline.none'))}</span>`;
 
   dbHeadEl.innerHTML = `
     <div class="db-top">
       <span class="db-plugin" title="${escapeHtml((view.plugin.evidence || []).join('\n'))}">${escapeHtml(view.plugin.label)}</span>
-      <span class="db-files">${view.schema.tables.length} tables · ${files} ${files === 1 ? 'file' : 'files'}</span>
-      <button id="db-refresh" class="icon-btn" title="Re-read" aria-label="Re-read">↻</button>
+      <span class="db-files">${escapeHtml(t('db.tables', { count: view.schema.tables.length }))} · ${escapeHtml(t('db.files', { count: files }))}</span>
+      <button id="db-refresh" class="icon-btn" title="${escapeHtml(t('db.refresh'))}" aria-label="${escapeHtml(t('db.refresh'))}">↻</button>
     </div>
     <div class="db-baseline-row">${baseSel}</div>
     ${view.schema.warnings.length ? `
       <details class="db-warn">
-        <summary>${view.schema.warnings.length} warning${view.schema.warnings.length === 1 ? '' : 's'} while reading</summary>
+        <summary>${escapeHtml(t('db.warnings', { count: view.schema.warnings.length }))}</summary>
         <ul>${view.schema.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
       </details>` : ''}`;
 
@@ -913,36 +1049,37 @@ function renderDbSignal(view) {
   if (!d.changed) {
     dbSignalEl.innerHTML = `<div class="db-signal ok">
       <span class="db-signal-icon">✓</span>
-      <span>Schema unchanged compared to <strong>${escapeHtml(view.baseline.label)}</strong></span>
+      <span>${escapeHtml(t('db.unchanged', { baseline: '\u0000' }))
+        .replace('\u0000', `<strong>${escapeHtml(view.baseline.label)}</strong>`)}</span>
     </div>`;
     return;
   }
   const s = d.summary;
   const detail = [
-    partsText(s.columns, 'column', 'columns'),
-    partsText(s.constraints, 'constraint', 'constraints'),
-    partsText(s.policies, 'policy', 'policies'),
+    partsText(s.columns, 'db.parts.columns'),
+    partsText(s.constraints, 'db.parts.constraints'),
+    partsText(s.policies, 'db.parts.policies'),
   ].filter(Boolean).join(' · ');
 
   dbSignalEl.innerHTML = `<div class="db-signal alert">
     <span class="db-signal-icon">⚠</span>
     <div class="db-signal-text">
-      <strong>Schema changed</strong> compared to ${escapeHtml(view.baseline.label)}
+      <strong>${escapeHtml(t('db.changed'))}</strong> ${escapeHtml(t('db.comparedTo', { baseline: view.baseline.label }))}
       <div class="db-signal-sub">${escapeHtml(view.changeText)}${detail ? '<br>' + detail : ''}</div>
     </div>
-    <button id="db-open-diff" title="Before and after side by side">Compare</button>
+    <button id="db-open-diff" title="${escapeHtml(t('db.compare.title'))}">${escapeHtml(t('db.compare'))}</button>
   </div>`;
   dbSignalEl.querySelector('#db-open-diff').addEventListener('click', openDbDiff);
 }
 
-function partsText(counts, one, many) {
+function partsText(counts, nounKey) {
   const bits = [];
-  if (counts.added) bits.push(`${counts.added} new`);
-  if (counts.removed) bits.push(`${counts.removed} removed`);
-  if (counts.changed) bits.push(`${counts.changed} changed`);
+  if (counts.added) bits.push(t('db.count.new', { count: counts.added }));
+  if (counts.removed) bits.push(t('db.count.removed', { count: counts.removed }));
+  if (counts.changed) bits.push(t('db.count.changed', { count: counts.changed }));
   if (!bits.length) return '';
   const total = counts.added + counts.removed + counts.changed;
-  return `${total === 1 ? one : many}: ${bits.join(', ')}`;
+  return `${t(nounKey, { count: total })}: ${bits.join(', ')}`;
 }
 
 /** Make the diff status per table/column/constraint look-up-able. */
@@ -976,7 +1113,7 @@ function renderDbTables(view) {
     const box = document.createElement('details');
     box.className = 'db-enums';
     if (dbState.open.has('__enums')) box.open = true;
-    box.innerHTML = `<summary>Enums (${enums.length})</summary>
+    box.innerHTML = `<summary>${escapeHtml(t('db.enums', { count: enums.length }))}</summary>
       <div class="db-enum-list">${enums.map((e) => {
         const d = enumDiff.get(e.id);
         const st = d ? d.status : 'same';
@@ -997,13 +1134,13 @@ function renderDbTables(view) {
 
   // --- Removed tables: no longer in the schema, but they have to stand out
   const removed = (view.diff ? view.diff.tables : []).filter((t) => t.status === 'removed');
-  for (const t of removed) {
-    if (q && !t.name.toLowerCase().includes(q)) continue;
+  for (const table of removed) {
+    if (q && !table.name.toLowerCase().includes(q)) continue;
     const el = document.createElement('div');
     el.className = 'db-table removed-table';
-    el.innerHTML = `<span class="db-status removed" title="removed">−</span>
-      <span class="db-table-name">${escapeHtml(t.schema)}.${escapeHtml(t.name)}</span>
-      <span class="db-table-note">removed</span>`;
+    el.innerHTML = `<span class="db-status removed" title="${escapeHtml(t('db.table.removed'))}">−</span>
+      <span class="db-table-name">${escapeHtml(table.schema)}.${escapeHtml(table.name)}</span>
+      <span class="db-table-note">${escapeHtml(t('db.table.removed'))}</span>`;
     frag.appendChild(el);
   }
 
@@ -1019,72 +1156,72 @@ function renderDbTables(view) {
   if (!frag.childNodes.length) {
     const d = document.createElement('div');
     d.className = 'muted';
-    d.textContent = q ? 'No matches' : 'No tables found';
+    d.textContent = q ? t('common.noMatches') : t('db.noTables');
     frag.appendChild(d);
   }
   dbTablesEl.appendChild(frag);
 }
 
-function buildDbTableCard(t, d, q) {
+function buildDbTableCard(table, d, q) {
   const status = d ? d.status : 'same';
   const box = document.createElement('details');
   box.className = `db-table ${status}`;
   // Expand changed tables and search hits right away - that is what one is
   // looking for. Whatever was collapsed by hand stays collapsed.
-  if (dbState.open.has(t.id)
+  if (dbState.open.has(table.id)
       || (q && q.length > 1)
-      || (status !== 'same' && !dbState.closed.has(t.id))) {
+      || (status !== 'same' && !dbState.closed.has(table.id))) {
     box.open = true;
   }
 
   const changedCols = d ? [...d.columns.values()].filter((c) => c.status !== 'same').length : 0;
   box.innerHTML = `
     <summary>
-      <span class="db-status ${status}" title="${STATUS_WORD[status] || 'unchanged'}">${STATUS_MARK[status] || '·'}</span>
-      <span class="db-table-name">${escapeHtml(t.name)}</span>
-      ${t.schema !== 'public' ? `<span class="db-schema">${escapeHtml(t.schema)}</span>` : ''}
-      ${t.rls.enabled ? `<span class="db-rls${d && d.rlsChanged ? ' changed' : ''}" title="Row level security enabled${
-        t.rls.policies.length ? `, ${t.rls.policies.length} policies` : ', no policies'}">RLS</span>` : ''}
-      ${t.external
-        ? '<span class="db-chip external" title="The project does not create this table itself – it only governs access to it">external</span>'
-        : `<span class="db-count">${t.columns.length}</span>`}
-      ${changedCols ? `<span class="db-chip changed">${changedCols} changed</span>` : ''}
+      <span class="db-status ${status}" title="${escapeHtml(STATUS_WORD(status) || t('db.status.same'))}">${STATUS_MARK[status] || '·'}</span>
+      <span class="db-table-name">${escapeHtml(table.name)}</span>
+      ${table.schema !== 'public' ? `<span class="db-schema">${escapeHtml(table.schema)}</span>` : ''}
+      ${table.rls.enabled ? `<span class="db-rls${d && d.rlsChanged ? ' changed' : ''}" title="${escapeHtml(
+        `${t('db.rls.title')}, ${table.rls.policies.length
+          ? t('db.rls.policies', { count: table.rls.policies.length }) : t('db.rls.none')}`)}">RLS</span>` : ''}
+      ${table.external
+        ? `<span class="db-chip external" title="${escapeHtml(t('db.external.title'))}">${escapeHtml(t('db.external'))}</span>`
+        : `<span class="db-count">${table.columns.length}</span>`}
+      ${changedCols ? `<span class="db-chip changed">${escapeHtml(t('db.changedCount', { count: changedCols }))}</span>` : ''}
     </summary>
     <div class="db-body"></div>`;
 
   const body = box.querySelector('.db-body');
-  if (t.external) {
+  if (table.external) {
     // We do not know the columns - say so instead of showing an empty list
     const note = document.createElement('div');
     note.className = 'db-hint';
-    note.textContent = 'Foreign table – its columns are not known here. '
-      + 'What is shown is what this project itself defines for it.';
+    note.textContent = t('db.external.note');
     body.appendChild(note);
   } else {
-    body.appendChild(buildDbColumns(t, d));
+    body.appendChild(buildDbColumns(table, d));
   }
 
-  const cons = (t.constraints || []).filter((c) => c.kind !== 'pk' || (c.columns || []).length > 1);
+  const cons = (table.constraints || []).filter((c) => c.kind !== 'pk' || (c.columns || []).length > 1);
   if (cons.length) body.appendChild(buildDbConstraints(cons, d));
-  if (t.rls.policies.length) body.appendChild(buildDbPolicies(t.rls.policies, d));
-  if (t.comment) {
+  if (table.rls.policies.length) body.appendChild(buildDbPolicies(table.rls.policies, d));
+  if (table.comment) {
     const cm = document.createElement('div');
     cm.className = 'db-comment';
-    cm.textContent = t.comment;
+    cm.textContent = table.comment;
     body.appendChild(cm);
   }
 
   box.addEventListener('toggle', () => {
-    if (box.open) { dbState.open.add(t.id); dbState.closed.delete(t.id); }
-    else { dbState.open.delete(t.id); dbState.closed.add(t.id); }
+    if (box.open) { dbState.open.add(table.id); dbState.closed.delete(table.id); }
+    else { dbState.open.delete(table.id); dbState.closed.add(table.id); }
   });
   return box;
 }
 
-function buildDbColumns(t, d) {
+function buildDbColumns(table, d) {
   const wrap = document.createElement('div');
   wrap.className = 'db-cols';
-  const rows = t.columns.map((c) => {
+  const rows = table.columns.map((c) => {
     const cd = d && d.columns.get(c.name);
     const st = cd ? cd.status : 'same';
     const why = cd && cd.fields && cd.fields.length
@@ -1094,7 +1231,7 @@ function buildDbColumns(t, d) {
       <span class="db-col-mark ${st}">${STATUS_MARK[st] || ''}</span>
       <span class="db-col-name">${escapeHtml(c.name)}</span>
       <span class="db-col-type">${escapeHtml(c.type)}</span>
-      <span class="db-col-tags">${tagsHtml(tagsForColumn(t, c.name))}</span>
+      <span class="db-col-tags">${tagsHtml(tagsForColumn(table, c.name))}</span>
       <span class="db-col-meta">${escapeHtml(colMeta(c).join(' · '))}</span>
     </div>`;
   });
@@ -1102,7 +1239,7 @@ function buildDbColumns(t, d) {
   if (d) {
     for (const cd of d.columns.values()) {
       if (cd.status !== 'removed') continue;
-      rows.push(`<div class="db-col removed" title="removed">
+      rows.push(`<div class="db-col removed" title="${escapeHtml(t('db.status.removed'))}">
         <span class="db-col-mark removed">−</span>
         <span class="db-col-name">${escapeHtml(cd.name)}</span>
         <span class="db-col-type">${escapeHtml(cd.before.type)}</span>
@@ -1118,18 +1255,18 @@ function buildDbColumns(t, d) {
 function buildDbConstraints(cons, d) {
   const box = document.createElement('div');
   box.className = 'db-sub';
-  box.innerHTML = `<div class="db-sub-title">Constraints</div>
+  box.innerHTML = `<div class="db-sub-title">${escapeHtml(t('db.section.constraints'))}</div>
     ${cons.map((c) => {
       const cd = d && d.constraints.get(c.name);
       const st = cd ? cd.status : 'same';
       return `<div class="db-con ${st}">
-        <span class="db-tag ${c.kind}" title="${escapeHtml((KIND_TAG[c.kind] || {}).title || c.kind)}">${(KIND_TAG[c.kind] || {}).tag || c.kind}</span>
+        <span class="db-tag ${c.kind}" title="${escapeHtml(KIND_TAG[c.kind] ? t(KIND_TAG[c.kind].key) : c.kind)}">${(KIND_TAG[c.kind] || {}).tag || c.kind}</span>
         <span class="db-con-name">${escapeHtml(c.name)}</span>
         <span class="db-con-text">${escapeHtml(constraintText(c))}</span>
       </div>`;
     }).join('')}
     ${d ? [...d.constraints.values()].filter((c) => c.status === 'removed').map((c) => `
-      <div class="db-con removed" title="removed">
+      <div class="db-con removed" title="${escapeHtml(t('db.status.removed'))}">
         <span class="db-tag ${c.before.kind}">${(KIND_TAG[c.before.kind] || {}).tag || c.before.kind}</span>
         <span class="db-con-name">${escapeHtml(c.name)}</span>
         <span class="db-con-text">${escapeHtml(constraintText(c.before))}</span>
@@ -1140,18 +1277,18 @@ function buildDbConstraints(cons, d) {
 function buildDbPolicies(policies, d) {
   const box = document.createElement('div');
   box.className = 'db-sub';
-  box.innerHTML = `<div class="db-sub-title">RLS policies</div>
+  box.innerHTML = `<div class="db-sub-title">${escapeHtml(t('db.section.policies'))}</div>
     ${policies.map((p) => {
       const pd = d && d.policies.get(p.name);
       const st = pd ? pd.status : 'same';
       return `<div class="db-con ${st}">
-        <span class="db-tag pol" title="policy">POL</span>
+        <span class="db-tag pol" title="${escapeHtml(t('db.tag.policy'))}">POL</span>
         <span class="db-con-name">${escapeHtml(p.name)}</span>
         <span class="db-con-text">${escapeHtml(policyText(p))}</span>
       </div>`;
     }).join('')}
     ${d ? [...d.policies.values()].filter((p) => p.status === 'removed').map((p) => `
-      <div class="db-con removed" title="removed">
+      <div class="db-con removed" title="${escapeHtml(t('db.status.removed'))}">
         <span class="db-tag pol">POL</span>
         <span class="db-con-name">${escapeHtml(p.name)}</span>
         <span class="db-con-text">${escapeHtml(policyText(p.before))}</span>
@@ -1191,9 +1328,9 @@ function closeDbDiff() {
 
 function renderDbDiffModes() {
   dbDiffModes.innerHTML = '';
-  for (const m of [{ id: 'changed', label: 'Changes only' }, { id: 'all', label: 'Whole schema' }]) {
+  for (const m of [{ id: 'changed', key: 'dbdiff.mode.changed' }, { id: 'all', key: 'dbdiff.mode.all' }]) {
     const b = document.createElement('button');
-    b.textContent = m.label;
+    b.textContent = t(m.key);
     b.className = m.id === dbDiffMode ? 'active' : '';
     b.setAttribute('role', 'tab');
     b.addEventListener('click', () => {
@@ -1214,9 +1351,9 @@ function renderDbDiff() {
 
   $('#dbdiff-title').textContent = `${view.plugin.label} · ${view.project || ''}`;
   $('#dbdiff-head-old').innerHTML =
-    `<strong>Before</strong> <span>${escapeHtml(view.baseline.label)} · ${escapeHtml(view.baseline.ref)}</span>`;
+    `<strong>${escapeHtml(t('dbdiff.before'))}</strong> <span>${escapeHtml(view.baseline.label)} · ${escapeHtml(view.baseline.ref)}</span>`;
   $('#dbdiff-head-new').innerHTML =
-    '<strong>After</strong> <span>working directory</span>';
+    `<strong>${escapeHtml(t('dbdiff.after'))}</strong> <span>${escapeHtml(t('dbdiff.workingDir'))}</span>`;
 
   const baseTables = new Map(view.base.tables.map((t) => [t.id, t]));
   const curTables = new Map(view.schema.tables.map((t) => [t.id, t]));
@@ -1227,7 +1364,7 @@ function renderDbDiff() {
   // --- Enums ---
   const enums = view.diff.enums.filter((e) => dbDiffMode === 'all' || e.status !== 'same');
   if (enums.length) {
-    frag.appendChild(dbDiffSpan('Enums'));
+    frag.appendChild(dbDiffSpan(t('dbdiff.enums')));
     for (const e of enums) {
       frag.appendChild(dbDiffEnumCard(e, 'before'));
       frag.appendChild(dbDiffEnumCard(e, 'after'));
@@ -1237,7 +1374,7 @@ function renderDbDiff() {
   // --- Tables ---
   const tables = view.diff.tables.filter((t) => dbDiffMode === 'all' || t.status !== 'same');
   if (tables.length) {
-    frag.appendChild(dbDiffSpan('Tables'));
+    frag.appendChild(dbDiffSpan(t('dbdiff.tables')));
     for (const t of tables) {
       frag.appendChild(dbDiffTableCard(t, baseTables.get(t.id) || null, 'before'));
       frag.appendChild(dbDiffTableCard(t, curTables.get(t.id) || null, 'after'));
@@ -1245,7 +1382,7 @@ function renderDbDiff() {
   }
 
   if (!frag.childNodes.length) {
-    frag.appendChild(dbDiffSpan('No differences'));
+    frag.appendChild(dbDiffSpan(t('dbdiff.none')));
   }
   dbDiffBody.appendChild(frag);
   dbDiffBody.scrollTop = 0;
@@ -1265,8 +1402,8 @@ function dbDiffEnumCard(e, side) {
   const missing = (side === 'before' && e.status === 'added') || (side === 'after' && e.status === 'removed');
   el.className = `dbd-card ${side}` + (missing ? ' absent' : '');
   if (missing) {
-    el.innerHTML = `<div class="dbd-card-head"><span class="dbd-absent">${
-      side === 'before' ? 'did not exist yet' : 'removed'}</span></div>`;
+    el.innerHTML = `<div class="dbd-card-head"><span class="dbd-absent">${escapeHtml(
+      t(side === 'before' ? 'dbdiff.absent.before' : 'dbdiff.absent.after'))}</span></div>`;
     return el;
   }
   el.innerHTML = `
@@ -1284,22 +1421,22 @@ function dbDiffEnumCard(e, side) {
   return el;
 }
 
-function dbDiffTableCard(t, table, side) {
+function dbDiffTableCard(td, table, side) {
   const el = document.createElement('div');
   const missing = !table;
-  el.className = `dbd-card ${side} ${t.status}` + (missing ? ' absent' : '');
+  el.className = `dbd-card ${side} ${td.status}` + (missing ? ' absent' : '');
 
   if (missing) {
     el.innerHTML = `<div class="dbd-card-head">
-      <span class="dbd-name muted">${escapeHtml(t.schema)}.${escapeHtml(t.name)}</span>
-      <span class="dbd-absent">${side === 'before' ? 'new table' : 'removed'}</span>
+      <span class="dbd-name muted">${escapeHtml(td.schema)}.${escapeHtml(td.name)}</span>
+      <span class="dbd-absent">${escapeHtml(t(side === 'before' ? 'dbdiff.absent.newTable' : 'dbdiff.absent.after'))}</span>
     </div>`;
     return el;
   }
 
   // The row order comes from the diff and is the same on both sides - which is
   // why identical columns stand at the same height on the left and the right.
-  const colRows = t.columns.map((cd) => {
+  const colRows = td.columns.map((cd) => {
     const c = side === 'before' ? cd.before : cd.after;
     const st = cd.status;
     if (!c) {
@@ -1318,18 +1455,18 @@ function dbDiffTableCard(t, table, side) {
     </div>`;
   });
 
-  const conRows = t.constraints.map((cd) => {
+  const conRows = td.constraints.map((cd) => {
     const c = side === 'before' ? cd.before : cd.after;
     if (!c) return `<div class="dbd-row absent"><span class="dbd-mark"></span><span class="dbd-cell muted">—</span></div>`;
     return `<div class="dbd-row ${cd.status}">
       <span class="dbd-mark">${cd.status === 'added' ? (side === 'after' ? '+' : '') : cd.status === 'removed' ? (side === 'before' ? '−' : '') : cd.status === 'changed' ? '~' : ''}</span>
-      <span class="db-tag ${c.kind}">${(KIND_TAG[c.kind] || {}).tag || c.kind}</span>
+      <span class="db-tag ${c.kind}" title="${escapeHtml(KIND_TAG[c.kind] ? t(KIND_TAG[c.kind].key) : c.kind)}">${(KIND_TAG[c.kind] || {}).tag || c.kind}</span>
       <span class="dbd-con-name">${escapeHtml(c.name)}</span>
       <span class="dbd-con-text">${escapeHtml(constraintText(c))}</span>
     </div>`;
   });
 
-  const polRows = t.policies.map((pd) => {
+  const polRows = td.policies.map((pd) => {
     const p = side === 'before' ? pd.before : pd.after;
     if (!p) return `<div class="dbd-row absent"><span class="dbd-mark"></span><span class="dbd-cell muted">—</span></div>`;
     return `<div class="dbd-row ${pd.status}">
@@ -1344,12 +1481,12 @@ function dbDiffTableCard(t, table, side) {
     <div class="dbd-card-head">
       <span class="dbd-name">${escapeHtml(table.name)}</span>
       ${table.schema !== 'public' ? `<span class="db-schema">${escapeHtml(table.schema)}</span>` : ''}
-      ${table.rls.enabled ? `<span class="db-rls${t.rlsChanged ? ' changed' : ''}" title="Row level security enabled">RLS</span>` : ''}
-      ${table.external ? '<span class="db-chip external" title="foreign table, only our own rules">external</span>' : ''}
+      ${table.rls.enabled ? `<span class="db-rls${td.rlsChanged ? ' changed' : ''}" title="${escapeHtml(t('db.rls.title'))}">RLS</span>` : ''}
+      ${table.external ? `<span class="db-chip external" title="${escapeHtml(t('db.external.short'))}">${escapeHtml(t('db.external'))}</span>` : ''}
     </div>
     <div class="dbd-rows">${colRows.join('')}</div>
-    ${conRows.length ? `<div class="dbd-sub">Constraints</div><div class="dbd-rows">${conRows.join('')}</div>` : ''}
-    ${polRows.length ? `<div class="dbd-sub">RLS policies</div><div class="dbd-rows">${polRows.join('')}</div>` : ''}`;
+    ${conRows.length ? `<div class="dbd-sub">${escapeHtml(t('db.section.constraints'))}</div><div class="dbd-rows">${conRows.join('')}</div>` : ''}
+    ${polRows.length ? `<div class="dbd-sub">${escapeHtml(t('db.section.policies'))}</div><div class="dbd-rows">${polRows.join('')}</div>` : ''}`;
   return el;
 }
 
@@ -1365,35 +1502,29 @@ const usageContentEl = $('#usage-content');
 const dotUsageEl = $('#dot-usage');
 let usageTimer = null;
 
-const STATUS_LABEL = {
-  ok: 'within budget',
-  warn: 'slightly over',
-  over: 'limit will be blown',
-  early: 'too early in the window',
-  unknown: 'no data',
-};
-
 function fmtPct(n) {
   if (typeof n !== 'number') return '–';
-  return (Math.round(n * 10) / 10).toLocaleString('en-GB') + ' %';
+  // Decimal separator and grouping follow the chosen language, not the source
+  // language - 42,9 % in German and French, 42.9 % in English.
+  return (Math.round(n * 10) / 10).toLocaleString(locale) + ' %';
 }
 
 // "in 1 h 47" or "in 3 days 5 h"
 function fmtUntil(ts) {
   if (!ts) return '';
   let ms = ts - Date.now();
-  if (ms <= 0) return 'now';
+  if (ms <= 0) return t('usage.now');
   const days = Math.floor(ms / 86400000); ms -= days * 86400000;
   const hours = Math.floor(ms / 3600000); ms -= hours * 3600000;
   const mins = Math.floor(ms / 60000);
-  if (days) return `in ${days} ${days === 1 ? 'day' : 'days'} ${hours} h`;
-  if (hours) return `in ${hours} h ${String(mins).padStart(2, '0')}`;
-  return `in ${mins} min`;
+  if (days) return t('usage.in.days', { count: days, days, hours });
+  if (hours) return t('usage.in.hours', { hours, minutes: String(mins).padStart(2, '0') });
+  return t('usage.in.minutes', { minutes: mins });
 }
 
 function fmtReset(ts) {
-  if (!ts) return 'unknown';
-  return new Date(ts).toLocaleString('en-GB',
+  if (!ts) return t('usage.unknownReset');
+  return new Date(ts).toLocaleString(locale,
     { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
@@ -1407,18 +1538,20 @@ function renderLimit(title, limit, opts = {}) {
 
   let verdict = '';
   if (status === 'unknown') {
-    verdict = '<div class="uz-note">No data for this limit.</div>';
+    verdict = `<div class="uz-note">${escapeHtml(t('usage.limit.none'))}</div>`;
   } else if (status === 'early') {
-    verdict = `<div class="uz-note">Still too early in the window for a projection.
-      Allowed so far would be <strong>${fmtPct(budget)}</strong>.</div>`;
+    verdict = `<div class="uz-note">${escapeHtml(t('usage.early', { budget: '\u0000' }))
+      .replace('\u0000', `<strong>${fmtPct(budget)}</strong>`)}</div>`;
   } else {
     const over = used - budget;
     verdict = `<div class="uz-verdict ${status}">
-      <span class="uz-target">Allowed so far: <strong>${fmtPct(budget)}</strong></span>
-      <span class="uz-delta">${over > 0
-        ? `${fmtPct(over)} over`
-        : `${fmtPct(-over)} to spare`}</span>
-      <span class="uz-proj">Projection at window end: <strong>${fmtPct(limit.projected)}</strong></span>
+      <span class="uz-target">${escapeHtml(t('usage.allowed', { budget: '\u0000' }))
+        .replace('\u0000', `<strong>${fmtPct(budget)}</strong>`)}</span>
+      <span class="uz-delta">${escapeHtml(over > 0
+        ? t('usage.over', { amount: fmtPct(over) })
+        : t('usage.spare', { amount: fmtPct(-over) }))}</span>
+      <span class="uz-proj">${escapeHtml(t('usage.projection', { value: '\u0000' }))
+        .replace('\u0000', `<strong>${fmtPct(limit.projected)}</strong>`)}</span>
     </div>`;
   }
 
@@ -1427,15 +1560,15 @@ function renderLimit(title, limit, opts = {}) {
       <header class="uz-head">
         <span class="uz-dot ${status}"></span>
         <span class="uz-title">${escapeHtml(title)}</span>
-        <span class="uz-status">${STATUS_LABEL[status]}</span>
+        <span class="uz-status">${escapeHtml(t('usage.status.' + status))}</span>
       </header>
-      <div class="uz-bar" role="img" aria-label="${fmtPct(used)} used">
+      <div class="uz-bar" role="img" aria-label="${escapeHtml(t('usage.used', { percent: fmtPct(used) }))}">
         <div class="uz-fill ${status}" style="width:${Math.min(used, 100)}%"></div>
-        ${showMark ? `<div class="uz-mark" style="left:${budget}%" title="target: ${fmtPct(budget)}"></div>` : ''}
+        ${showMark ? `<div class="uz-mark" style="left:${budget}%" title="${escapeHtml(t('usage.target', { percent: fmtPct(budget) }))}"></div>` : ''}
       </div>
       <div class="uz-meta">
-        <span class="uz-used">${fmtPct(used)} used</span>
-        <span class="uz-reset">Reset ${fmtReset(limit.resetsAt)} · ${fmtUntil(limit.resetsAt)}</span>
+        <span class="uz-used">${escapeHtml(t('usage.used', { percent: fmtPct(used) }))}</span>
+        <span class="uz-reset">${escapeHtml(t('usage.reset', { when: fmtReset(limit.resetsAt), until: fmtUntil(limit.resetsAt) }))}</span>
       </div>
       ${verdict}
     </section>`;
@@ -1460,36 +1593,35 @@ async function loadUsage(force = false) {
   if (data.error && !data.stale) {
     usageContentEl.innerHTML = `
       <div class="uz-error">${escapeHtml(data.error)}</div>
-      <div class="muted" style="margin-top:8px">The numbers come from your
-      Claude subscription (the same state as <code>/usage</code>).</div>`;
+      <div class="muted" style="margin-top:8px">${escapeHtml(t('usage.source', { usage: '\u0000' }))
+        .replace('\u0000', '<code>/usage</code>')}</div>`;
     dotUsageEl.classList.add('hidden');
     return;
   }
 
   const parts = [
-    renderLimit('5-hour window', data.fiveHour),
-    renderLimit('7-day window', data.sevenDay),
-    renderLimit('7 days · Opus', data.sevenDayOpus),
+    renderLimit(t('usage.window.5h'), data.fiveHour),
+    renderLimit(t('usage.window.7d'), data.sevenDay),
+    renderLimit(t('usage.window.7dOpus'), data.sevenDayOpus),
   ].filter(Boolean);
 
   if (!parts.length) {
-    usageContentEl.innerHTML = '<div class="muted">No limits reported.</div>';
+    usageContentEl.innerHTML = `<div class="muted">${escapeHtml(t('usage.noLimits'))}</div>`;
     dotUsageEl.classList.add('hidden');
     return;
   }
 
-  const stamp = new Date(data.fetchedAt).toLocaleTimeString('en-GB',
+  const stamp = new Date(data.fetchedAt).toLocaleTimeString(locale,
     { hour: '2-digit', minute: '2-digit' });
   usageContentEl.innerHTML = `
     <div class="uz-top">
       ${data.plan ? `<span class="uz-plan">${escapeHtml(data.plan)}</span>` : '<span></span>'}
-      <button id="usage-refresh" class="icon-btn" title="Refresh now" aria-label="Refresh">↻</button>
-      <span class="uz-stamp">As of ${stamp}${data.stale ? ' · stale' : ''}</span>
+      <button id="usage-refresh" class="icon-btn" title="${escapeHtml(t('usage.refresh'))}" aria-label="${escapeHtml(t('usage.refresh.aria'))}">↻</button>
+      <span class="uz-stamp">${escapeHtml(t('usage.asOf', { time: stamp }))}${data.stale ? ' · ' + escapeHtml(t('usage.stale')) : ''}</span>
     </div>
     ${data.stale ? `<div class="uz-error">${escapeHtml(data.error)}</div>` : ''}
     ${parts.join('')}
-    <div class="uz-legend">The mark in the bar shows how much may have been
-    used by now if the quota is meant to last evenly across the window.</div>`;
+    <div class="uz-legend">${escapeHtml(t('usage.legend'))}</div>`;
   usageContentEl.querySelector('#usage-refresh')
     .addEventListener('click', () => loadUsage(true));
 
@@ -1558,7 +1690,7 @@ function setPanelZoom(on) {
   contextPanel.classList.toggle('zoomed', on);
   panelBackdrop.classList.toggle('hidden', !on);
   panelZoomBtn.textContent = on ? '⤡' : '⤢';
-  panelZoomBtn.title = on ? 'Shrink panel (Esc)' : 'Enlarge panel';
+  panelZoomBtn.title = on ? t('panel.shrink') : t('panel.enlarge');
   // Only fit when shrinking: while the panel is large, the terminal lies
   // underneath it and `#terminal-area` is too wide - a fit would report the
   // wrong size to the PTY and wreck the agent's display.
@@ -1638,9 +1770,9 @@ async function renderPreview() {
 
 function renderPreviewModes(hasDiff) {
   const modes = [];
-  if (hasDiff) modes.push({ id: 'diff', label: 'Diff' });
-  modes.push({ id: 'raw', label: hasDiff ? 'File' : 'Source' });
-  if (MD_EXT.test(previewState.filePath)) modes.push({ id: 'md', label: 'Formatted' });
+  if (hasDiff) modes.push({ id: 'diff', label: t('preview.mode.diff') });
+  modes.push({ id: 'raw', label: t(hasDiff ? 'preview.mode.file' : 'preview.mode.source') });
+  if (MD_EXT.test(previewState.filePath)) modes.push({ id: 'md', label: t('preview.mode.formatted') });
 
   previewModesEl.innerHTML = '';
   if (modes.length < 2) return; // nothing to switch between
@@ -1660,7 +1792,7 @@ function renderPreviewModes(hasDiff) {
 }
 
 async function openPreview(sessionId, filePath, source) {
-  previewTitle.textContent = filePath + ' (loading…)';
+  previewTitle.textContent = t('preview.loading', { path: filePath });
   previewContent.innerHTML = '';
   previewModesEl.innerHTML = '';
   previewOverlay.classList.remove('hidden');
@@ -1731,29 +1863,30 @@ metaPopover.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 // New-session buttons + shell menu
 // ---------------------------------------------------------------------------
-const shellMenu = $('#shell-menu');
-
 $('#btn-new').addEventListener('click', () => newSession(shells[0] && shells[0].id));
 $('#btn-new-menu').addEventListener('click', (e) => {
   e.stopPropagation();
   shellMenu.classList.toggle('hidden');
+  moreMenu.classList.add('hidden');
+});
+$('#btn-more').addEventListener('click', (e) => {
+  e.stopPropagation();
+  moreMenu.classList.toggle('hidden');
+  shellMenu.classList.add('hidden');
 });
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.new-session-wrap')) shellMenu.classList.add('hidden');
+  if (!e.target.closest('.more-wrap')) moreMenu.classList.add('hidden');
   if (!e.target.closest('#meta-popover') && !e.target.closest('.session-item')) closeMetaPopover();
 });
 
-function buildShellMenu() {
-  shellMenu.innerHTML = '';
-  for (const sh of shells) {
-    const b = document.createElement('button');
-    b.textContent = sh.name;
-    b.addEventListener('click', () => {
-      shellMenu.classList.add('hidden');
-      newSession(sh.id);
-    });
-    shellMenu.appendChild(b);
-  }
+function menuOpen() {
+  return !moreMenu.classList.contains('hidden') || !shellMenu.classList.contains('hidden');
+}
+
+function closeMenus() {
+  moreMenu.classList.add('hidden');
+  shellMenu.classList.add('hidden');
 }
 
 // ---------------------------------------------------------------------------
@@ -1823,7 +1956,6 @@ function closeGrid() {
 }
 
 function toggleGrid() { gridOpen ? closeGrid() : openGrid(); }
-$('#btn-grid').addEventListener('click', toggleGrid);
 
 // ---------------------------------------------------------------------------
 // Claude session browser: search, resume and fork old sessions
@@ -1835,7 +1967,7 @@ let claudeSessions = [];
 
 async function openSessionBrowser() {
   sessionsOverlay.classList.remove('hidden');
-  sessionsListEl.innerHTML = '<div class="muted">Loading sessions…</div>';
+  sessionsListEl.innerHTML = `<div class="muted">${escapeHtml(t('browser.loading'))}</div>`;
   sessionsSearchEl.value = '';
   sessionsSearchEl.focus();
   claudeSessions = await window.api.listClaudeSessions();
@@ -1859,7 +1991,7 @@ function renderClaudeSessions() {
 
   sessionsListEl.innerHTML = '';
   if (!list.length) {
-    sessionsListEl.innerHTML = `<div class="muted">${q ? 'No matches' : 'No Claude sessions found'}</div>`;
+    sessionsListEl.innerHTML = `<div class="muted">${escapeHtml(q ? t('common.noMatches') : t('browser.none'))}</div>`;
     return;
   }
 
@@ -1882,12 +2014,12 @@ function renderClaudeSessions() {
       </div>
       <span class="cs-date"></span>
       <div class="cs-actions">
-        <button class="cs-resume">Resume</button>
-        <button class="cs-fork" title="Branch off as a new session">Fork</button>
+        <button class="cs-resume">${escapeHtml(t('browser.resume'))}</button>
+        <button class="cs-fork" title="${escapeHtml(t('browser.fork.title'))}">${escapeHtml(t('browser.fork'))}</button>
       </div>`;
     el.querySelector('.cs-title').textContent = cs.slug || (cs.preview ? cs.preview.slice(0, 60) : cs.id.slice(0, 8));
     el.querySelector('.cs-preview').textContent = cs.preview || '';
-    el.querySelector('.cs-date').textContent = new Date(cs.mtime).toLocaleString('en-GB', {
+    el.querySelector('.cs-date').textContent = new Date(cs.mtime).toLocaleString(locale, {
       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
     });
     const start = (fork) => {
@@ -1904,7 +2036,6 @@ function renderClaudeSessions() {
   sessionsListEl.appendChild(frag);
 }
 
-$('#btn-claude-sessions').addEventListener('click', openSessionBrowser);
 $('#sessions-close').addEventListener('click', closeSessionBrowser);
 sessionsSearchEl.addEventListener('input', renderClaudeSessions);
 sessionsOverlay.addEventListener('click', (e) => { if (e.target === sessionsOverlay) closeSessionBrowser(); });
@@ -1953,7 +2084,7 @@ window.api.onState((id, state) => {
   if (gridEntry) gridEntry.statusEl.className = 'si-status ' + (s.exited ? 'exited' : state);
   pulseWake();
   if (state === 'attention' && prev !== 'attention') {
-    maybeNotify(s, 'Waiting for your input');
+    maybeNotify(s, t('notify.attention'));
   }
 });
 
@@ -1961,7 +2092,7 @@ window.api.onExit((id) => {
   const s = sessions.get(id);
   if (!s) return;
   s.exited = true;
-  s.term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
+  s.term.write(`\r\n\x1b[90m${t('term.exited')}\x1b[0m\r\n`);
   updateSessionItem(s);
 });
 
@@ -2324,7 +2455,8 @@ window.addEventListener('keydown', (e) => {
     toggleGrid();
   }
   if (e.key === 'Escape') {
-    if (!previewOverlay.classList.contains('hidden')) closePreview();
+    if (menuOpen()) closeMenus();
+    else if (!previewOverlay.classList.contains('hidden')) closePreview();
     else if (!dbDiffOverlay.classList.contains('hidden')) closeDbDiff();
     else if (!sessionsOverlay.classList.contains('hidden')) closeSessionBrowser();
     else if (panelZoomed) setPanelZoom(false);
@@ -2336,10 +2468,11 @@ window.addEventListener('keydown', (e) => {
 // Startup
 // ---------------------------------------------------------------------------
 (async function init() {
+  applyStaticI18n();
+  buildMoreMenu();
   sizePulse();
   pulseWake();
-  shells = await window.api.listShells();
-  buildShellMenu();
+  await buildShellMenu();
   await newSession(shells[0] && shells[0].id);
   startUsagePolling();
   startDbPolling();

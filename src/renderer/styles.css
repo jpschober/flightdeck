@@ -110,6 +110,36 @@ button:active { transform: translateY(0.5px); }
 .icon-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--text); }
 
 .new-session-wrap { position: relative; display: flex; }
+.more-wrap { position: relative; display: flex; }
+
+/* Overflow menu: icon, label and shortcut in fixed columns, so the entries
+   line up under one another instead of drifting with the text length. */
+#more-menu { min-width: 220px; }
+.menu .menu-item {
+  display: grid;
+  grid-template-columns: 15px 1fr auto;
+  align-items: center;
+  gap: 9px;
+}
+.menu .mi-icon { color: var(--text-dim); text-align: center; }
+.menu .mi-key {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.menu-sep { height: 1px; background: var(--border); margin: 5px 2px; }
+.menu-title {
+  padding: 6px 10px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+}
+/* The active language carries the tick in the icon column, so the names stay
+   flush with the entries above them. */
+.menu .menu-item.lang.active { color: var(--accent); font-weight: 600; }
+.menu .menu-item.lang.active .mi-icon { color: var(--accent); }
 
 #btn-new, #btn-new-menu {
   background: var(--bg-panel-2);

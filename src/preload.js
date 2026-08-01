@@ -1,6 +1,11 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
 
+// The language is fetched synchronously and before anything else: the renderer
+// builds its interface as soon as the script runs, and a label that flashes up
+// in English and is then replaced would be worse than a moment's delay here.
+const i18nInit = ipcRenderer.sendSync('i18n:init');
+
 contextBridge.exposeInMainWorld('api', {
   listShells: () => ipcRenderer.invoke('shells:list'),
   createSession: (shellId, opts) => ipcRenderer.invoke('session:create', shellId, opts),
@@ -20,6 +25,12 @@ contextBridge.exposeInMainWorld('api', {
   getTodos: (id) => ipcRenderer.invoke('todos:get', id),
   setTodos: (id, todos) => ipcRenderer.invoke('todos:set', id, todos),
   getUsage: (force) => ipcRenderer.invoke('usage:get', force),
+
+  // Language: the starting values come along at load time, a switch goes
+  // through the main process (it owns the setting and the strings it builds
+  // itself) and hands the new dictionary back.
+  i18n: i18nInit,
+  setLocale: (code) => ipcRenderer.invoke('i18n:set', code),
 
   onData: (cb) => ipcRenderer.on('session:data', (e, id, data) => cb(id, data)),
   onState: (cb) => ipcRenderer.on('session:state', (e, id, state) => cb(id, state)),

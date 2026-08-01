@@ -16,6 +16,7 @@
 // `status` is 'added' | 'removed' | 'changed' | 'same'.
 
 const { COLUMN_FIELDS, constraintSignature, policySignature } = require('./ir');
+const { t } = require('../../i18n');
 
 function indexBy(list, key) {
   const m = new Map();
@@ -182,15 +183,15 @@ function diff(baseIr, currentIr) {
 
 /** Short sentence for the display on the tab or in the panel header. */
 function describe(result) {
-  if (!result || !result.changed) return 'Schema unchanged';
+  if (!result || !result.changed) return t('diff.unchanged');
   const s = result.summary;
   const bits = [];
-  const add = (n, one, many) => { if (n) bits.push(`${n} ${n === 1 ? one : many}`); };
-  add(s.tables.added, 'new table', 'new tables');
-  add(s.tables.removed, 'removed table', 'removed tables');
-  add(s.tables.changed, 'changed table', 'changed tables');
-  add(s.enums.added + s.enums.changed + s.enums.removed, 'enum change', 'enum changes');
-  return bits.join(' · ') || 'Schema changed';
+  const add = (count, key) => { if (count) bits.push(t(key, { count })); };
+  add(s.tables.added, 'diff.tables.added');
+  add(s.tables.removed, 'diff.tables.removed');
+  add(s.tables.changed, 'diff.tables.changed');
+  add(s.enums.added + s.enums.changed + s.enums.removed, 'diff.enums');
+  return bits.join(' · ') || t('diff.changed');
 }
 
 /** Number of changes - for the little counter on the tab. */

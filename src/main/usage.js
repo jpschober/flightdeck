@@ -10,6 +10,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { t } = require('../i18n');
 
 const CREDENTIALS = path.join(os.homedir(), '.claude', '.credentials.json');
 const ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
@@ -38,20 +39,20 @@ function readToken() {
   try {
     raw = fs.readFileSync(CREDENTIALS, 'utf8');
   } catch {
-    return { error: 'No Claude login found (~/.claude/.credentials.json).' };
+    return { error: t('usage.error.noLogin', { path: '~/.claude/.credentials.json' }) };
   }
   let json;
   try {
     json = JSON.parse(raw);
   } catch {
-    return { error: 'Credentials are unreadable.' };
+    return { error: t('usage.error.unreadable') };
   }
   const oauth = json.claudeAiOauth || {};
-  if (!oauth.accessToken) return { error: 'No OAuth token stored - sign in via Claude Code.' };
+  if (!oauth.accessToken) return { error: t('usage.error.noToken') };
   // expiresAt is a millisecond timestamp; we cannot refresh expired tokens
   // ourselves, Claude Code does that on its next start.
   if (oauth.expiresAt && Number(oauth.expiresAt) < Date.now()) {
-    return { error: 'Token expired - start Claude Code once to refresh it.' };
+    return { error: t('usage.error.expired') };
   }
   return { token: oauth.accessToken, plan: oauth.subscriptionType || null };
 }
@@ -115,13 +116,13 @@ async function fetchUsage(token) {
       signal: controller.signal,
     });
     if (res.status === 401 || res.status === 403) {
-      return { error: 'Token was rejected - sign in again via Claude Code.' };
+      return { error: t('usage.error.rejected') };
     }
-    if (!res.ok) return { error: `Request failed (HTTP ${res.status}).` };
+    if (!res.ok) return { error: t('usage.error.http', { status: res.status }) };
     return { json: await res.json() };
   } catch (err) {
-    if (err.name === 'AbortError') return { error: 'Request timed out.' };
-    return { error: 'Network error: ' + err.message };
+    if (err.name === 'AbortError') return { error: t('usage.error.timeout') };
+    return { error: t('usage.error.network', { message: err.message }) };
   } finally {
     clearTimeout(timer);
   }

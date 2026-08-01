@@ -10,8 +10,11 @@ const fs = require('fs');
 const pty = require('@lydell/node-pty');
 const { getGitInfo, getPrInfo, run } = require('./gitinfo');
 const { getUsage } = require('./usage');
-const { getSchemaView } = require('./dbschema');
+const { getSchemaView, clearCache: clearSchemaCache } = require('./dbschema');
 const { getAgentView } = require('./agents');
+const i18n = require('../i18n');
+const { t } = i18n;
+const settings = require('./settings');
 
 let win = null;
 const sessions = new Map(); // id -> session
@@ -40,7 +43,7 @@ function detectShells() {
       path.join(os.homedir(), 'AppData\\Local\\Programs\\Git\\bin\\bash.exe'),
     ]);
     if (gitBash) shells.push({ id: 'gitbash', name: 'Git Bash', file: gitBash });
-    shells.push({ id: 'cmd', name: 'Command Prompt', file: 'cmd.exe' });
+    shells.push({ id: 'cmd', nameKey: 'shell.cmd', file: 'cmd.exe' });
     if (firstExisting(['C:\\Windows\\System32\\wsl.exe'])) {
       shells.push({ id: 'wsl', name: 'WSL', file: 'wsl.exe' });
     }
@@ -90,6 +93,14 @@ const SHELL_NAMES = {
   dash: 'Dash', sh: 'sh',
 };
 const availableShells = detectShells();
+
+// Shell detection runs at module load, before the language is known, and the
+// names of most shells are proper nouns anyway. Only the ones carrying a
+// `nameKey` get translated - and freshly on every call, so a language switch
+// reaches them too.
+function shellName(shell) {
+  return shell.nameKey ? t(shell.nameKey) : shell.name;
+}
 
 // ---------------------------------------------------------------------------
 // Shell integration: OSC 7 = current directory, OSC 133 = busy/idle state
@@ -666,7 +677,7 @@ function createSession(shellId, opts = {}) {
   const session = {
     id,
     shellId: shell.id,
-    shellName: shell.name,
+    shellName: shellName(shell),
     proc,
     cwd,
     title: null,   // manually set title
@@ -751,7 +762,7 @@ function createSession(shellId, opts = {}) {
   }
 
   refreshSession(session, true);
-  return { id, shellId: shell.id, shellName: shell.name, cwd };
+  return { id, shellId: shell.id, shellName: shellName(shell), cwd };
 }
 
 async function refreshSession(session, force = false) {
@@ -829,9 +840,10 @@ async function doRefresh(session, force, cwdAtStart) {
   });
   if (session.cwd !== cwdAtStart || session.exited) return;
 
+  const shell = availableShells.find((s) => s.id === session.shellId);
   const info = {
     id: session.id,
-    shellName: session.shellName,
+    shellName: shell ? shellName(shell) : session.shellName,
     cwd: session.cwd,
     title: session.title,
     label: session.label,
@@ -871,13 +883,13 @@ async function previewFile(session, relPath, source, opts = {}) {
   if (opts.content) {
     try {
       const stat = fs.statSync(abs);
-      if (stat.isDirectory()) return { kind: 'error', path: relPath, text: 'That is a directory.' };
+      if (stat.isDirectory()) return { kind: 'error', path: relPath, text: t('file.isDir') };
       if (stat.size > MAX_PREVIEW) {
-        return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n… (truncated)' };
+        return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
       }
       return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
     } catch (e) {
-      return { kind: 'error', path: relPath, text: 'Could not read the file: ' + e.message };
+      return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
     }
   }
 
@@ -895,18 +907,18 @@ async function previewFile(session, relPath, source, opts = {}) {
   try {
     const stat = fs.statSync(abs);
     if (stat.size > MAX_PREVIEW) {
-      return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n… (truncated)' };
+      return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
     }
     return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
   } catch (e) {
-    return { kind: 'error', path: relPath, text: 'Could not read the file: ' + e.message };
+    return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
   }
 }
 
 // ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
-ipcMain.handle('shells:list', () => availableShells.map(({ id, name }) => ({ id, name })));
+ipcMain.handle('shells:list', () => availableShells.map((s) => ({ id: s.id, name: shellName(s) })));
 ipcMain.handle('session:create', (e, shellId, opts) => createSession(shellId, opts || {}));
 
 ipcMain.handle('session:buffer', (e, id) => {
@@ -936,6 +948,23 @@ ipcMain.handle('dbschema:get', async (e, id, opts = {}) => {
   }
 });
 
+
+// The preload asks for this synchronously while the page is still loading -
+// the renderer must not paint a single English label before switching.
+ipcMain.on('i18n:init', (e) => {
+  e.returnValue = { locale: i18n.getLocale(), locales: i18n.available(), dict: i18n.dict() };
+});
+
+ipcMain.handle('i18n:set', (e, code) => {
+  const locale = i18n.setLocale(code);
+  settings.set('locale', locale);
+  // Schemas and baselines carry strings that were translated when they were
+  // built - they have to be read again, not served from the cache.
+  clearSchemaCache();
+  // Sessions carry a shell name; force a refresh so the tabs follow along.
+  for (const s of sessions.values()) refreshSession(s, true);
+  return { locale, dict: i18n.dict() };
+});
 
 ipcMain.on('app:focus', () => {
   if (win && !win.isDestroyed()) {
@@ -990,7 +1019,7 @@ ipcMain.handle('session:setMeta', (e, id, meta) => {
 
 ipcMain.handle('file:preview', (e, id, relPath, source, opts) => {
   const s = sessions.get(id);
-  if (!s) return { kind: 'error', path: relPath, text: 'Session not found' };
+  if (!s) return { kind: 'error', path: relPath, text: t('file.noSession') };
   return previewFile(s, relPath, source, opts || {});
 });
 
@@ -1045,7 +1074,12 @@ function createWindow() {
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
 
-app.whenReady().then(createWindow);
+// A stored choice wins; otherwise follow the system. Unknown system languages
+// fall back to English inside normalize().
+app.whenReady().then(() => {
+  i18n.setLocale(settings.get('locale') || app.getLocale());
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* never mind */ } }
