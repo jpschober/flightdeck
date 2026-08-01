@@ -12,6 +12,7 @@
     <!-- Linke Seitenleiste: Sessions -->
     <aside id="sidebar">
       <div id="sidebar-header">
+        <canvas id="pulse-canvas" aria-hidden="true"></canvas>
         <span class="app-name">Flightdeck</span>
         <div class="header-actions">
           <button id="btn-grid" class="icon-btn" title="Grid-Übersicht aller Sessions (Strg+G)" aria-label="Grid-Übersicht">⊞</button>
@@ -46,9 +47,10 @@
       <nav id="panel-tabs">
         <button class="panel-tab active" data-tab="git">Git<span class="tab-badge hidden" id="badge-git"></span></button>
         <button class="panel-tab" data-tab="history">Verlauf<span class="tab-badge hidden" id="badge-history"></span></button>
-        <button class="panel-tab" data-tab="todos">Notizen<span class="tab-badge hidden" id="badge-todos"></span></button>
         <button class="panel-tab" data-tab="dbschema">DB-Schema<span class="tab-badge hidden" id="badge-dbschema"></span></button>
+        <button class="panel-tab" data-tab="todos">Notizen<span class="tab-badge hidden" id="badge-todos"></span></button>
         <button class="panel-tab" data-tab="usage">Nutzung<span class="tab-dot hidden" id="dot-usage"></span></button>
+        <button id="btn-panel-zoom" class="icon-btn" title="Panel vergrößern" aria-label="Panel vergrößern">⤢</button>
       </nav>
       <div class="panel-page" id="page-git">
         <!-- Hinweis, wenn der Agent in einem Worktree arbeitet und Branch und
@@ -82,6 +84,8 @@
       </div>
     </aside>
   </div>
+  <!-- Abdunklung hinter dem vergrößerten Kontextpanel -->
+  <div id="panel-backdrop" class="hidden"></div>
 
   <!-- Datei-Vorschau -->
   <div id="preview-overlay" class="hidden">

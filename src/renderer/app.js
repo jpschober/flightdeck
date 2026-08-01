@@ -236,6 +236,9 @@ async function newSession(shellId, opts) {
 
 function setActive(id) {
   activeId = id;
+  // Der Fortschritt der neuen Session ist kein Fortschritt, der gerade
+  // passiert ist - sonst blitzt der Puls bei jedem Sessionwechsel auf.
+  pulseProgSeen = null;
   for (const s of sessions.values()) {
     const active = s.id === id;
     s.paneEl.classList.toggle('inactive', !active);
@@ -612,6 +615,8 @@ function renderTodos(s) {
   const todos = s ? s.todos : [];
   todoInputEl.disabled = !s;
   updateBadges(s);
+  // Einziger Trichter fuer beides: Notiz abgehakt und Session gewechselt
+  pulseWake();
   if (!todos.length) {
     todoListEl.innerHTML = '<div class="muted">Keine Notizen</div>';
     return;
@@ -1538,6 +1543,33 @@ for (const btn of document.querySelectorAll('.panel-tab')) {
   btn.addEventListener('click', () => setPanelTab(btn.dataset.tab));
 }
 
+// Panel vergrößern: gilt fuer jeden Tab, weil nicht der Inhalt umzieht, sondern
+// nur das Panel selbst gross gestellt wird. Der aktive Tab bleibt der aktive.
+const contextPanel = $('#context-panel');
+const panelBackdrop = $('#panel-backdrop');
+const panelZoomBtn = $('#btn-panel-zoom');
+let panelZoomed = false;
+let panelWidth = '';
+
+function setPanelZoom(on) {
+  if (on === panelZoomed) return;
+  panelZoomed = on;
+  // Die per Trenner gesetzte Breite steht inline und schlaege sonst `inset`.
+  if (on) { panelWidth = contextPanel.style.width; contextPanel.style.width = ''; }
+  else contextPanel.style.width = panelWidth;
+  contextPanel.classList.toggle('zoomed', on);
+  panelBackdrop.classList.toggle('hidden', !on);
+  panelZoomBtn.textContent = on ? '⤡' : '⤢';
+  panelZoomBtn.title = on ? 'Panel verkleinern (Esc)' : 'Panel vergrößern';
+  // Erst beim Verkleinern fitten: waehrend das Panel gross ist, liegt das
+  // Terminal darunter und `#terminal-area` ist zu breit - ein Fit wuerde dem
+  // PTY die falsche Groesse melden und die Anzeige des Agenten zerlegen.
+  if (!on) fitActive();
+}
+
+panelZoomBtn.addEventListener('click', () => setPanelZoom(!panelZoomed));
+panelBackdrop.addEventListener('click', () => setPanelZoom(false));
+
 function setBadge(el, count) {
   el.textContent = count;
   el.classList.toggle('hidden', !count);
@@ -1921,6 +1953,7 @@ window.api.onState((id, state) => {
   updateSessionItem(s);
   const gridEntry = gridCards.get(id);
   if (gridEntry) gridEntry.statusEl.className = 'si-status ' + (s.exited ? 'exited' : state);
+  pulseWake();
   if (state === 'attention' && prev !== 'attention') {
     maybeNotify(s, 'Wartet auf deine Eingabe');
   }
@@ -1952,6 +1985,7 @@ window.api.onInfo((info) => {
     state: info.state,
   });
   updateSessionItem(s);
+  pulseWake(); // die Agentenzahl steuert den Puls mit
   if (rootChanged) {
     loadTodosFor(s); // anderes Projekt -> dessen Notizen laden
     if (info.id === activeId) {
@@ -1967,6 +2001,14 @@ window.api.onInfo((info) => {
 // ---------------------------------------------------------------------------
 // Layout: Panels per Trenner skalieren, Terminal-Fit bei Resize
 // ---------------------------------------------------------------------------
+// Das Terminal des aktiven Tabs an seine Flaeche anpassen. Solange das
+// Kontextpanel vergroessert ist, waere diese Flaeche falsch - siehe setPanelZoom().
+function fitActive() {
+  if (panelZoomed) return;
+  const s = activeId && sessions.get(activeId);
+  if (s) { try { s.fit.fit(); } catch { /* Pane evtl. noch 0px */ } }
+}
+
 function setupDivider(dividerEl, panelEl, growsRight) {
   dividerEl.addEventListener('mousedown', (e) => {
     e.preventDefault();
@@ -1976,8 +2018,9 @@ function setupDivider(dividerEl, panelEl, growsRight) {
     const onMove = (ev) => {
       const dx = ev.clientX - startX;
       panelEl.style.width = (growsRight ? startW + dx : startW - dx) + 'px';
-      const s = activeId && sessions.get(activeId);
-      if (s) { try { s.fit.fit(); } catch { /* ignorieren */ } }
+      fitActive();
+      sizePulse();
+      pulseWake();
     };
     const onUp = () => {
       dividerEl.classList.remove('dragging');
@@ -1991,9 +2034,283 @@ function setupDivider(dividerEl, panelEl, growsRight) {
 setupDivider($('#divider-left'), $('#sidebar'), true);
 setupDivider($('#divider-right'), $('#context-panel'), false);
 
-window.addEventListener('resize', () => {
+window.addEventListener('resize', () => { fitActive(); sizePulse(); pulseWake(); });
+
+// ---------------------------------------------------------------------------
+// Puls im Kopf der Seitenleiste
+//
+// Eine Kurve, die den Kopf in zwei Felder teilt: darueber warm, darunter
+// kuehl, beide nur angedeutet. Die Linie bleibt die Hauptsache - die Flaechen
+// geben ihr einen Horizont, an dem der Ausschlag ablesbar wird, ohne dass man
+// die Linie verfolgen muss.
+//
+// Vier Groessen, alle aus vorhandenem Zustand:
+//
+//   Ausschlag  wie viel ueberhaupt laeuft - `busy`-Sessions vor allem, Agenten
+//              mit geringerem Gewicht (sie arbeiten im Hintergrund weiter,
+//              waehrend die Shell davor still steht).
+//   Dichte     wie viel *parallel* laeuft: je mehr Agenten unterwegs sind,
+//              desto mehr Wellenberge stehen nebeneinander. Das ist die
+//              Groesse, die eine Zahl schlecht und ein Bild gut zeigt.
+//   Faerbung   der Flaechen zieht mit der Last an; der Verlauf wandert dabei
+//              sehr langsam durch zwei verwandte Toene.
+//   Fortschritt der Anteil erledigter Notizen, als Helligkeitsstufe in der
+//              Linie und als Strich an der Kante. Kommt eine Notiz dazu,
+//              laeuft ein heller Blitz darueber.
+//
+// Die Schleife laeuft nur, solange sich etwas bewegt: steht alles still, wird
+// ein letztes Bild gezeichnet und rAF abgemeldet. Eine App, die den ganzen Tag
+// offen steht, soll fuer Deko keinen Kern verheizen.
+// ---------------------------------------------------------------------------
+const pulseCanvas = $('#pulse-canvas');
+const pulseCtx = pulseCanvas.getContext('2d');
+const pulseCalm = window.matchMedia('(prefers-reduced-motion: reduce)');
+const PULSE = { amp: 0, prog: 0, phase: 0, flash: 0, dens: 1, load: 0, drift: 0 };
+let pulseRaf = 0;
+let pulseLast = 0;
+let pulseProgSeen = null;
+
+function pulseBusy() {
+  let n = 0;
+  for (const s of sessions.values()) if (!s.exited && s.state === 'busy') n++;
+  return n;
+}
+
+// Alle Agenten ueber alle Sessions - der Kopf zeigt das Deck, nicht eine Kachel
+function pulseAgents() {
+  let n = 0;
+  for (const s of sessions.values()) {
+    if (!s.exited && s.agents) n += s.agents.running;
+  }
+  return n;
+}
+
+// null = kein Nenner. Ohne Notizen gibt es keinen Fortschritt zu behaupten.
+function pulseProgress() {
   const s = activeId && sessions.get(activeId);
-  if (s) { try { s.fit.fit(); } catch { /* ignorieren */ } }
+  const todos = s ? s.todos : null;
+  if (!todos || !todos.length) return null;
+  return todos.filter((t) => t.done).length / todos.length;
+}
+
+function sizePulse() {
+  const dpr = window.devicePixelRatio || 1;
+  pulseCanvas.width = Math.max(1, Math.round(pulseCanvas.clientWidth * dpr));
+  pulseCanvas.height = Math.max(1, Math.round(pulseCanvas.clientHeight * dpr));
+  pulseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// Zwei ueberlagerte Sinus mit unterschiedlicher Laenge - eine einzelne Welle
+// sieht nach Bildschirmschoner aus, zwei nach Messgeraet. `dens` staucht beide
+// zugleich, damit das Muster bei vielen Agenten dichter wird, ohne seinen
+// Charakter zu verlieren.
+function pulseWaveAt(x) {
+  const d = PULSE.dens;
+  return PULSE.amp * (Math.sin(x * 0.055 * d + PULSE.phase) * 0.6
+    + Math.sin(x * 0.021 * d - PULSE.phase * 1.4) * 0.4);
+}
+
+// Groesster Ausschlag: die Kurve soll den Rand streifen, nicht daran anstossen.
+function pulseMaxAmp(h) {
+  return Math.max(0.5, h / 2 - 3);
+}
+
+// Je Feld zwei verwandte Toene, zwischen denen der Verlauf ueber die Breite
+// wandert. Zwei Toene aus derselben Ecke des Farbkreises, nicht zwei Farben:
+// der Wechsel soll als Schimmer lesbar sein, nicht als Regenbogen.
+const PULSE_WARM = [[217, 164, 65], [206, 118, 92]];   // Bernstein -> Kupfer
+// Das untere Feld traegt den Panelton in sich: gedeckte Toene, die #16181f nur
+// nach Gruen bzw. Blau schieben, statt eine Farbe darueberzulegen.
+const PULSE_COOL = [[84, 134, 112], [78, 122, 142]];   // Salbei -> Schiefer
+
+function pulseMix([ar, ag, ab], [br, bg, bb], t) {
+  return `${Math.round(ar + (br - ar) * t)}, `
+    + `${Math.round(ag + (bg - ag) * t)}, `
+    + `${Math.round(ab + (bb - ab) * t)}`;
+}
+
+// Der Verlauf laeuft zyklisch (cos), damit linker und rechter Rand
+// zusammenpassen und das Wandern keine Naht hinterlaesst.
+function pulseFieldFill(w, [a, b], alpha) {
+  const g = pulseCtx.createLinearGradient(0, 0, w, 0);
+  const STOPS = 6;
+  for (let i = 0; i <= STOPS; i++) {
+    const p = i / STOPS;
+    const t = (1 - Math.cos((p + PULSE.drift) * Math.PI * 2)) / 2;
+    g.addColorStop(p, `rgba(${pulseMix(a, b, t)}, ${alpha})`);
+  }
+  return g;
+}
+
+function drawPulse() {
+  const w = pulseCanvas.clientWidth;
+  const h = pulseCanvas.clientHeight;
+  if (!w || !h) return;
+  const mid = h / 2;
+  const edge = PULSE.prog * w;
+  pulseCtx.clearRect(0, 0, w, h);
+
+  // Die Kurve einmal abtasten - Flaechen und Linie benutzen dieselben Punkte.
+  const pts = [];
+  for (let x = 0; x <= w; x += 2) pts.push([x, mid + pulseWaveAt(x)]);
+
+  // Die Kurve trennt zwei Felder: darueber warm (Betrieb), darunter kuehl
+  // (Erledigtes). Blass gehalten - sie sollen den Kopf einfaerben, nicht ihn
+  // zumalen; Schriftzug und Knoepfe liegen darueber. Mit steigender Last zieht
+  // die Faerbung an, damit sich ein volles Deck auch dann noch vom leeren
+  // unterscheidet, wenn man nicht auf den Ausschlag achtet.
+  const wash = 0.085 + PULSE.load * 0.09;
+
+  // Oberes Feld: warm, ueber die ganze Hoehe gleich stark.
+  pulseCtx.beginPath();
+  pulseCtx.moveTo(-2, 0);
+  pulseCtx.lineTo(-2, pts[0][1]);
+  for (const [px, py] of pts) pulseCtx.lineTo(px, py);
+  pulseCtx.lineTo(w + 2, pts[pts.length - 1][1]);
+  pulseCtx.lineTo(w + 2, 0);
+  pulseCtx.closePath();
+  pulseCtx.fillStyle = pulseFieldFill(w, PULSE_WARM, wash);
+  pulseCtx.fill();
+
+  // Unteres Feld: liegt schon von Haus aus dicht am Panelton und wird nach
+  // unten hin ganz durchsichtig. Unter dem Kopf geht die Sessionliste in
+  // derselben Farbe weiter - eine sichtbare Kante dazwischen waere genau das,
+  // was man hier nicht will.
+  pulseCtx.save();
+  pulseCtx.beginPath();
+  // Die senkrechten Kanten liegen ausserhalb der Flaeche: laegen sie genau auf
+  // ihr, blieben dort halb gedeckte Pixel stehen, die das Ausblenden nicht
+  // mehr wegbekommt.
+  pulseCtx.moveTo(-2, h);
+  pulseCtx.lineTo(-2, pts[0][1]);
+  for (const [px, py] of pts) pulseCtx.lineTo(px, py);
+  pulseCtx.lineTo(w + 2, pts[pts.length - 1][1]);
+  pulseCtx.lineTo(w + 2, h);
+  pulseCtx.closePath();
+  pulseCtx.clip();
+  pulseCtx.fillStyle = pulseFieldFill(w, PULSE_COOL, wash * 1.15);
+  // Ueber die Kanten hinaus: die Canvas ist in Geraetepixeln breiter als die
+  // CSS-Breite hergibt (krummer devicePixelRatio), und die angeschnittene
+  // letzte Spalte wuerde sonst weder ganz gefuellt noch ganz geloescht.
+  pulseCtx.fillRect(-2, 0, w + 4, h);
+  // Deckkraft von der Linie abwaerts auf null ziehen. Der Verlauf laeuft quer,
+  // das Ausblenden laengs - beides in einem Farbverlauf geht nicht, deshalb
+  // wird die zweite Richtung herausradiert statt hineingemalt.
+  const fade = pulseCtx.createLinearGradient(0, mid, 0, h);
+  fade.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  // Schon knapp vor der Unterkante ganz durchsichtig: liefe die Rampe exakt
+  // bis h, bliebe in der letzten Pixelreihe ein Rest stehen, weil deren Mitte
+  // noch oberhalb liegt.
+  fade.addColorStop(0.9, 'rgba(0, 0, 0, 1)');
+  fade.addColorStop(1, 'rgba(0, 0, 0, 1)');
+  pulseCtx.globalCompositeOperation = 'destination-out';
+  pulseCtx.fillStyle = fade;
+  pulseCtx.fillRect(-2, 0, w + 4, h);
+  pulseCtx.restore();
+
+  // Die Linie nimmt die Farbe des unteren Feldes an: sie ist dessen Kante,
+  // kein eigener Strich. Den Fortschritt traegt sie nur noch in der Helligkeit
+  // - links vom Stand etwas praesenter als rechts davon. Ein Farbwechsel waere
+  // hier zu laut, jetzt wo die Flaechen die Farbe tragen.
+  pulseCtx.lineWidth = 1.4;
+  pulseCtx.lineJoin = 'round';
+  const segs = [
+    [0, edge, 0.34 + PULSE.load * 0.1],
+    [edge, w, 0.24 + PULSE.load * 0.08],
+  ];
+  for (const [from, to, alpha] of segs) {
+    if (to - from < 0.5) continue;
+    pulseCtx.save();
+    pulseCtx.beginPath();
+    pulseCtx.rect(from, 0, to - from, h);
+    pulseCtx.clip();
+    pulseCtx.beginPath();
+    for (const [px, py] of pts) {
+      if (px === 0) pulseCtx.moveTo(px, py);
+      else pulseCtx.lineTo(px, py);
+    }
+    pulseCtx.strokeStyle = pulseFieldFill(w, PULSE_COOL, alpha + PULSE.flash * 0.35);
+    pulseCtx.stroke();
+    pulseCtx.restore();
+  }
+
+  // Kante des Fortschritts, beim Abhaken kurz aufleuchtend. Etwas kraeftiger
+  // als die Linie: seit die sich ins Feld zurueckgenommen hat, ist dieser
+  // Strich die Stelle, an der der Stand ueberhaupt noch ablesbar ist.
+  if (edge > 0.5 && edge < w) {
+    pulseCtx.fillStyle = `rgba(78, 201, 122, ${0.38 + PULSE.flash * 0.5})`;
+    pulseCtx.fillRect(edge - 0.75, mid - PULSE.amp - 3, 1.5, PULSE.amp * 2 + 6);
+  }
+}
+
+function pulseTick(now) {
+  pulseRaf = 0;
+  const dt = Math.min(0.05, (now - pulseLast) / 1000) || 0.016;
+  pulseLast = now;
+
+  const busy = pulseBusy();
+  const agents = pulseAgents();
+  const h = pulseCanvas.clientHeight || 1;
+  const idle = busy === 0 && agents === 0;
+
+  // Agenten zaehlen schwaecher als busy-Sessions: sie laufen im Hintergrund
+  // weiter, waehrend die Shell davor still steht - das ist weniger Betrieb als
+  // ein Terminal, in dem sichtbar etwas passiert.
+  const targetAmp = idle ? 0.5
+    : Math.min(pulseMaxAmp(h), 1.4 + busy * 1.8 + agents * 0.8);
+  // Gedeckelt: ab einem Dutzend Agenten wird aus dichter nur noch unruhig.
+  const targetDens = 1 + Math.min(1.1, agents * 0.16);
+  const targetLoad = Math.min(1, (busy * 0.3 + agents * 0.15));
+  const p = pulseProgress();
+  const targetProg = p === null ? 0 : p;
+  if (pulseProgSeen !== null && p !== null && p > pulseProgSeen) PULSE.flash = 1;
+  pulseProgSeen = p;
+
+  PULSE.amp += (targetAmp - PULSE.amp) * Math.min(1, dt * 4);
+  PULSE.prog += (targetProg - PULSE.prog) * Math.min(1, dt * 5);
+  // Dichte weicher nachziehen als der Ausschlag: ein Agent, der fertig wird,
+  // soll das Muster nicht umspringen lassen.
+  PULSE.dens += (targetDens - PULSE.dens) * Math.min(1, dt * 1.5);
+  PULSE.load += (targetLoad - PULSE.load) * Math.min(1, dt * 2);
+  // Sehr langsam - ein Umlauf dauert ueber eine Minute. Steht das Deck still,
+  // steht auch der Verlauf: sonst liefe die Schleife fuer Deko ewig weiter.
+  if (!idle) PULSE.drift = (PULSE.drift + dt * 0.016) % 1;
+  PULSE.phase += dt * (idle ? 0.7 : 1.4 + busy * 0.8 + agents * 0.3);
+  PULSE.flash = Math.max(0, PULSE.flash - dt * 1.6);
+  drawPulse();
+
+  // Nur weiterlaufen, wenn noch Bewegung aussteht
+  const settled = idle && PULSE.flash <= 0
+    && Math.abs(targetAmp - PULSE.amp) < 0.15
+    && Math.abs(targetDens - PULSE.dens) < 0.01
+    && Math.abs(targetLoad - PULSE.load) < 0.004
+    && Math.abs(targetProg - PULSE.prog) < 0.004;
+  if (!settled) pulseRaf = requestAnimationFrame(pulseTick);
+}
+
+function pulseWake() {
+  if (pulseCalm.matches) {
+    // Ohne Bewegung: Fortschritt trotzdem als ruhige Linie zeigen
+    // Dichte und Faerbung duerfen bleiben: das sind Zustaende, keine Bewegung.
+    const p = pulseProgress();
+    const agents = pulseAgents();
+    PULSE.amp = 0.5;
+    PULSE.dens = 1 + Math.min(1.1, agents * 0.16);
+    PULSE.load = Math.min(1, pulseBusy() * 0.3 + agents * 0.15);
+    PULSE.prog = p === null ? 0 : p;
+    PULSE.flash = 0;
+    pulseProgSeen = p;
+    drawPulse();
+    return;
+  }
+  if (pulseRaf) return;
+  pulseLast = performance.now();
+  pulseRaf = requestAnimationFrame(pulseTick);
+}
+
+pulseCalm.addEventListener('change', () => {
+  if (pulseRaf) { cancelAnimationFrame(pulseRaf); pulseRaf = 0; }
+  pulseWake();
 });
 
 // Tastenkürzel
@@ -2014,6 +2331,7 @@ window.addEventListener('keydown', (e) => {
     if (!previewOverlay.classList.contains('hidden')) closePreview();
     else if (!dbDiffOverlay.classList.contains('hidden')) closeDbDiff();
     else if (!sessionsOverlay.classList.contains('hidden')) closeSessionBrowser();
+    else if (panelZoomed) setPanelZoom(false);
     else if (gridOpen) closeGrid();
   }
 });
@@ -2022,6 +2340,8 @@ window.addEventListener('keydown', (e) => {
 // Start
 // ---------------------------------------------------------------------------
 (async function init() {
+  sizePulse();
+  pulseWake();
   shells = await window.api.listShells();
   buildShellMenu();
   await newSession(shells[0] && shells[0].id);
