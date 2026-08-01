@@ -1032,6 +1032,7 @@ function createWindow() {
     minHeight: 500,
     backgroundColor: '#101116',
     title: 'Flightdeck',
+    icon: path.join(__dirname, '..', '..', 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
