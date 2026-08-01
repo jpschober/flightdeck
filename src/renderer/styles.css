@@ -225,6 +225,21 @@ button:active { transform: translateY(0.5px); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Laufende Agenten. Bewusst ruhig gehalten und ohne Animation: die Zahl sagt
+   „hier ist etwas unterwegs", der Statuspunkt daneben sagt, ob du dran bist -
+   zwei bewegte Dinge nebeneinander wuerden sich gegenseitig entwerten. */
+.si-agents {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--yellow);
+  background: rgba(217, 164, 65, 0.14);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
 .si-bottom {
   display: flex;
   align-items: center;

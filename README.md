@@ -12,6 +12,8 @@ Startfreigaben.
 - **Session-Liste links** – jeder Tab zeigt:
   - **Status**: 🟡 arbeitet · ⭕ wartet auf Kommando · 🔵 Agent (z. B. Claude
     Code) wartet auf *deine* Eingabe — du siehst sofort, wer dich braucht
+  - **laufende Agenten**: `✈ 3`, wenn in dieser Session gerade drei Subagenten
+    arbeiten — Tooltip nennt ihre Aufträge (s. u.)
   - aktuelles Verzeichnis (live über Shell-Integration / OSC 7) und Git-Branch
   - optionales manuelles **Label** (Chip) und optionalen manuellen **Titel**
     → Doppelklick/Rechtsklick auf den Tab öffnet das Bearbeiten-Popover
@@ -44,6 +46,7 @@ src/main/main.js     Electron-Main: PTY-Sessions (node-pty), Shell-Erkennung,
                      OSC-Parsing (cwd, Busy/Idle, Kommandos), Verlauf,
                      Notizen-Persistenz, IPC
 src/main/gitinfo.js  git status/branch + PR-Infos via gh (gecacht)
+src/main/agents/     Laufende Agenten: Plugin-Registry ("Senser") + Plugins
 src/main/dbschema/   DB-Schema: Plugin-Registry ("Senser"), DDL-Leser, Diff
 src/preload.js       contextBridge-API für den Renderer
 src/renderer/        UI: Sidebar, xterm-Terminals, Tab-Panel, Vorschau
@@ -63,6 +66,65 @@ Verzeichnis, Branch, geänderte Dateien, PR (Refresh 4 s, PR-Cache 45 s) und
 den Busy-/Idle-Status ab. Bei beobachteten Agenten-TUIs (`claude`, `codex`,
 `aider`) gilt zusätzlich: >2 s Stille bei laufendem Kommando = „Eingabe
 erwartet“ (blauer Punkt), da diese TUIs beim Arbeiten permanent rendern.
+
+### Laufende Agenten
+
+Ein Agent, der Arbeit an weitere Agenten verteilt, sieht von außen aus wie
+einer, der nichts tut: das Terminal steht still, während im Hintergrund vier
+Vorgänge laufen. Der Chip am Tab sagt, wie viele es sind — und der Tooltip,
+woran sie sitzen.
+
+```
+src/main/agents/index.js          Senser: fragt die Plugins, wählt das überzeugteste
+src/main/agents/plugins/claude.js Claude Code: Erkennung + Zählung
+```
+
+**Plugins.** Wie beim DB-Schema weiß der Senser nichts über die Technik
+dahinter — kein Wort über Claude, Transcripts oder Subagenten-Verzeichnisse.
+Erkennung *und* Zählung stecken im Plugin:
+
+```js
+{
+  id, label,
+  detect(ctx) -> { confidence, evidence[] } | null,
+  read(ctx)   -> { agents: [...] },
+}
+```
+
+`ctx` ist, was die Shell-Beobachtung über das Terminal hergibt: Verzeichnis,
+laufendes Kommando, gebundene Session. Welche dieser Angaben ein Plugin
+braucht, ist seine Sache — das Claude-Plugin erkennt sich an der gebundenen
+Session, ein Plugin für eine andere Agenten-CLI könnte am Kommando gehen.
+Meldet ein Plugin Zuständigkeit, liefert es auch die Zahl. Ein weiteres
+einzuhängen heißt: Datei unter `plugins/` anlegen, in `PLUGINS` eintragen,
+fertig.
+
+**Claude-Plugin.** Claude Code legt jeden Subagenten einer Session als eigenes
+Paar unter `~/.claude/projects/<projekt>/<session>/subagents/` ab:
+`agent-<id>.jsonl` (das Transcript) und `agent-<id>.meta.json` (Auftrag, Typ,
+Worktree). Einen Status gibt es dort nicht — „arbeitet noch" ergibt sich aus
+drei Signalen, und erst zusammen sind sie belastbar:
+
+- **Start** — die `meta.json` entsteht beim Losschicken; ihre mtime ist der
+  Startzeitpunkt.
+- **Stopp** — eine `<task-notification>` im Transcript des Auftraggebers. Das
+  `tool_result` des Agent-Aufrufs taugt dafür nicht: Agenten laufen asynchron,
+  es meldet nur „launched successfully" und steht schon Sekunden nach dem Start
+  da.
+- **Wiederaufnahme** — ein `SendMessage` an denselben Agenten; danach arbeitet
+  er wieder, und die vorige Abschlussmeldung ist verbraucht.
+
+Dazu ein Sicherheitsnetz: Wer 15 Minuten nichts mehr geschrieben hat, gilt als
+verwaist. Ohne das bliebe ein Agent für immer als „arbeitet" stehen, wenn
+Claude abstürzt und die Abschlussmeldung nie kommt.
+
+Transcripts wachsen nur hinten an, deshalb merkt sich das Plugin pro Datei den
+Lesestand: der erste Durchlauf kostet einmal die ganze Datei, jeder weitere nur
+den neuen Rest. Der Abgleich alle 4 s kostet damit nichts.
+
+Das alles ist undokumentiertes internes Format. Ändert Claude Code daran etwas,
+fällt nichts um: dann findet das Plugin keine Agenten und der Chip verschwindet,
+statt falsch zu werden.
 
 ### DB-Schema
 

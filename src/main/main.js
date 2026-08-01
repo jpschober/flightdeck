@@ -11,6 +11,7 @@ const pty = require('@lydell/node-pty');
 const { getGitInfo, getPrInfo, run } = require('./gitinfo');
 const { getUsage } = require('./usage');
 const { getSchemaView } = require('./dbschema');
+const { getAgentView } = require('./agents');
 
 let win = null;
 const sessions = new Map(); // id -> session
@@ -679,6 +680,7 @@ function createSession(shellId, opts = {}) {
     claudeSessionId: null,   // Transcript der laufenden Claude-Session
     bindingExact: false,     // ID vom Wrapper gemeldet statt ueber Zeitstempel
     agentCwd: null,          // Arbeitsverzeichnis des Agenten (ggf. Worktree)
+    agents: null,            // laufende Subagenten (vom Agenten-Senser)
     bindingBase: null,
     transcriptSnapshot: null,
     claudeStartedAt: 0,
@@ -815,6 +817,16 @@ async function doRefresh(session, force, cwdAtStart) {
   if (session.cwd !== cwdAtStart || session.exited) return; // waehrenddessen cd -> verwerfen
   session.pr = pr;
 
+  // Wer arbeitet hier gerade? Die Frage stellt der Senser den Plugins - welche
+  // Agenten-CLI im Terminal laeuft, geht den Refresh nichts an.
+  session.agents = await getAgentView({
+    cwd: cwdAtStart,
+    agentCwd: session.agentCwd,
+    command: session.currentCmd,
+    claudeSessionId: session.claudeSessionId,
+  });
+  if (session.cwd !== cwdAtStart || session.exited) return;
+
   const info = {
     id: session.id,
     shellName: session.shellName,
@@ -825,6 +837,7 @@ async function doRefresh(session, force, cwdAtStart) {
     gitRoot: session.gitRoot,
     agentCwd: session.agentCwd,
     worktree: session.agentCwd ? path.basename(session.agentCwd) : null,
+    agents: session.agents,
     files: session.files,
     pr: session.pr,
     exited: session.exited,

@@ -296,6 +296,7 @@ function buildSessionItem(s) {
       <span class="si-status"></span>
       <span class="si-title"></span>
       <span class="si-label hidden"></span>
+      <span class="si-agents hidden"></span>
     </div>
     <div class="si-bottom">
       <span class="si-cwd"></span>
@@ -328,11 +329,28 @@ function updateSessionItem(s) {
   const labelEl = el.querySelector('.si-label');
   labelEl.classList.toggle('hidden', !s.label);
   labelEl.textContent = s.label || '';
+  updateAgentChip(el.querySelector('.si-agents'), s.agents);
   el.querySelector('.si-cwd').textContent = s.cwd || '';
   el.querySelector('.si-cwd').title = s.cwd || '';
   const branchEl = el.querySelector('.si-branch');
   branchEl.classList.toggle('hidden', !s.branch);
   branchEl.textContent = s.branch || '';
+}
+
+// Wie viele Agenten arbeiten in dieser Session? Der Chip erscheint nur, wenn
+// gerade welche laufen — eine dauerhafte „0" wäre Ballast in einer Liste, die
+// man im Vorbeigehen liest.
+function updateAgentChip(el, agents) {
+  if (!el) return;
+  const n = agents ? agents.running : 0;
+  el.classList.toggle('hidden', !n);
+  if (!n) { el.textContent = ''; el.title = ''; return; }
+  el.textContent = `✈ ${n}`;
+  const lines = agents.agents.map((a) => {
+    const what = a.description || a.type || a.id.slice(0, 8);
+    return `• ${what}${a.worktree ? ` (⑂ ${a.worktree})` : ''}`;
+  });
+  el.title = [`${n} ${n === 1 ? 'Agent arbeitet' : 'Agenten arbeiten'}`, ...lines].join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -1926,6 +1944,7 @@ window.api.onInfo((info) => {
     gitRoot: info.gitRoot,
     agentCwd: info.agentCwd,
     worktree: info.worktree,
+    agents: info.agents,
     files: info.files,
     pr: info.pr,
     title: info.title,
