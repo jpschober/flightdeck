@@ -193,12 +193,16 @@ function findTranscriptById(sessionId) {
   if (!sessionId) return null;
   let dirs;
   try { dirs = fs.readdirSync(PROJECTS_DIR); } catch (e) { log.debug('sessions: no project directory', { dir: PROJECTS_DIR, session: sessionId, err: e }); return null; }
+  // Probing: a miss is the normal case and says only that the session is
+  // elsewhere, so it is counted rather than logged per directory. Anything that
+  // is not a miss - no permission, a broken mount - is the reason the binding
+  // fails, and goes into the summary below.
+  let problem = null;
   for (const d of dirs) {
     const fp = path.join(PROJECTS_DIR, d, sessionId + '.jsonl');
-    // Probing: a miss is the normal case, it only says the session is elsewhere.
-    try { if (fs.statSync(fp).size > 0) return fp; } catch { /* not here */ }
+    try { if (fs.statSync(fp).size > 0) return fp; } catch (e) { if (!problem && e.code !== 'ENOENT') problem = e.code || e.message; }
   }
-  log.debug('sessions: no transcript for this session', { session: sessionId, dirs: dirs.length });
+  log.debug('sessions: no transcript for this session', { session: sessionId, dirs: dirs.length, err: problem });
   return null;
 }
 

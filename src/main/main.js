@@ -949,16 +949,35 @@ ipcMain.handle('usage:get', (e, force) => getUsage(Boolean(force)));
 
 // The renderer runs sandboxed and has no file access of its own, so its lines
 // come through here and land in the same file as the main process's - one file
-// per report, not two. Level and size are clamped: what arrives here is
-// untrusted input like everything else that crosses the bridge.
+// per report, not two. What arrives here is untrusted input like everything
+// else that crosses the bridge, so it is clamped in three ways: level, field
+// count, and rate. Without the rate limit a page in a loop turns into unbounded
+// synchronous writes on this process's event loop and the interface stops
+// moving; the renderer's own duplicate suppressor sits on the far side of the
+// bridge and proves nothing about what arrives.
 const RENDERER_LEVELS = new Set(['debug', 'info', 'warn', 'error']);
+const RENDERER_RATE = 20; // lines per second, burst of the same size
+let rendererTokens = RENDERER_RATE;
+let rendererRefill = Date.now();
+let rendererDropped = 0;
+
 ipcMain.on('log:renderer', (e, level, message, data) => {
-  const method = RENDERER_LEVELS.has(level) ? level : 'debug';
+  const now = Date.now();
+  rendererTokens = Math.min(RENDERER_RATE, rendererTokens + ((now - rendererRefill) / 1000) * RENDERER_RATE);
+  rendererRefill = now;
+  if (rendererTokens < 1) { rendererDropped++; return; }
+  rendererTokens -= 1;
+
+  // An unknown level lands on info, not debug: below the default threshold the
+  // line would disappear entirely, and a renderer sending a wrong level is
+  // itself something to see.
+  const method = RENDERER_LEVELS.has(level) ? level : 'info';
   const fields = {};
+  if (rendererDropped) { fields.suppressed = rendererDropped; rendererDropped = 0; }
   if (data && typeof data === 'object') {
-    for (const [key, value] of Object.entries(data).slice(0, 8)) {
-      fields[String(key).slice(0, 40)] = String(value).slice(0, 300);
-    }
+    // Values go through as they are - log.js flattens and clamps them, and
+    // that is where the sink defends itself.
+    for (const [key, value] of Object.entries(data).slice(0, 8)) fields[key] = value;
   }
   log[method]('renderer: ' + String(message).slice(0, 300), fields);
 });
