@@ -4,6 +4,7 @@ const {
   TRANSCRIPT_ID_RE,
   listClaudeSessions,
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
+  findTranscriptById,
 } = require('./claude-sessions');
 const path = require('path');
 const os = require('os');
@@ -530,8 +531,8 @@ function beginAgentBinding(session, cmd) {
   if (m && !/--fork-session/.test(cmd)) bindAgentSession(session, m[1], true);
 }
 
-function updateAgentBinding(session) {
-  if (!session.bindingBase) return;
+async function updateAgentBinding(session) {
+  if (!session.bindingBase) { session.transcriptPath = null; return; }
   // If the shell leaves the directory in which `claude` was started, the
   // binding no longer fits.
   if (session.cwd !== session.bindingBase) {
@@ -540,6 +541,7 @@ function updateAgentBinding(session) {
     session.agentCwd = null;
     session.bindingBase = null;
     session.transcriptSnapshot = null;
+    session.transcriptPath = null;
     return;
   }
   // Last resort for cases without a wrapper report (`command claude`, npx, a
@@ -552,9 +554,14 @@ function updateAgentBinding(session) {
     );
     if (id) bindAgentSession(session, id, false);
   }
-  if (!session.claudeSessionId) return;
+  if (!session.claudeSessionId) { session.transcriptPath = null; return; }
 
-  const agentCwd = readAgentCwd(session.claudeSessionId);
+  // Resolved once per pass and handed to the agent sensor below, which would
+  // otherwise look up the same path three more times.
+  session.transcriptPath = findTranscriptById(session.claudeSessionId);
+  const agentCwd = session.transcriptPath
+    ? await readAgentCwd(session.claudeSessionId, session.transcriptPath)
+    : null;
   // Only adopt it if it lies below the shell's directory (i.e. a worktree or
   // similar) - anything else would be a foreign transcript.
   if (agentCwd && agentCwd !== session.cwd
@@ -701,6 +708,7 @@ function createSession(shellId, opts = {}) {
     fileMemory: new Map(),   // path -> entry; survives commits
     pr: null,
     claudeSessionId: null,   // transcript of the running Claude session
+    transcriptPath: null,    // its file, resolved once per refresh
     bindingExact: false,     // ID reported by the wrapper instead of guessed via timestamps
     agentCwd: null,          // the agent's working directory (a worktree, if any)
     agents: null,            // running subagents (from the agent sensor)
@@ -821,7 +829,8 @@ function resetFileMemory(session) {
 }
 
 async function doRefresh(session, force, cwdAtStart) {
-  updateAgentBinding(session);
+  await updateAgentBinding(session);
+  if (session.cwd !== cwdAtStart || session.exited) return; // stale -> discard
   // If the agent works in a worktree, that worktree's branch counts - not the
   // one of the shell that stayed behind in the repo.
   const gitCwd = session.agentCwd || cwdAtStart;
@@ -848,6 +857,7 @@ async function doRefresh(session, force, cwdAtStart) {
     agentCwd: session.agentCwd,
     command: session.currentCmd,
     claudeSessionId: session.claudeSessionId,
+    claudeTranscript: session.transcriptPath,
   });
   if (session.cwd !== cwdAtStart || session.exited) return;
 
@@ -875,10 +885,25 @@ async function doRefresh(session, force, cwdAtStart) {
   }
 }
 
-// periodic refresh (branch switches, new changes, PR status)
+// periodic refresh (branch switches, new changes, PR status). Nobody reads the
+// result while the window is hidden or minimised, so the pass then runs every
+// 30 s instead of every 4 s; showing the window refreshes right away.
+const REFRESH_MS = 4000;
+const REFRESH_HIDDEN_MS = 30000;
+let lastRefreshAt = 0;
+
+function refreshAll(force = false) {
+  lastRefreshAt = Date.now();
+  for (const s of sessions.values()) refreshSession(s, force);
+}
+
 setInterval(() => {
-  for (const s of sessions.values()) refreshSession(s);
-}, 4000);
+  // A minimised window still counts as visible on some platforms, so it is
+  // asked separately.
+  const visible = Boolean(win) && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+  if (Date.now() - lastRefreshAt < (visible ? REFRESH_MS : REFRESH_HIDDEN_MS)) return;
+  refreshAll();
+}, REFRESH_MS);
 
 // ---------------------------------------------------------------------------
 // File preview
@@ -1088,6 +1113,11 @@ function createWindow() {
     },
   });
   win.setMenuBarVisibility(false);
+
+  // Coming back from hidden or minimised, the data is up to 30 s old - the
+  // window gets a fresh pass instead of showing that.
+  win.on('show', () => refreshAll(true));
+  win.on('restore', () => refreshAll(true));
 
   // The preload script runs again on every navigation of this webContents, so a
   // foreign page loaded here would own the full window.api bridge. The interface

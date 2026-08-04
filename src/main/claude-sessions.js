@@ -2,11 +2,55 @@
 // Reads Claude Code sessions from ~/.claude/projects (JSONL files) so they can
 // be shown in the session browser and continued via `claude --resume`.
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const cache = new Map(); // filePath -> { mtime, data }
+
+// ---------------------------------------------------------------------------
+// Central listing of ~/.claude/projects
+//
+// Every lookup below starts from the same directory list, and the refresh runs
+// several of them per session every few seconds. The listing is therefore read
+// once and held until fs.watch reports a change to the root directory - with a
+// few hundred project directories the readdir is the expensive part.
+// ---------------------------------------------------------------------------
+let projectDirsCache = null;
+let projectDirsAt = 0;
+let projectDirsWatcher = null;
+// Only relevant where fs.watch does not work (some network file systems): then
+// the listing ages out instead of staying stale forever.
+const PROJECT_DIRS_TTL = 5000;
+
+function watchProjectsDir() {
+  if (projectDirsWatcher) return;
+  try {
+    projectDirsWatcher = fs.watch(PROJECTS_DIR, () => { projectDirsCache = null; });
+    projectDirsWatcher.on('error', () => {
+      try { projectDirsWatcher.close(); } catch { /* already gone */ }
+      projectDirsWatcher = null;
+      projectDirsCache = null;
+    });
+    if (projectDirsWatcher.unref) projectDirsWatcher.unref();
+  } catch {
+    projectDirsWatcher = null; // fall back to the TTL
+  }
+}
+
+function projectDirs() {
+  if (projectDirsCache
+      && (projectDirsWatcher || Date.now() - projectDirsAt < PROJECT_DIRS_TTL)) {
+    return projectDirsCache;
+  }
+  let dirs;
+  try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { dirs = []; }
+  projectDirsCache = dirs;
+  projectDirsAt = Date.now();
+  watchProjectsDir();
+  return dirs;
+}
 
 // Claude derives the directory name from the cwd: everything except [A-Za-z0-9]
 // becomes '-'. A worktree below the repo therefore ends up in its own
@@ -73,8 +117,7 @@ function readTailSlug(filePath) {
 }
 
 function listClaudeSessions(limit = 200) {
-  let dirs = [];
-  try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { return []; }
+  const dirs = projectDirs();
 
   const found = [];
   for (const dir of dirs) {
@@ -127,9 +170,7 @@ function listClaudeSessions(limit = 200) {
 function projectDirsFor(cwd) {
   const prefix = encodeProjectDir(cwd);
   if (!prefix) return [];
-  let dirs = [];
-  try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { return []; }
-  return dirs
+  return projectDirs()
     .filter((d) => d === prefix || d.startsWith(prefix + '-'))
     .map((d) => path.join(PROJECTS_DIR, d));
 }
@@ -185,13 +226,49 @@ function newestTranscript(cwd, before) {
   return best ? best.id : null;
 }
 
-function findTranscriptById(sessionId) {
-  if (!sessionId) return null;
-  let dirs;
-  try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { return null; }
+// A session keeps its transcript for as long as it runs, so the path is
+// remembered per session ID and only checked with one statSync per call. The
+// scan over all project directories runs on a miss - the first lookup, or after
+// the file has moved into a worktree's directory or been deleted.
+const transcriptPaths = new Map(); // sessionId -> filePath
+const TRANSCRIPT_PATHS_MAX = 200;
+
+function rememberTranscript(sessionId, filePath) {
+  transcriptPaths.delete(sessionId);
+  transcriptPaths.set(sessionId, filePath);
+  while (transcriptPaths.size > TRANSCRIPT_PATHS_MAX) {
+    transcriptPaths.delete(transcriptPaths.keys().next().value);
+  }
+  return filePath;
+}
+
+function scanForTranscript(sessionId, dirs) {
   for (const d of dirs) {
     const fp = path.join(PROJECTS_DIR, d, sessionId + '.jsonl');
-    try { if (fs.statSync(fp).size > 0) return fp; } catch { /* not here */ }
+    try {
+      if (fs.statSync(fp).size > 0) return fp;
+    } catch { /* not here */ }
+  }
+  return null;
+}
+
+function findTranscriptById(sessionId) {
+  if (!sessionId) return null;
+  const known = transcriptPaths.get(sessionId);
+  if (known) {
+    try { if (fs.statSync(known).size > 0) return known; } catch { /* gone */ }
+    transcriptPaths.delete(sessionId);
+  }
+  const listedAt = projectDirsAt;
+  const hit = scanForTranscript(sessionId, projectDirs());
+  if (hit) return rememberTranscript(sessionId, hit);
+  // A miss can also mean the listing is stale - the transcript moved into a
+  // project directory that was created since, and the watch event has not
+  // arrived yet. The listing is read once more before giving up.
+  if (projectDirsAt === listedAt) {
+    projectDirsCache = null;
+    const rescanned = scanForTranscript(sessionId, projectDirs());
+    if (rescanned) return rememberTranscript(sessionId, rescanned);
   }
   return null;
 }
@@ -200,16 +277,19 @@ function findTranscriptById(sessionId) {
 // (on a worktree switch it moves halfway through the file).
 const CWD_RE = /"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
 
-function readAgentCwd(sessionId) {
-  const file = findTranscriptById(sessionId);
-  if (!file) return null;
+// `file` is the already resolved transcript of this session; the refresh
+// resolves it once and passes it in, so this does not look it up again.
+async function readAgentCwd(sessionId, file) {
+  const transcript = file || findTranscriptById(sessionId);
+  if (!transcript) return null;
+  let handle = null;
   try {
-    const size = fs.statSync(file).size;
+    handle = await fsp.open(transcript, 'r');
+    const size = (await handle.stat()).size;
     const readSize = Math.min(size, 131072);
+    if (readSize <= 0) return null;
     const buf = Buffer.alloc(readSize);
-    const fd = fs.openSync(file, 'r');
-    fs.readSync(fd, buf, 0, readSize, size - readSize);
-    fs.closeSync(fd);
+    await handle.read(buf, 0, readSize, size - readSize);
     const text = buf.toString('utf8');
     let last = null; let m;
     CWD_RE.lastIndex = 0;
@@ -218,6 +298,8 @@ function readAgentCwd(sessionId) {
     try { return JSON.parse('"' + last + '"'); } catch { return last; }
   } catch {
     return null;
+  } finally {
+    if (handle) { try { await handle.close(); } catch { /* already closed */ } }
   }
 }
 
