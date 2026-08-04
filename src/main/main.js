@@ -1,11 +1,11 @@
 'use strict';
 const { app, BrowserWindow, ipcMain, clipboard, shell: electronShell } = require('electron');
 const {
+  TRANSCRIPT_ID_RE,
   listClaudeSessions,
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
 } = require('./claude-sessions');
 const path = require('path');
-const { pathToFileURL } = require('url');
 const os = require('os');
 const fs = require('fs');
 const pty = require('@lydell/node-pty');
@@ -664,8 +664,8 @@ function buildPtyEnv(extra) {
 // The renderer asks for a Claude transcript to be resumed, not for a command line
 // of its own choosing: the ID is checked against the UUID form and the command is
 // assembled here, so nothing reaches the PTY that was not built in this process.
-const TRANSCRIPT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
+// The session browser only offers IDs of that form, so a rejected one means the
+// request did not come from it.
 function resumeCommand(resume) {
   if (!resume || !TRANSCRIPT_ID_RE.test(String(resume.id || ''))) return null;
   return `claude --resume ${resume.id}${resume.fork ? ' --fork-session' : ''}`;
@@ -1034,8 +1034,11 @@ ipcMain.handle('file:preview', (e, id, relPath, source, opts) => {
   return previewFile(s, relPath, source, opts || {});
 });
 
+// Only http(s) goes to the system browser; file:// and everything else stays put.
+function isExternalUrl(url) { return /^https?:\/\//.test(url); }
+
 ipcMain.on('open-external', (e, url) => {
-  if (/^https?:\/\//.test(url)) electronShell.openExternal(url);
+  if (isExternalUrl(url)) electronShell.openExternal(url);
 });
 
 ipcMain.handle('history:get', (e, id) => {
@@ -1067,7 +1070,6 @@ ipcMain.handle('todos:set', (e, id, todos) => {
 // Window
 // ---------------------------------------------------------------------------
 const INDEX_HTML = path.join(__dirname, '..', 'renderer', 'index.html');
-const INDEX_URL = pathToFileURL(INDEX_HTML).href;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -1088,16 +1090,17 @@ function createWindow() {
   win.setMenuBarVisibility(false);
 
   // The preload script runs again on every navigation of this webContents, so a
-  // foreign page loaded here would own the full window.api bridge. Only the app's
-  // own document may be loaded; everything else is cancelled. A dropped file is
-  // the most common trigger - Chromium navigates to it unless this fires.
-  const blockNavigation = (e, url) => { if (url !== INDEX_URL) e.preventDefault(); };
+  // foreign page loaded here would own the full window.api bridge. The interface
+  // never navigates - the document below is loaded once via loadFile, which these
+  // events do not cover - so every navigation that does occur is cancelled. A
+  // dropped file is the most common trigger.
+  const blockNavigation = (e) => e.preventDefault();
   win.webContents.on('will-navigate', blockNavigation);
-  win.webContents.on('will-frame-navigate', (e) => blockNavigation(e, e.url));
+  win.webContents.on('will-frame-navigate', blockNavigation);
 
   // No new windows either; http(s) links go to the system browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) electronShell.openExternal(url);
+    if (isExternalUrl(url)) electronShell.openExternal(url);
     return { action: 'deny' };
   });
 
