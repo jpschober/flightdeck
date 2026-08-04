@@ -94,8 +94,12 @@ const TERM_THEME = {
   brightCyan: '#72dde5', brightWhite: '#f2f4f8',
 };
 
+// Quotes are escaped as well: almost every caller interpolates the result into
+// a double-quoted attribute value (title=, value=), and PR bodies, review
+// comments and SQL migrations from a cloned repo are written by third parties.
 function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Make an element keyboard-operable: Enter/Space = click
@@ -119,12 +123,22 @@ function basename(p) {
 // Mini markdown renderer (PR descriptions, agent summaries).
 // No external package (CSP) - covers the constructs agents typically use.
 // ---------------------------------------------------------------------------
+// mdInline sees text that escapeHtml has already been through, so a link target
+// arrives with & as &amp; and every quote and angle bracket as an entity. A raw
+// & can therefore only be the start of such an entity, and rejecting all of
+// them except &amp; and &#39; keeps double quotes and brackets out of the
+// attribute - an apostrophe cannot end the double-quoted value it sits in.
+// Everything else passes, unicode paths and IDN hosts included; a target that
+// fails keeps its literal [label](target) form instead of becoming an anchor.
+const MD_URL = /^https?:\/\/[^\s&<>"']*(?:(?:&amp;|&#39;)[^\s&<>"']*)*$/u;
+
 function mdInline(s) {
   return s
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="#" data-url="$2">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (m, label, url) => (
+      MD_URL.test(url) ? `<a href="#" data-url="${url}">${label}</a>` : m));
 }
 
 function mdToHtml(md) {
