@@ -226,9 +226,9 @@ function claude
 end
 `;
 
-// Zsh loads its configuration from $ZDOTDIR. We point that at a temporary
-// directory which first loads the user's real configuration and then installs
-// the hooks.
+// Zsh loads its configuration from $ZDOTDIR. We point that at our own directory
+// (see getRcDir), which first loads the user's real configuration and then
+// installs the hooks.
 // Important: after loading the user's .zshenv, ZDOTDIR must point back at our
 // directory, otherwise zsh will not find our .zshrc in the next step.
 const ZSH_ENV = `
@@ -259,26 +259,34 @@ add-zsh-hook preexec __flightdeck_preexec
 // directory (ZDOTDIR), the others only a file. A world-writable location such as
 // os.tmpdir() lets another local user create the directory first and place files
 // in it, and zsh sources everything it finds in ZDOTDIR.
-const RC_FILES = ['bashrc.sh', 'init.fish', '.zshenv', '.zshrc'];
+
+// Zsh startup files that Flightdeck never writes but would source from ZDOTDIR.
+// One of them left behind by an older version or another writer runs on every
+// session, so they are removed. Other entries are left alone: a second instance
+// may be writing its own temporary file at any moment.
+const ZSH_STALE_FILES = ['.zprofile', '.zlogin', '.zlogout'];
 
 let rcDir = null;
 function getRcDir() {
   if (!rcDir) {
     const dir = path.join(app.getPath('userData'), 'shell-integration');
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // mkdirSync with recursive: true also accepts a symlink to a directory, and
+    // the chmod and the removals below would then apply to the target.
+    if (!fs.lstatSync(dir).isDirectory()) throw new Error('not a directory: ' + dir);
     if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
-    // Remove anything an older version left behind: zsh would source a stale
-    // .zprofile or .zlogin from ZDOTDIR as well.
-    for (const entry of fs.readdirSync(dir)) {
-      if (!RC_FILES.includes(entry)) fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+    for (const name of ZSH_STALE_FILES) {
+      try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); } catch { /* never mind */ }
     }
     rcDir = dir;
   }
   return rcDir;
 }
 
-// Written to a fresh file and renamed over the old one, so a session started by
-// a second Flightdeck instance never reads a half-written file.
+// Written to a separate file and renamed over the old one, so a session started
+// by a second Flightdeck instance reads either the previous or the new content
+// and never a half-written file. Other users are kept out by the 0700 directory;
+// the temporary name only needs to be unique per instance.
 function writeRc(name, content) {
   const p = path.join(getRcDir(), name);
   const tmp = p + '.' + process.pid + '.tmp';
@@ -302,12 +310,17 @@ function spawnArgsFor(shell) {
     case 'gitbash':
     case 'bash':
       return { file: shell.file, args: ['--rcfile', getRc('bashrc.sh', BASH_RC), '-i'], env: {} };
-    case 'fish':
+    case 'fish': {
+      // -C takes a string that fish parses, and the userData path contains a
+      // space on macOS, so the path is quoted. Inside single quotes fish treats
+      // only \' and \\ as escapes.
+      const rc = getRc('init.fish', FISH_RC).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       return {
         file: shell.file,
-        args: ['-C', 'source ' + getRc('init.fish', FISH_RC), '-i'],
+        args: ['-C', "source '" + rc + "'", '-i'],
         env: {},
       };
+    }
     case 'zsh': {
       getRc('.zshenv', ZSH_ENV);
       getRc('.zshrc', ZSH_RC);
@@ -1132,6 +1145,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* never mind */ } }
-  if (rcDir) { try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch { /* never mind */ } }
+  // The integration directory stays: it is shared with any second instance,
+  // whose sessions would otherwise start without the hooks.
   app.quit();
 });
