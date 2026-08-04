@@ -885,24 +885,54 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 const MAX_PREVIEW = 512 * 1024;
 
+/** Is `p` `root` itself or below it? Both have to be resolved already. */
+function isInside(root, p) {
+  return p === root || p.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+// The path comes from the renderer and is foreign input. Anything that is not
+// a relative path below the session root is rejected here, before a git command
+// or a read sees it.
+function resolveInRoot(root, relPath) {
+  if (typeof relPath !== 'string' || !relPath || relPath.includes('\0')) return null;
+  if (path.isAbsolute(relPath)) return null;
+  const base = path.resolve(root);
+  const abs = path.resolve(base, relPath);
+  return isInside(base, abs) ? abs : null;
+}
+
+// Reading for the preview: a symlink is not followed, neither the file itself
+// nor a directory on the way to it. A cloned repository can contain a link to
+// any file the user can read, and for untracked files the preview reads from
+// the file system directly.
+async function readForPreview(root, abs, relPath) {
+  try {
+    const stat = await fs.promises.lstat(abs);
+    if (stat.isSymbolicLink()) return { kind: 'error', path: relPath, text: t('file.symlink') };
+    if (stat.isDirectory()) return { kind: 'error', path: relPath, text: t('file.isDir') };
+    const [realRoot, real] = await Promise.all([fs.promises.realpath(root), fs.promises.realpath(abs)]);
+    if (!isInside(realRoot, real)) return { kind: 'error', path: relPath, text: t('file.outsideRoot') };
+    if (stat.size > MAX_PREVIEW) {
+      const buf = await fs.promises.readFile(abs);
+      return { kind: 'content', path: relPath, text: buf.slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
+    }
+    return { kind: 'content', path: relPath, text: await fs.promises.readFile(abs, 'utf8') };
+  } catch (e) {
+    return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
+  }
+}
+
 async function previewFile(session, relPath, source, opts = {}) {
   const root = session.gitRoot || session.cwd;
-  const abs = path.resolve(root, relPath);
+  const abs = resolveInRoot(root, relPath);
+  if (!abs) {
+    const shown = typeof relPath === 'string' ? relPath : '';
+    return { kind: 'error', path: shown, text: t('file.outsideRoot') };
+  }
 
   // The preview can request the file content instead of the diff - for the
   // rendered markdown view, which could show nothing based on the diff.
-  if (opts.content) {
-    try {
-      const stat = fs.statSync(abs);
-      if (stat.isDirectory()) return { kind: 'error', path: relPath, text: t('file.isDir') };
-      if (stat.size > MAX_PREVIEW) {
-        return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
-      }
-      return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
-    } catch (e) {
-      return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
-    }
-  }
+  if (opts.content) return readForPreview(root, abs, relPath);
 
   if (source === 'pr' && session.pr && session.pr.baseRefName) {
     const diff = await run('git', ['diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], root);
@@ -915,15 +945,7 @@ async function previewFile(session, relPath, source, opts = {}) {
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
-  try {
-    const stat = fs.statSync(abs);
-    if (stat.size > MAX_PREVIEW) {
-      return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
-    }
-    return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
-  } catch (e) {
-    return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
-  }
+  return readForPreview(root, abs, relPath);
 }
 
 // ---------------------------------------------------------------------------
