@@ -124,10 +124,13 @@ function basename(p) {
 // No external package (CSP) - covers the constructs agents typically use.
 // ---------------------------------------------------------------------------
 // mdInline sees text that escapeHtml has already been through, so a link target
-// arrives with & as &amp; and every quote and angle bracket as an entity. Only
-// characters that are legal in a URL pass; anything else keeps its literal
-// [label](target) form instead of becoming an anchor.
-const MD_URL = /^https?:\/\/(?:&amp;|[\w\-._~:/?#[\]@!$*+,;=%])+$/;
+// arrives with & as &amp; and every quote and angle bracket as an entity. A raw
+// & can therefore only be the start of such an entity, and rejecting all of
+// them except &amp; and &#39; keeps double quotes and brackets out of the
+// attribute - an apostrophe cannot end the double-quoted value it sits in.
+// Everything else passes, unicode paths and IDN hosts included; a target that
+// fails keeps its literal [label](target) form instead of becoming an anchor.
+const MD_URL = /^https?:\/\/[^\s&<>"']*(?:(?:&amp;|&#39;)[^\s&<>"']*)*$/u;
 
 function mdInline(s) {
   return s
