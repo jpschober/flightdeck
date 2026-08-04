@@ -1,5 +1,5 @@
 'use strict';
-/* global Terminal, FitAddon, WebLinksAddon, I18nRuntime */
+/* global Terminal, FitAddon, WebLinksAddon, WebglAddon, I18nRuntime */
 
 // ---------------------------------------------------------------------------
 // Language
@@ -311,6 +311,19 @@ function buildMoreMenu() {
 // ---------------------------------------------------------------------------
 // Create / activate / close sessions
 // ---------------------------------------------------------------------------
+// The WebGL renderer draws the terminal on the GPU instead of building a DOM
+// node per cell. The addon has to be loaded after term.open(), because it needs
+// the element. A lost GPU context (driver reset, suspend) cannot be restored by
+// the addon; it is disposed and xterm falls back to the DOM renderer.
+function loadWebgl(term) {
+  if (typeof WebglAddon === 'undefined') return;
+  try {
+    const webgl = new WebglAddon.WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch { /* no WebGL context available: the DOM renderer stays */ }
+}
+
 async function newSession(shellId, opts) {
   const meta = await window.api.createSession(shellId, opts || {});
 
@@ -332,6 +345,7 @@ async function newSession(shellId, opts) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => window.api.openExternal(uri)));
   handleOsc52(term);
   term.open(paneEl);
+  loadWebgl(term);
 
   term.onData((data) => window.api.input(meta.id, data));
   term.onResize(({ cols, rows }) => window.api.resize(meta.id, cols, rows));
@@ -2088,11 +2102,15 @@ window.api.onNotify((id, message) => {
 // ---------------------------------------------------------------------------
 // Events from the main process
 // ---------------------------------------------------------------------------
+// The acknowledgement runs through xterm's write callback: it fires once the
+// batch has been parsed, so the main process learns the actual backlog and
+// pauses the PTY while xterm is behind.
 window.api.onData((id, data) => {
-  const s = sessions.get(id);
-  if (s) s.term.write(data);
   const gridEntry = gridCards.get(id);
   if (gridEntry) gridEntry.term.write(data);
+  const s = sessions.get(id);
+  if (s) s.term.write(data, () => window.api.ackData(id, data.length));
+  else window.api.ackData(id, data.length);
 });
 
 window.api.onState((id, state) => {

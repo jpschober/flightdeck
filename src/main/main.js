@@ -671,6 +671,82 @@ function resumeCommand(resume) {
   return `claude --resume ${resume.id}${resume.fork ? ' --fork-session' : ''}`;
 }
 
+// Output batching and flow control
+// --------------------------------
+// node-pty hands over thousands of chunks per second for `cat` on a large file
+// or an install log. One IPC send per chunk means one structured clone and one
+// xterm write per chunk; the chunks are collected here and go out together
+// after FLUSH_MS or once FLUSH_BYTES have accumulated.
+//
+// The renderer acknowledges every batch once xterm has processed it. Above
+// FLOW_HIGH_WATER unacknowledged characters the PTY is paused, below
+// FLOW_LOW_WATER it is resumed - without this, a producer faster than the
+// renderer grows xterm's internal buffer up to its 50 MB limit.
+const FLUSH_MS = 16;
+const FLUSH_BYTES = 65536;
+const FLOW_HIGH_WATER = 262144;
+const FLOW_LOW_WATER = 65536;
+const GRID_PREVIEW_CHARS = 20480;
+
+function queueOutput(session, data) {
+  session.pending.push(data);
+  session.pendingSize += data.length;
+  if (session.pendingSize >= FLUSH_BYTES) { flushOutput(session); return; }
+  if (!session.flushTimer) {
+    session.flushTimer = setTimeout(() => flushOutput(session), FLUSH_MS);
+  }
+}
+
+function flushOutput(session) {
+  if (session.flushTimer) { clearTimeout(session.flushTimer); session.flushTimer = null; }
+  if (!session.pending.length) return;
+  const data = session.pending.length === 1 ? session.pending[0] : session.pending.join('');
+  session.pending.length = 0;
+  session.pendingSize = 0;
+
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('session:data', session.id, data);
+    session.unacked += data.length;
+    if (!session.flowPaused && session.unacked > FLOW_HIGH_WATER) {
+      session.flowPaused = true;
+      try { session.proc.pause(); } catch { /* session gone */ }
+    }
+  }
+
+  // Scrollback buffer for the grid preview (max. 256 KB)
+  session.outputBuffer.push(data);
+  session.outputBufferSize += data.length;
+  while (session.outputBufferSize > 262144 && session.outputBuffer.length > 1) {
+    session.outputBufferSize -= session.outputBuffer.shift().length;
+  }
+
+  // Alternate screen mode (full-screen TUIs such as vim, htop, Claude dialogs)
+  if (data.includes('\x1b[?')) {
+    if (data.includes('\x1b[?1049h') || data.includes('\x1b[?47h')) session.altScreen = true;
+    if (data.includes('\x1b[?1049l') || data.includes('\x1b[?47l')) session.altScreen = false;
+  }
+
+  const tailLen = session.oscTail.length;
+  const text = session.oscTail + data;
+  const found = extractCwd(text);
+  applyStateFromData(session, text, tailLen, data);
+  session.oscTail = text.slice(-512);
+  if (found && found !== session.cwd) {
+    session.cwd = found;
+    refreshSession(session, true);
+  }
+}
+
+// The renderer reports how many characters xterm has processed. Once the
+// backlog is small enough the PTY reads on.
+function ackOutput(session, chars) {
+  session.unacked = Math.max(0, session.unacked - chars);
+  if (session.flowPaused && session.unacked <= FLOW_LOW_WATER) {
+    session.flowPaused = false;
+    try { session.proc.resume(); } catch { /* session gone */ }
+  }
+}
+
 function createSession(shellId, opts = {}) {
   const shell = availableShells.find((s) => s.id === shellId) || availableShells[0];
   const { file, args, env } = spawnArgsFor(shell);
@@ -723,40 +799,21 @@ function createSession(shellId, opts = {}) {
     altScreen: false,
     outputBuffer: [],
     outputBufferSize: 0,
+    pending: [],          // PTY chunks not yet sent to the renderer
+    pendingSize: 0,
+    flushTimer: null,
+    unacked: 0,           // characters sent but not yet processed by xterm
+    flowPaused: false,
     pendingCommand: resumeCommand(opts.resume),
   };
   sessions.set(id, session);
 
-  proc.onData((data) => {
-    if (win && !win.isDestroyed()) win.webContents.send('session:data', id, data);
-
-    // Scrollback buffer for the grid preview (max. 256 KB)
-    session.outputBuffer.push(data);
-    session.outputBufferSize += data.length;
-    while (session.outputBufferSize > 262144 && session.outputBuffer.length > 1) {
-      session.outputBufferSize -= session.outputBuffer.shift().length;
-    }
-
-    // Alternate screen mode (full-screen TUIs such as vim, htop, Claude dialogs)
-    if (data.includes('\x1b[?')) {
-      if (data.includes('\x1b[?1049h') || data.includes('\x1b[?47h')) session.altScreen = true;
-      if (data.includes('\x1b[?1049l') || data.includes('\x1b[?47l')) session.altScreen = false;
-    }
-
-    const tailLen = session.oscTail.length;
-    const text = session.oscTail + data;
-    const found = extractCwd(text);
-    applyStateFromData(session, text, tailLen, data);
-    session.oscTail = text.slice(-512);
-    if (found && found !== session.cwd) {
-      session.cwd = found;
-      refreshSession(session, true);
-    }
-  });
+  proc.onData((data) => queueOutput(session, data));
 
   proc.onExit(() => {
     clearTimeout(session.idleTimer);
     clearTimeout(session.attnTimer);
+    flushOutput(session);
     session.exited = true;
     if (win && !win.isDestroyed()) win.webContents.send('session:exit', id);
   });
@@ -932,9 +989,25 @@ async function previewFile(session, relPath, source, opts = {}) {
 ipcMain.handle('shells:list', () => availableShells.map((s) => ({ id: s.id, name: shellName(s) })));
 ipcMain.handle('session:create', (e, shellId, opts) => createSession(shellId, opts || {}));
 
+// The grid thumbnail keeps 50 lines of scrollback - the last 20 KB fill them,
+// the remaining 236 KB of the ring buffer would only be parsed and thrown away.
 ipcMain.handle('session:buffer', (e, id) => {
   const s = sessions.get(id);
-  return s ? s.outputBuffer.join('') : '';
+  if (!s) return '';
+  const parts = [];
+  let size = 0;
+  for (let i = s.outputBuffer.length - 1; i >= 0 && size < GRID_PREVIEW_CHARS; i--) {
+    parts.push(s.outputBuffer[i]);
+    size += s.outputBuffer[i].length;
+  }
+  const text = parts.reverse().join('');
+  return text.length > GRID_PREVIEW_CHARS ? text.slice(-GRID_PREVIEW_CHARS) : text;
+});
+
+// Flow control: the renderer reports the batch it has written to xterm.
+ipcMain.on('session:ack', (e, id, chars) => {
+  const s = sessions.get(id);
+  if (s && !s.exited && Number.isFinite(chars)) ackOutput(s, chars);
 });
 
 ipcMain.handle('claude:sessions', () => listClaudeSessions());
@@ -1015,6 +1088,8 @@ ipcMain.on('session:resize', (e, id, cols, rows) => {
 ipcMain.handle('session:close', (e, id) => {
   const s = sessions.get(id);
   if (s) {
+    clearTimeout(s.flushTimer);
+    s.flushTimer = null;
     try { s.proc.kill(); } catch { /* already terminated */ }
     sessions.delete(id);
   }
