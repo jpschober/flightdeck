@@ -13,6 +13,12 @@ const cache = new Map(); // filePath -> { mtime, data }
 // directory whose name starts with the repo's.
 function encodeProjectDir(p) { return (p || '').replace(/[^a-zA-Z0-9]/g, '-'); }
 
+// Claude names a transcript after its session UUID. Any other .jsonl in the
+// project directory - a backup, a copy - cannot be resumed, so it is kept out of
+// the browser instead of offering a Resume button that leads nowhere. The main
+// process checks the same form before it builds the command line.
+const TRANSCRIPT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Read the head of the file: cwd, slug and the first user message as a preview.
 // file-history-snapshot lines can be huge and are skipped.
 function readHeadSignals(filePath) {
@@ -74,7 +80,12 @@ function listClaudeSessions(limit = 200) {
   for (const dir of dirs) {
     const dirPath = path.join(PROJECTS_DIR, dir);
     let files;
-    try { files = fs.readdirSync(dirPath).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+    // The name check runs here, not on the result: a file that cannot be resumed
+    // costs neither a stat, a head read, nor one of the `limit` slots below.
+    try {
+      files = fs.readdirSync(dirPath)
+        .filter((f) => f.endsWith('.jsonl') && TRANSCRIPT_ID_RE.test(path.basename(f, '.jsonl')));
+    } catch { continue; }
     for (const f of files) {
       const filePath = path.join(dirPath, f);
       let stat;
@@ -211,6 +222,7 @@ function readAgentCwd(sessionId) {
 }
 
 module.exports = {
+  TRANSCRIPT_ID_RE,
   listClaudeSessions,
   snapshotTranscripts,
   detectTranscript,

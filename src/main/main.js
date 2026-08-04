@@ -1,6 +1,7 @@
 'use strict';
 const { app, BrowserWindow, ipcMain, clipboard, shell: electronShell } = require('electron');
 const {
+  TRANSCRIPT_ID_RE,
   listClaudeSessions,
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
 } = require('./claude-sessions');
@@ -660,6 +661,16 @@ function buildPtyEnv(extra) {
   return env;
 }
 
+// The renderer asks for a Claude transcript to be resumed, not for a command line
+// of its own choosing: the ID is checked against the UUID form and the command is
+// assembled here, so nothing reaches the PTY that was not built in this process.
+// The session browser only offers IDs of that form, so a rejected one means the
+// request did not come from it.
+function resumeCommand(resume) {
+  if (!resume || !TRANSCRIPT_ID_RE.test(String(resume.id || ''))) return null;
+  return `claude --resume ${resume.id}${resume.fork ? ' --fork-session' : ''}`;
+}
+
 function createSession(shellId, opts = {}) {
   const shell = availableShells.find((s) => s.id === shellId) || availableShells[0];
   const { file, args, env } = spawnArgsFor(shell);
@@ -712,7 +723,7 @@ function createSession(shellId, opts = {}) {
     altScreen: false,
     outputBuffer: [],
     outputBufferSize: 0,
-    pendingCommand: opts.runCommand || null,
+    pendingCommand: resumeCommand(opts.resume),
   };
   sessions.set(id, session);
 
@@ -1023,8 +1034,11 @@ ipcMain.handle('file:preview', (e, id, relPath, source, opts) => {
   return previewFile(s, relPath, source, opts || {});
 });
 
+// Only http(s) goes to the system browser; file:// and everything else stays put.
+function isExternalUrl(url) { return /^https?:\/\//.test(url); }
+
 ipcMain.on('open-external', (e, url) => {
-  if (/^https?:\/\//.test(url)) electronShell.openExternal(url);
+  if (isExternalUrl(url)) electronShell.openExternal(url);
 });
 
 ipcMain.handle('history:get', (e, id) => {
@@ -1055,6 +1069,8 @@ ipcMain.handle('todos:set', (e, id, todos) => {
 // ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
+const INDEX_HTML = path.join(__dirname, '..', 'renderer', 'index.html');
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1500,
@@ -1068,10 +1084,27 @@ function createWindow() {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
   win.setMenuBarVisibility(false);
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+
+  // The preload script runs again on every navigation of this webContents, so a
+  // foreign page loaded here would own the full window.api bridge. The interface
+  // never navigates - the document below is loaded once via loadFile, which these
+  // events do not cover - so every navigation that does occur is cancelled. A
+  // dropped file is the most common trigger.
+  const blockNavigation = (e) => e.preventDefault();
+  win.webContents.on('will-navigate', blockNavigation);
+  win.webContents.on('will-frame-navigate', blockNavigation);
+
+  // No new windows either; http(s) links go to the system browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isExternalUrl(url)) electronShell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  win.loadFile(INDEX_HTML);
 }
 
 // A stored choice wins; otherwise follow the system. Unknown system languages
