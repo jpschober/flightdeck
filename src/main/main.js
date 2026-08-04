@@ -255,20 +255,36 @@ add-zsh-hook precmd __flightdeck_prompt
 add-zsh-hook preexec __flightdeck_preexec
 `;
 
-// The integration files live in their own directory under tmp; zsh needs a
-// directory (ZDOTDIR), the others only a file.
+// The integration files live in their own directory under userData; zsh needs a
+// directory (ZDOTDIR), the others only a file. A world-writable location such as
+// os.tmpdir() lets another local user create the directory first and place files
+// in it, and zsh sources everything it finds in ZDOTDIR.
+const RC_FILES = ['bashrc.sh', 'init.fish', '.zshenv', '.zshrc'];
+
 let rcDir = null;
 function getRcDir() {
   if (!rcDir) {
-    rcDir = path.join(os.tmpdir(), 'flightdeck-shell-' + process.pid);
-    fs.mkdirSync(rcDir, { recursive: true });
+    const dir = path.join(app.getPath('userData'), 'shell-integration');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
+    // Remove anything an older version left behind: zsh would source a stale
+    // .zprofile or .zlogin from ZDOTDIR as well.
+    for (const entry of fs.readdirSync(dir)) {
+      if (!RC_FILES.includes(entry)) fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+    }
+    rcDir = dir;
   }
   return rcDir;
 }
 
+// Written to a fresh file and renamed over the old one, so a session started by
+// a second Flightdeck instance never reads a half-written file.
 function writeRc(name, content) {
   const p = path.join(getRcDir(), name);
-  fs.writeFileSync(p, content);
+  const tmp = p + '.' + process.pid + '.tmp';
+  fs.rmSync(tmp, { force: true });
+  fs.writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(tmp, p);
   return p.replace(/\\/g, '/');
 }
 
