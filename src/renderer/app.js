@@ -20,6 +20,13 @@ const sessions = new Map(); // id -> { meta..., term, fit, paneEl, itemEl }
 let activeId = null;
 let shells = [];
 
+// A file dropped on the window would otherwise navigate the document to it. The
+// main process cancels that navigation as well; here the drop is swallowed before
+// it becomes one.
+for (const type of ['dragover', 'drop']) {
+  document.addEventListener(type, (e) => { e.preventDefault(); }, false);
+}
+
 const $ = (sel) => document.querySelector(sel);
 const sessionListEl = $('#session-list');
 const shellMenu = $('#shell-menu');
@@ -2026,7 +2033,7 @@ function renderClaudeSessions() {
       closeSessionBrowser();
       newSession(shells[0] && shells[0].id, {
         cwd: cs.cwd,
-        runCommand: `claude --resume ${cs.id}${fork ? ' --fork-session' : ''}`,
+        resume: { id: cs.id, fork },
       });
     };
     el.querySelector('.cs-resume').addEventListener('click', () => start(false));

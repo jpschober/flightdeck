@@ -5,6 +5,7 @@ const {
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
 } = require('./claude-sessions');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const os = require('os');
 const fs = require('fs');
 const pty = require('@lydell/node-pty');
@@ -660,6 +661,16 @@ function buildPtyEnv(extra) {
   return env;
 }
 
+// The renderer asks for a Claude transcript to be resumed, not for a command line
+// of its own choosing: the ID is checked against the UUID form and the command is
+// assembled here, so nothing reaches the PTY that was not built in this process.
+const TRANSCRIPT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function resumeCommand(resume) {
+  if (!resume || !TRANSCRIPT_ID_RE.test(String(resume.id || ''))) return null;
+  return `claude --resume ${resume.id}${resume.fork ? ' --fork-session' : ''}`;
+}
+
 function createSession(shellId, opts = {}) {
   const shell = availableShells.find((s) => s.id === shellId) || availableShells[0];
   const { file, args, env } = spawnArgsFor(shell);
@@ -712,7 +723,7 @@ function createSession(shellId, opts = {}) {
     altScreen: false,
     outputBuffer: [],
     outputBufferSize: 0,
-    pendingCommand: opts.runCommand || null,
+    pendingCommand: resumeCommand(opts.resume),
   };
   sessions.set(id, session);
 
@@ -1055,6 +1066,9 @@ ipcMain.handle('todos:set', (e, id, todos) => {
 // ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
+const INDEX_HTML = path.join(__dirname, '..', 'renderer', 'index.html');
+const INDEX_URL = pathToFileURL(INDEX_HTML).href;
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1500,
@@ -1068,10 +1082,26 @@ function createWindow() {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
   win.setMenuBarVisibility(false);
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+
+  // The preload script runs again on every navigation of this webContents, so a
+  // foreign page loaded here would own the full window.api bridge. Only the app's
+  // own document may be loaded; everything else is cancelled. A dropped file is
+  // the most common trigger - Chromium navigates to it unless this fires.
+  const blockNavigation = (e, url) => { if (url !== INDEX_URL) e.preventDefault(); };
+  win.webContents.on('will-navigate', blockNavigation);
+  win.webContents.on('will-frame-navigate', (e) => blockNavigation(e, e.url));
+
+  // No new windows either; http(s) links go to the system browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) electronShell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  win.loadFile(INDEX_HTML);
 }
 
 // A stored choice wins; otherwise follow the system. Unknown system languages
