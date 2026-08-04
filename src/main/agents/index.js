@@ -18,6 +18,8 @@
 // Adding another plugin means: create a file under plugins/, register it in
 // PLUGINS, done.
 
+const log = require('../log');
+
 const PLUGINS = [
   require('./plugins/claude'),
 ];
@@ -35,6 +37,7 @@ async function detectAll(ctx) {
       d = await plugin.detect(ctx);
     } catch (e) {
       // A broken plugin must not take the others down with it
+      log.warn('agents: detection failed', { plugin: plugin.id, session: ctx.claudeSessionId || null, cwd: ctx.cwd || null, err: e });
       d = null;
     }
     if (d && d.confidence > 0) {
@@ -78,6 +81,7 @@ async function getAgentView(ctx) {
   } catch (e) {
     // Counting failed does not mean "no agents" - better to show no number at
     // all than a wrong one.
+    log.warn('agents: reading failed', { plugin: winner.plugin.id, session: ctx.claudeSessionId || null, err: e });
     return { ...view, error: e.message };
   }
 

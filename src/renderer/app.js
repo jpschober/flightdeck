@@ -27,6 +27,34 @@ for (const type of ['dragover', 'drop']) {
   document.addEventListener(type, (e) => { e.preventDefault(); }, false);
 }
 
+// ---------------------------------------------------------------------------
+// Logging
+//
+// The renderer is sandboxed and has no file access, so its lines go over the
+// bridge into the main process's log file - one file per bug report. Repeats of
+// the same message are dropped for a few seconds: a failing fit() during a
+// divider drag fires with every mouse move, and its first line already says
+// everything the tenth would.
+// ---------------------------------------------------------------------------
+const logSeen = new Map(); // message -> last sent at
+const LOG_REPEAT_MS = 5000;
+
+function logLine(level, message, data) {
+  const now = Date.now();
+  const last = logSeen.get(message);
+  if (last && now - last < LOG_REPEAT_MS) return;
+  logSeen.set(message, now);
+  if (logSeen.size > 100) logSeen.delete(logSeen.keys().next().value);
+  const fields = {};
+  for (const [key, value] of Object.entries(data || {})) {
+    fields[key] = value instanceof Error ? value.message : value;
+  }
+  window.api.log(level, message, fields);
+}
+
+const logDebug = (message, data) => logLine('debug', message, data);
+const logWarn = (message, data) => logLine('warn', message, data);
+
 const $ = (sel) => document.querySelector(sel);
 const sessionListEl = $('#session-list');
 const shellMenu = $('#shell-menu');
@@ -76,7 +104,7 @@ function handleOsc52(term) {
     try {
       const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
       window.api.clipboardWrite(new TextDecoder().decode(bytes));
-    } catch { /* not valid base64 */ }
+    } catch (e) { logDebug('osc52: payload is not valid base64', { err: e }); }
     return true;
   });
 }
@@ -238,8 +266,8 @@ async function retranslate() {
   // the renderer's own copy.
   dbState.lastJson = '';
   await Promise.all([
-    loadDbSchema(true).catch(() => {}),
-    loadUsage(true).catch(() => {}),
+    loadDbSchema(true).catch((e) => logWarn('retranslate: db schema not reloaded', { err: e })),
+    loadUsage(true).catch((e) => logWarn('retranslate: usage not reloaded', { err: e })),
   ]);
   if (!previewOverlay.classList.contains('hidden') && previewState) {
     renderPreviewModes(Boolean(previewState.cache.default
@@ -397,7 +425,7 @@ function setActive(id) {
     s.itemEl.classList.toggle('active', active);
     if (active) {
       requestAnimationFrame(() => {
-        try { s.fit.fit(); } catch { /* pane may still be 0px */ }
+        try { s.fit.fit(); } catch (e) { logDebug('terminal: fit failed, pane may still be 0px', { session: s.id, err: e }); }
         s.term.focus();
       });
     }
@@ -734,7 +762,7 @@ function renderHistory(s) {
     makeKeyActivatable(el);
     el.addEventListener('click', async (e) => {
       if (e.target.closest('.hist-send')) return;
-      try { await navigator.clipboard.writeText(entry.text); } catch { /* never mind */ }
+      try { await navigator.clipboard.writeText(entry.text); } catch (err) { logWarn('history: entry not copied to the clipboard', { err }); }
       el.classList.add('copied');
       setTimeout(() => el.classList.remove('copied'), 400);
     });
@@ -968,8 +996,8 @@ async function loadDbSchema(force = false) {
     dbState.sessionId = s.id;
     renderDbPanel();
     if (!dbDiffOverlay.classList.contains('hidden')) renderDbDiff();
-  } catch {
-    /* session gone or similar */
+  } catch (e) {
+    logWarn('dbschema: panel not loaded', { session: s.id, baseline: dbState.baseline, err: e });
   } finally {
     dbState.loading = false;
   }
@@ -986,7 +1014,9 @@ function setDbBadge(count) {
 // be searched for. The sensor serves from the cache as long as no file moves.
 function startDbPolling() {
   clearInterval(dbTimer);
-  dbTimer = setInterval(() => { loadDbSchema().catch(() => {}); }, 10_000);
+  dbTimer = setInterval(() => {
+    loadDbSchema().catch((e) => logWarn('dbschema: background poll failed', { err: e }));
+  }, 10_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,6 +1044,9 @@ function renderDbPanel() {
       <div class="db-hint">${escapeHtml(t('db.none.hint', { project: '\u0000', path: '\u0001' }))
         .replace('\u0000', `<code>${escapeHtml(view.project || view.root || '')}</code>`)
         .replace('\u0001', '<code>supabase/migrations</code>')}</div>`;
+    // "Nothing detected" and "a plugin broke on the way there" look the same
+    // in the panel otherwise. The warnings tell them apart.
+    dbTablesEl.insertAdjacentHTML('beforeend', warningsHtml(view.schema));
     setDbBadge(0);
     return;
   }
@@ -1023,6 +1056,19 @@ function renderDbPanel() {
   dbSearchEl.classList.remove('hidden');
   renderDbTables(view);
   setDbBadge(view.changeCount || 0);
+}
+
+// What the reader could not make sense of - an unparsable migration, a file it
+// could not read, a plugin that threw. The schema on display is incomplete by
+// exactly this list, which is why it stands next to it and not only in the log.
+function warningsHtml(schema) {
+  const warnings = (schema && schema.warnings) || [];
+  if (!warnings.length) return '';
+  return `
+    <details class="db-warn">
+      <summary>${escapeHtml(t('db.warnings', { count: warnings.length }))}</summary>
+      <ul>${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
+    </details>`;
 }
 
 function renderDbHead(view) {
@@ -1044,11 +1090,7 @@ function renderDbHead(view) {
       <button id="db-refresh" class="icon-btn" title="${escapeHtml(t('db.refresh'))}" aria-label="${escapeHtml(t('db.refresh'))}">↻</button>
     </div>
     <div class="db-baseline-row">${baseSel}</div>
-    ${view.schema.warnings.length ? `
-      <details class="db-warn">
-        <summary>${escapeHtml(t('db.warnings', { count: view.schema.warnings.length }))}</summary>
-        <ul>${view.schema.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
-      </details>` : ''}`;
+    ${warningsHtml(view.schema)}`;
 
   dbHeadEl.querySelector('#db-refresh').addEventListener('click', () => loadDbSchema(true));
   const sel = dbHeadEl.querySelector('#db-baseline');
@@ -1654,10 +1696,10 @@ async function loadUsage(force = false) {
 // Keep running in the background so the dot on the tab is right without having
 // to keep the tab open
 function startUsagePolling() {
-  loadUsage(true).catch(() => { /* offline or similar */ });
+  loadUsage(true).catch((e) => logWarn('usage: first load failed, offline or similar', { err: e }));
   clearInterval(usageTimer);
   usageTimer = setInterval(() => {
-    loadUsage().catch(() => { /* never mind */ });
+    loadUsage().catch((e) => logWarn('usage: background poll failed', { err: e }));
   }, 120_000);
 }
 
@@ -2156,7 +2198,7 @@ window.api.onInfo((info) => {
 function fitActive() {
   if (panelZoomed) return;
   const s = activeId && sessions.get(activeId);
-  if (s) { try { s.fit.fit(); } catch { /* pane may still be 0px */ } }
+  if (s) { try { s.fit.fit(); } catch (e) { logDebug('terminal: fit failed, pane may still be 0px', { session: s.id, err: e }); } }
 }
 
 function setupDivider(dividerEl, panelEl, growsRight) {

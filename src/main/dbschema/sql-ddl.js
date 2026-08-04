@@ -14,6 +14,7 @@
 // is not.
 
 const { t } = require('../../i18n');
+const log = require('../log');
 
 const DEFAULT_SCHEMA = 'public';
 
@@ -1014,6 +1015,7 @@ function applySql(model, sql) {
     try {
       applyStatement(model, statement);
     } catch (e) {
+      log.debug('sql-ddl: statement skipped', { statement: firstWords(statement, 12), err: e });
       warn(model, t('ddl.warn.skipped', { message: e.message, text: firstWords(statement) }));
     }
   }
@@ -1023,6 +1025,7 @@ function applySql(model, sql) {
 module.exports = {
   DEFAULT_SCHEMA,
   createModel,
+  warn,
   applySql,
   applyStatement,
   splitStatements,

@@ -14,6 +14,7 @@ const { run } = require('../gitinfo');
 const { worktreeProvider, gitProvider } = require('./files');
 const { diff, describe, countChanges } = require('./diff');
 const ir = require('./ir');
+const log = require('../log');
 
 const PLUGINS = [
   require('./plugins/supabase'),
@@ -50,7 +51,13 @@ function cachePut(key, entry) {
 // ---------------------------------------------------------------------------
 // Detection and reading
 // ---------------------------------------------------------------------------
-async function detectAll(provider) {
+/**
+ * @param {object}   provider  file access for the state being read
+ * @param {string[]} warnings  collects what the user has to know - a plugin
+ *                             that fails here is the difference between "no
+ *                             schema" and "no plugin got as far as looking"
+ */
+async function detectAll(provider, warnings) {
   const found = [];
   for (const plugin of PLUGINS) {
     let d = null;
@@ -58,6 +65,8 @@ async function detectAll(provider) {
       d = await plugin.detect(provider);
     } catch (e) {
       // A broken plugin must not take the others down with it
+      log.warn('dbschema: detection failed', { plugin: plugin.id, root: provider.root, kind: provider.kind, err: e });
+      if (warnings) warnings.push(t('db.detectFailed', { plugin: plugin.label, message: e.message }));
       d = null;
     }
     if (d && d.confidence > 0) {
@@ -86,7 +95,8 @@ async function loadSchema(provider, key, force = false) {
     if (fresh) return hit.result;
   }
 
-  const found = await detectAll(provider);
+  const warnings = [];
+  const found = await detectAll(provider, warnings);
   const winner = found[0] || null;
 
   let result;
@@ -97,6 +107,9 @@ async function loadSchema(provider, key, force = false) {
       candidates: found.map((f) => ({ id: f.plugin.id, label: f.plugin.label })),
       schema: ir.empty({ root: provider.root }),
     };
+    // Without a plugin the panel says "no schema detected". If a plugin threw
+    // on the way there, that sentence is wrong - the warning says so.
+    result.schema.warnings.push(...warnings);
     // Keep an eye on the root: if a `supabase/` appears, its mtime jumps
     stampPaths = ['.'];
   } else {
@@ -104,9 +117,11 @@ async function loadSchema(provider, key, force = false) {
     try {
       schema = await winner.plugin.read(provider);
     } catch (e) {
+      log.warn('dbschema: reading failed', { plugin: winner.plugin.id, root: provider.root, kind: provider.kind, err: e });
       schema = ir.empty({ plugin: winner.plugin.id, label: winner.plugin.label, root: provider.root });
       schema.warnings.push(t('db.readFailed', { message: e.message }));
     }
+    schema.warnings.push(...warnings);
     result = {
       plugin: {
         id: winner.plugin.id,

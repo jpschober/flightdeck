@@ -225,6 +225,8 @@ module.exports = {
   'baseline.head': 'dernier commit (HEAD)',
   'baseline.head.hint': 'uniquement ce qui n’est pas encore commité',
   'db.readFailed': 'Échec de la lecture : {message}',
+  'db.detectFailed': 'Le plugin {plugin} n’a pas pu examiner ce répertoire : {message}',
+  'db.fileUnreadable': 'Illisible, ignoré : {file}',
 
   // --- main process: schema diff summary ---
   'diff.unchanged': 'Schéma inchangé',

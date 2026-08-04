@@ -16,6 +16,7 @@ const { getAgentView } = require('./agents');
 const i18n = require('../i18n');
 const { t } = i18n;
 const settings = require('./settings');
+const log = require('./log');
 
 let win = null;
 const sessions = new Map(); // id -> session
@@ -25,7 +26,9 @@ let nextId = 1;
 // Shell detection
 // ---------------------------------------------------------------------------
 function firstExisting(paths) {
-  return paths.find((p) => { try { return fs.existsSync(p); } catch { return false; } });
+  return paths.find((p) => {
+    try { return fs.existsSync(p); } catch (e) { log.debug('shells: candidate not checkable', { path: p, err: e }); return false; }
+  });
 }
 
 function detectShells() {
@@ -58,7 +61,7 @@ function detectShells() {
         const p = line.trim();
         if (p && !p.startsWith('#')) candidates.push(p);
       }
-    } catch { /* no /etc/shells (e.g. a minimal container) */ }
+    } catch (e) { log.debug('shells: no /etc/shells (e.g. a minimal container)', { err: e }); }
     candidates.push(process.env.SHELL || '');
     for (const name of ['bash', 'zsh', 'fish', 'nu', 'elvish', 'xonsh', 'ksh', 'tcsh', 'dash']) {
       candidates.push('/usr/bin/' + name, '/bin/' + name, '/usr/local/bin/' + name);
@@ -329,7 +332,7 @@ const ATTENTION_QUIET_MS = 2000;
 
 function normalizeOscPath(raw) {
   let p;
-  try { p = decodeURIComponent(raw); } catch { p = raw; }
+  try { p = decodeURIComponent(raw); } catch (e) { log.debug('osc7: path not decodable, taken as is', { raw, err: e }); p = raw; }
   if (/^\/[A-Za-z]:/.test(p)) {
     // file://localhost/C:/Users/... -> C:\Users\...
     p = p.slice(1).replace(/\//g, '\\');
@@ -378,7 +381,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
   while ((m = OSCCMD_RE.exec(text)) !== null) {
     if (m.index + m[0].length <= tailLen) continue;
     let cmd = '';
-    try { cmd = Buffer.from(m[1], 'base64').toString('utf8'); } catch { /* never mind */ }
+    try { cmd = Buffer.from(m[1], 'base64').toString('utf8'); } catch (e) { log.debug('osc7770: command line not decodable', { session: session.id, err: e }); }
     session.currentCmd = cmd;
     session.cmdWatched = WATCHED_CMD_RE.test(cmd);
     if (session.cmdWatched) {
@@ -415,7 +418,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
       if (session.pendingCommand) {
         const cmd = session.pendingCommand;
         session.pendingCommand = null;
-        try { session.proc.write(cmd + '\r'); } catch { /* session gone */ }
+        try { session.proc.write(cmd + '\r'); } catch (e) { log.debug('session: queued command not sent, session gone', { session: session.id, cmd, err: e }); }
       }
     }
   }
@@ -623,12 +626,13 @@ function todosPath() { return path.join(app.getPath('userData'), 'flightdeck-tod
 function loadTodos() {
   if (!todosStore) {
     try { todosStore = JSON.parse(fs.readFileSync(todosPath(), 'utf8')); }
-    catch {
+    catch (e) {
+      log.debug('todos: store not readable, trying the aibash migration', { path: todosPath(), err: e });
       // Migration from the earlier "aibash" installation
       try {
         const oldPath = path.join(app.getPath('userData'), '..', 'aibash', 'aibash-todos.json');
         todosStore = JSON.parse(fs.readFileSync(oldPath, 'utf8'));
-      } catch { todosStore = {}; }
+      } catch (e2) { log.debug('todos: no store to migrate, starting empty', { err: e2 }); todosStore = {}; }
     }
   }
   return todosStore;
@@ -767,7 +771,7 @@ function createSession(shellId, opts = {}) {
       if (session.pendingCommand && !session.exited) {
         const cmd = session.pendingCommand;
         session.pendingCommand = null;
-        try { proc.write(cmd + '\r'); } catch { /* session gone */ }
+        try { proc.write(cmd + '\r'); } catch (e) { log.debug('session: start command not sent, session gone', { session: id, cmd, err: e }); }
       }
     }, 4000);
   }
@@ -900,6 +904,7 @@ async function previewFile(session, relPath, source, opts = {}) {
       }
       return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
     } catch (e) {
+      log.warn('preview: content not readable', { path: abs, err: e });
       return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
     }
   }
@@ -922,6 +927,7 @@ async function previewFile(session, relPath, source, opts = {}) {
     }
     return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
   } catch (e) {
+    log.warn('preview: file not readable', { path: abs, source, err: e });
     return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
   }
 }
@@ -941,6 +947,22 @@ ipcMain.handle('claude:sessions', () => listClaudeSessions());
 
 ipcMain.handle('usage:get', (e, force) => getUsage(Boolean(force)));
 
+// The renderer runs sandboxed and has no file access of its own, so its lines
+// come through here and land in the same file as the main process's - one file
+// per report, not two. Level and size are clamped: what arrives here is
+// untrusted input like everything else that crosses the bridge.
+const RENDERER_LEVELS = new Set(['debug', 'info', 'warn', 'error']);
+ipcMain.on('log:renderer', (e, level, message, data) => {
+  const method = RENDERER_LEVELS.has(level) ? level : 'debug';
+  const fields = {};
+  if (data && typeof data === 'object') {
+    for (const [key, value] of Object.entries(data).slice(0, 8)) {
+      fields[String(key).slice(0, 40)] = String(value).slice(0, 300);
+    }
+  }
+  log[method]('renderer: ' + String(message).slice(0, 300), fields);
+});
+
 // DB schema: the sensor looks for the responsible plugin and compares against
 // the requested baseline. The repo root is the right root - if the agent works
 // in a worktree, gitRoot already points there.
@@ -955,6 +977,7 @@ ipcMain.handle('dbschema:get', async (e, id, opts = {}) => {
       force: Boolean(opts.force),
     });
   } catch (err) {
+    log.warn('dbschema: view failed', { root, baseline: opts.baseline || 'auto', err });
     return { ok: false, reason: 'error', error: err.message };
   }
 });
@@ -1008,14 +1031,14 @@ ipcMain.on('session:input', (e, id, data) => {
 ipcMain.on('session:resize', (e, id, cols, rows) => {
   const s = sessions.get(id);
   if (s && !s.exited && cols > 0 && rows > 0) {
-    try { s.proc.resize(cols, rows); } catch { /* race while shutting down */ }
+    try { s.proc.resize(cols, rows); } catch (e) { log.debug('session: resize failed, race while shutting down', { session: id, cols, rows, err: e }); }
   }
 });
 
 ipcMain.handle('session:close', (e, id) => {
   const s = sessions.get(id);
   if (s) {
-    try { s.proc.kill(); } catch { /* already terminated */ }
+    try { s.proc.kill(); } catch (e) { log.debug('session: kill failed, already terminated', { session: id, err: e }); }
     sessions.delete(id);
   }
 });
@@ -1061,7 +1084,7 @@ ipcMain.handle('todos:set', (e, id, todos) => {
   if (todos.length) store[key] = todos;
   else delete store[key];
   try { fs.writeFileSync(todosPath(), JSON.stringify(store, null, 2)); }
-  catch { /* disk full or similar - the notes stay in memory */ }
+  catch (e) { log.warn('todos: not written, the notes stay in memory', { path: todosPath(), key, err: e }); }
   if (win && !win.isDestroyed()) win.webContents.send('todos:changed', key, todos);
   return true;
 });
@@ -1111,11 +1134,20 @@ function createWindow() {
 // fall back to English inside normalize().
 app.whenReady().then(() => {
   i18n.setLocale(settings.get('locale') || app.getLocale());
+  // First line of a run: without it a log file cannot be told apart from the
+  // one before it.
+  log.info('app: started', {
+    version: app.getVersion(), electron: process.versions.electron, platform: process.platform, level: log.level(),
+  });
   createWindow();
 });
 
 app.on('window-all-closed', () => {
-  for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* never mind */ } }
-  if (rcDir) { try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch { /* never mind */ } }
+  for (const s of sessions.values()) {
+    try { s.proc.kill(); } catch (e) { log.debug('shutdown: kill failed', { session: s.id, err: e }); }
+  }
+  if (rcDir) {
+    try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch (e) { log.debug('shutdown: rc directory not removed', { path: rcDir, err: e }); }
+  }
   app.quit();
 });

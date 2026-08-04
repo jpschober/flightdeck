@@ -17,6 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { run } = require('../gitinfo');
+const log = require('../log');
 
 const MAX_FILE = 2 * 1024 * 1024;
 
@@ -36,7 +37,7 @@ function worktreeProvider(root) {
     root,
 
     async exists(rel) {
-      try { return fs.existsSync(abs(rel)); } catch { return false; }
+      try { return fs.existsSync(abs(rel)); } catch (e) { log.debug('dbschema/files: path not checkable', { root, rel, err: e }); return false; }
     },
 
     async read(rel) {
@@ -44,7 +45,7 @@ function worktreeProvider(root) {
         const p = abs(rel);
         if (fs.statSync(p).size > MAX_FILE) return null;
         return fs.readFileSync(p, 'utf8');
-      } catch { return null; }
+      } catch (e) { log.debug('dbschema/files: file not readable', { root, rel, err: e }); return null; }
     },
 
     async list(relDir, opts = {}) {
@@ -53,7 +54,7 @@ function worktreeProvider(root) {
       const walk = (dir, depth) => {
         if (depth > 8) return;
         let entries;
-        try { entries = fs.readdirSync(abs(dir), { withFileTypes: true }); } catch { return; }
+        try { entries = fs.readdirSync(abs(dir), { withFileTypes: true }); } catch (e) { log.debug('dbschema/files: directory not readable', { root, dir, err: e }); return; }
         for (const e of entries) {
           const rel = dir ? `${dir}/${e.name}` : e.name;
           if (e.isDirectory()) {
@@ -78,7 +79,9 @@ function worktreeProvider(root) {
         try {
           const st = fs.statSync(abs(rel));
           parts.push(`${rel}:${st.mtimeMs}:${st.size}`);
-        } catch {
+        } catch (e) {
+          // Absent counts as a state too: the fingerprint records it as "-".
+          log.debug('dbschema/files: path not stattable', { root, rel, err: e });
           parts.push(`${rel}:-`);
         }
       }

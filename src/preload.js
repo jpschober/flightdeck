@@ -26,6 +26,10 @@ contextBridge.exposeInMainWorld('api', {
   setTodos: (id, todos) => ipcRenderer.invoke('todos:set', id, todos),
   getUsage: (force) => ipcRenderer.invoke('usage:get', force),
 
+  // The renderer has no file access of its own; its log lines take this way
+  // into the main process's log file.
+  log: (level, message, data) => ipcRenderer.send('log:renderer', level, message, data),
+
   // Language: the starting values come along at load time, a switch goes
   // through the main process (it owns the setting and the strings it builds
   // itself) and hands the new dictionary back.

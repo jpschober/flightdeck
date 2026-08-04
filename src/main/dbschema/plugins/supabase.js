@@ -15,6 +15,8 @@
 
 const ddl = require('../sql-ddl');
 const ir = require('../ir');
+const log = require('../../log');
+const { t } = require('../../../i18n');
 
 const MIGRATIONS_DIR = 'supabase/migrations';
 const CONFIG = 'supabase/config.toml';
@@ -70,7 +72,14 @@ async function read(provider) {
 
   for (const rel of migrations) {
     const sql = await provider.read(rel);
-    if (sql === null) continue;
+    // Listed, but not readable: too large, gone in the meantime, no permission.
+    // The schema that comes out is missing whatever this migration changed, so
+    // the panel says which file it was.
+    if (sql === null) {
+      log.warn('dbschema/supabase: migration not readable', { root: provider.root, kind: provider.kind, file: rel });
+      ddl.warn(model, t('db.fileUnreadable', { file: rel }));
+      continue;
+    }
     files.push(rel);
     ddl.applySql(model, sql);
   }
