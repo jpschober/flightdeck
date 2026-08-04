@@ -4,7 +4,7 @@ const {
   TRANSCRIPT_ID_RE,
   listClaudeSessions,
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
-  findTranscriptById,
+  findTranscriptById, stopWatchingProjects,
 } = require('./claude-sessions');
 const path = require('path');
 const os = require('os');
@@ -532,7 +532,7 @@ function beginAgentBinding(session, cmd) {
 }
 
 async function updateAgentBinding(session) {
-  if (!session.bindingBase) { session.transcriptPath = null; return; }
+  if (!session.bindingBase) { session.transcript = null; return; }
   // If the shell leaves the directory in which `claude` was started, the
   // binding no longer fits.
   if (session.cwd !== session.bindingBase) {
@@ -541,7 +541,7 @@ async function updateAgentBinding(session) {
     session.agentCwd = null;
     session.bindingBase = null;
     session.transcriptSnapshot = null;
-    session.transcriptPath = null;
+    session.transcript = null;
     return;
   }
   // Last resort for cases without a wrapper report (`command claude`, npx, a
@@ -554,14 +554,17 @@ async function updateAgentBinding(session) {
     );
     if (id) bindAgentSession(session, id, false);
   }
-  if (!session.claudeSessionId) { session.transcriptPath = null; return; }
+  if (!session.claudeSessionId) { session.transcript = null; return; }
 
   // Resolved once per pass and handed to the agent sensor below, which would
-  // otherwise look up the same path three more times.
-  session.transcriptPath = findTranscriptById(session.claudeSessionId);
-  const agentCwd = session.transcriptPath
-    ? await readAgentCwd(session.claudeSessionId, session.transcriptPath)
-    : null;
+  // otherwise look up the same path three more times. ID and path are stored
+  // together: PTY data arriving during the awaits below can bind a different
+  // session, and a path from the previous one would then point into a foreign
+  // transcript.
+  const id = session.claudeSessionId;
+  const file = findTranscriptById(id);
+  session.transcript = { id, path: file };
+  const agentCwd = file ? await readAgentCwd(id, file) : null;
   // Only adopt it if it lies below the shell's directory (i.e. a worktree or
   // similar) - anything else would be a foreign transcript.
   if (agentCwd && agentCwd !== session.cwd
@@ -708,7 +711,7 @@ function createSession(shellId, opts = {}) {
     fileMemory: new Map(),   // path -> entry; survives commits
     pr: null,
     claudeSessionId: null,   // transcript of the running Claude session
-    transcriptPath: null,    // its file, resolved once per refresh
+    transcript: null,        // { id, path }, resolved once per refresh
     bindingExact: false,     // ID reported by the wrapper instead of guessed via timestamps
     agentCwd: null,          // the agent's working directory (a worktree, if any)
     agents: null,            // running subagents (from the agent sensor)
@@ -852,13 +855,19 @@ async function doRefresh(session, force, cwdAtStart) {
   // Who is working here right now? The sensor puts that question to the
   // plugins - which agent CLI runs in the terminal is none of the refresh's
   // business.
-  session.agents = await getAgentView({
+  const ctx = {
     cwd: cwdAtStart,
     agentCwd: session.agentCwd,
     command: session.currentCmd,
     claudeSessionId: session.claudeSessionId,
-    claudeTranscript: session.transcriptPath,
-  });
+  };
+  // The binding can have moved on while the git and PR lookups above were
+  // running. The resolved path only travels with the ID it was resolved for;
+  // otherwise the key stays out and the plugin resolves it itself.
+  if (session.transcript && session.transcript.id === session.claudeSessionId) {
+    ctx.claudeTranscript = session.transcript.path;
+  }
+  session.agents = await getAgentView(ctx);
   if (session.cwd !== cwdAtStart || session.exited) return;
 
   const shell = availableShells.find((s) => s.id === session.shellId);
@@ -893,7 +902,11 @@ const REFRESH_HIDDEN_MS = 30000;
 let lastRefreshAt = 0;
 
 function refreshAll(force = false) {
-  lastRefreshAt = Date.now();
+  // Restoring a minimised window emits `restore` and `show`, and app:focus
+  // calls restore() and show() itself - one pass covers all of that.
+  const now = Date.now();
+  if (now - lastRefreshAt < 500) return;
+  lastRefreshAt = now;
   for (const s of sessions.values()) refreshSession(s, force);
 }
 
@@ -1040,6 +1053,9 @@ ipcMain.on('session:resize', (e, id, cols, rows) => {
 ipcMain.handle('session:close', (e, id) => {
   const s = sessions.get(id);
   if (s) {
+    // A refresh may be in flight; without this it would run to the end and send
+    // session:info for a session that no longer exists.
+    s.exited = true;
     try { s.proc.kill(); } catch { /* already terminated */ }
     sessions.delete(id);
   }
@@ -1146,6 +1162,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* never mind */ } }
+  stopWatchingProjects();
   if (rcDir) { try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch { /* never mind */ } }
   app.quit();
 });

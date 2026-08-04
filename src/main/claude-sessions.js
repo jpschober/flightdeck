@@ -14,42 +14,69 @@ const cache = new Map(); // filePath -> { mtime, data }
 //
 // Every lookup below starts from the same directory list, and the refresh runs
 // several of them per session every few seconds. The listing is therefore read
-// once and held until fs.watch reports a change to the root directory - with a
-// few hundred project directories the readdir is the expensive part.
+// once and shared. Three things end its life: a change reported by fs.watch, an
+// age limit, and a caller that asks for a fresh read.
+//
+// The age limit holds while a watcher is installed as well. fs.watch can
+// succeed and still never deliver: on a network file system the watch sits on
+// the local mount point, and after the directory is deleted and recreated the
+// watch follows the dead inode. Neither case emits an error, so a listing that
+// only fs.watch could invalidate would stay pinned for the rest of the run -
+// and a project directory created after startup would never show up.
 // ---------------------------------------------------------------------------
 let projectDirsCache = null;
 let projectDirsAt = 0;
 let projectDirsWatcher = null;
-// Only relevant where fs.watch does not work (some network file systems): then
-// the listing ages out instead of staying stale forever.
+let watchFailedAt = 0;
+const PROJECT_DIRS_TTL_WATCHED = 60000;
 const PROJECT_DIRS_TTL = 5000;
+const WATCH_RETRY_MS = 60000;
 
 function watchProjectsDir() {
   if (projectDirsWatcher) return;
+  // PROJECTS_DIR need not exist - fs.watch then throws, and trying again on
+  // every lookup would cost more than the listing it is meant to spare.
+  if (watchFailedAt && Date.now() - watchFailedAt < WATCH_RETRY_MS) return;
+  let watcher;
   try {
-    projectDirsWatcher = fs.watch(PROJECTS_DIR, () => { projectDirsCache = null; });
-    projectDirsWatcher.on('error', () => {
-      try { projectDirsWatcher.close(); } catch { /* already gone */ }
+    watcher = fs.watch(PROJECTS_DIR, () => { projectDirsCache = null; });
+  } catch {
+    watchFailedAt = Date.now(); // the age limit carries the invalidation alone
+    return;
+  }
+  watcher.on('error', () => {
+    try { watcher.close(); } catch { /* already gone */ }
+    // A successor may have been installed in the meantime; this one is then
+    // history and must not take it down with it.
+    if (projectDirsWatcher === watcher) {
       projectDirsWatcher = null;
       projectDirsCache = null;
-    });
-    if (projectDirsWatcher.unref) projectDirsWatcher.unref();
-  } catch {
-    projectDirsWatcher = null; // fall back to the TTL
-  }
+      watchFailedAt = Date.now();
+    }
+  });
+  if (watcher.unref) watcher.unref();
+  projectDirsWatcher = watcher;
 }
 
-function projectDirs() {
-  if (projectDirsCache
-      && (projectDirsWatcher || Date.now() - projectDirsAt < PROJECT_DIRS_TTL)) {
+function projectDirs(opts = {}) {
+  const ttl = projectDirsWatcher ? PROJECT_DIRS_TTL_WATCHED : PROJECT_DIRS_TTL;
+  if (!opts.fresh && projectDirsCache && Date.now() - projectDirsAt < ttl) {
     return projectDirsCache;
   }
   let dirs;
   try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { dirs = []; }
-  projectDirsCache = dirs;
+  // Handed out to every caller, so it is handed out unchangeable.
+  projectDirsCache = Object.freeze(dirs);
   projectDirsAt = Date.now();
   watchProjectsDir();
-  return dirs;
+  return projectDirsCache;
+}
+
+// On shutdown; a watch handle otherwise stays open for the rest of the process.
+function stopWatchingProjects() {
+  if (!projectDirsWatcher) return;
+  try { projectDirsWatcher.close(); } catch { /* already gone */ }
+  projectDirsWatcher = null;
 }
 
 // Claude derives the directory name from the cwd: everything except [A-Za-z0-9]
@@ -117,7 +144,9 @@ function readTailSlug(filePath) {
 }
 
 function listClaudeSessions(limit = 200) {
-  const dirs = projectDirs();
+  // The session browser is opened by hand and shows what is there right now, so
+  // it reads the listing rather than taking one that is up to a minute old.
+  const dirs = projectDirs({ fresh: true });
 
   const found = [];
   for (const dir of dirs) {
@@ -252,6 +281,16 @@ function scanForTranscript(sessionId, dirs) {
   return null;
 }
 
+// A miss can also mean the listing is stale - the transcript moved into a
+// project directory created since, and the watch event has not arrived yet. So
+// a miss reads the listing again before giving up, but at most this often: a
+// session can sit in a permanent miss (`claude --session-id <fresh-uuid>` binds
+// an ID before Claude has written the file, a deleted transcript keeps its
+// binding until the shell leaves the directory), and that must not turn every
+// lookup into two full scans.
+const MISS_RESCAN_MS = 4000;
+let lastMissRescanAt = 0;
+
 function findTranscriptById(sessionId) {
   if (!sessionId) return null;
   const known = transcriptPaths.get(sessionId);
@@ -262,12 +301,11 @@ function findTranscriptById(sessionId) {
   const listedAt = projectDirsAt;
   const hit = scanForTranscript(sessionId, projectDirs());
   if (hit) return rememberTranscript(sessionId, hit);
-  // A miss can also mean the listing is stale - the transcript moved into a
-  // project directory that was created since, and the watch event has not
-  // arrived yet. The listing is read once more before giving up.
-  if (projectDirsAt === listedAt) {
-    projectDirsCache = null;
-    const rescanned = scanForTranscript(sessionId, projectDirs());
+
+  const now = Date.now();
+  if (projectDirsAt === listedAt && now - lastMissRescanAt >= MISS_RESCAN_MS) {
+    lastMissRescanAt = now;
+    const rescanned = scanForTranscript(sessionId, projectDirs({ fresh: true }));
     if (rescanned) return rememberTranscript(sessionId, rescanned);
   }
   return null;
@@ -289,8 +327,11 @@ async function readAgentCwd(sessionId, file) {
     const readSize = Math.min(size, 131072);
     if (readSize <= 0) return null;
     const buf = Buffer.alloc(readSize);
-    await handle.read(buf, 0, readSize, size - readSize);
-    const text = buf.toString('utf8');
+    // Only what was actually read is decoded: a file truncated between stat and
+    // read leaves the rest of the buffer at zero bytes.
+    const { bytesRead } = await handle.read(buf, 0, readSize, size - readSize);
+    if (!bytesRead) return null;
+    const text = buf.toString('utf8', 0, bytesRead);
     let last = null; let m;
     CWD_RE.lastIndex = 0;
     while ((m = CWD_RE.exec(text)) !== null) last = m[1];
@@ -311,4 +352,5 @@ module.exports = {
   newestTranscript,
   findTranscriptById,
   readAgentCwd,
+  stopWatchingProjects,
 };

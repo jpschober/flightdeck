@@ -5,7 +5,8 @@
   "description": "Warp-like terminal app: multiple shell sessions, agent status, git/PR context panel, file preview",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node test/transcript-cache.js && node test/refresh-interval.js"
   },
   "license": "MIT",
   "devDependencies": {

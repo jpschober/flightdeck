@@ -58,10 +58,13 @@ const NOTIF_STATUS_RE = /<status>([^<]+)<\/status>/;
 //
 // The refresh resolves the transcript once per pass and hands it over in
 // `ctx.claudeTranscript`; detect and read then work from that single value.
-// Without it the plugin resolves the path itself, which keeps it usable for a
-// caller that only knows the session ID.
+// The key is set even when the path is null - a session whose transcript does
+// not exist yet is the expensive case, and looking it up again here would run
+// the same fruitless scan three more times per pass. A caller that only knows
+// the session ID leaves the key out and gets the lookup.
 function transcriptOf(ctx) {
-  return ctx.claudeTranscript || findTranscriptById(ctx.claudeSessionId);
+  if (ctx.claudeTranscript !== undefined) return ctx.claudeTranscript;
+  return findTranscriptById(ctx.claudeSessionId);
 }
 
 function subagentsDir(sessionId, transcript) {
