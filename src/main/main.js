@@ -314,13 +314,28 @@ function spawnArgsFor(shell) {
 // ---------------------------------------------------------------------------
 const OSC7_RE = /\x1b\]7;file:\/\/[^/\x07\x1b]*([^\x07\x1b]+)(?:\x07|\x1b\\)/g;
 const OSC99_RE = /\x1b\]9;9;"?([^"\x07\x1b]+)"?(?:\x07|\x1b\\)/g;
-const OSC133_RE = /\x1b\]133;([A-D])[^\x07\x1b]*(?:\x07|\x1b\\)/g;
-const OSCCMD_RE = /\x1b\]7770;cmd;([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)/g;
-const OSCSESS_RE = /\x1b\]7771;([a-z]+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+const OSC133_RE = /\x1b\]133;(?<mark>[A-D])[^\x07\x1b]*(?:\x07|\x1b\\)/;
+const OSCCMD_RE = /\x1b\]7770;cmd;(?<cmdB64>[A-Za-z0-9+/=]*)(?:\x07|\x1b\\)/;
+const OSCSESS_RE = /\x1b\]7771;(?<sessKind>[a-z]+);(?<sessId>[^\x07\x1b]*)(?:\x07|\x1b\\)/;
 const OSC_ANY_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // Claude Code (addressed as iTerm): OSC 0/2 = title, OSC 9 = notification
-const OSC_TITLE_RE = /\x1b\](?:0|2);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
-const OSC9_RE = /\x1b\]9;([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+const OSC_TITLE_RE = /\x1b\](?:0|2);(?<title>[^\x07\x1b]*)(?:\x07|\x1b\\)/;
+const OSC9_RE = /\x1b\]9;(?<osc9>[^\x07\x1b]*)(?:\x07|\x1b\\)/;
+
+// The state sequences are scanned in one pass. Seven separate scans grouped
+// their effects by sequence type: OSC 7770 was evaluated in full before
+// OSC 133, so a batch holding "133;D (previous command finished) ... 7770;cmd
+// (claude starts) ... 133;C" first marked the session as watched and then
+// cleared that again from the earlier D. With one pass the matches are
+// dispatched in the order they stand in the stream.
+//
+// None of the alternatives can start at the same position as another (they
+// differ from the character after `\x1b]` onwards) and none can match inside
+// another (the payloads exclude \x1b and \x07), so the combined scan finds
+// exactly the matches the individual expressions found.
+const OSC_EVENT_RE = new RegExp(
+  [OSCCMD_RE, OSCSESS_RE, OSC133_RE, OSC_TITLE_RE, OSC9_RE]
+    .map((r) => `(?:${r.source})`).join('|'), 'g');
 
 // Commands for which "quiet = waiting for input" holds (agentic TUIs:
 // working = continuously rendering a spinner/timer/streaming output)
@@ -373,90 +388,84 @@ function setAttention(session) {
 function applyStateFromData(session, text, tailLen, rawData) {
   let saw = false; let m;
 
-  // Command line of the started command (reported by the shell integration)
-  OSCCMD_RE.lastIndex = 0;
-  while ((m = OSCCMD_RE.exec(text)) !== null) {
+  OSC_EVENT_RE.lastIndex = 0;
+  while ((m = OSC_EVENT_RE.exec(text)) !== null) {
     if (m.index + m[0].length <= tailLen) continue;
-    let cmd = '';
-    try { cmd = Buffer.from(m[1], 'base64').toString('utf8'); } catch { /* never mind */ }
-    session.currentCmd = cmd;
-    session.cmdWatched = WATCHED_CMD_RE.test(cmd);
-    if (session.cmdWatched) {
-      beginAgentBinding(session, cmd);
-      // Freshly started: the agent shows its interface and waits for the first
-      // prompt. That is not a "needs you" but the normal state - attention
-      // notices only make sense from the first prompt onwards.
-      session.agentPrompted = false;
-    }
-    addHistory(session, cmd, 'shell');
-  }
+    const g = m.groups;
 
-  // Report from the claude wrapper - has to be evaluated after OSC 7770,
-  // because beginAgentBinding() resets the binding.
-  OSCSESS_RE.lastIndex = 0;
-  while ((m = OSCSESS_RE.exec(text)) !== null) {
-    if (m.index + m[0].length <= tailLen) continue;
-    if (m[1] === 'session' && m[2]) bindAgentSession(session, m[2], true);
-    else if (m[1] === 'continue') bindContinuedSession(session);
-  }
-
-  OSC133_RE.lastIndex = 0;
-  while ((m = OSC133_RE.exec(text)) !== null) {
-    if (m.index + m[0].length <= tailLen) continue;
-    saw = true;
-    if (m[1] === 'C') setState(session, 'busy');
-    else if (m[1] === 'A' || m[1] === 'D') {
-      setState(session, 'idle');
-      session.currentCmd = null;
-      session.cmdWatched = false;
-      session.hasClaudeOsc = false;
-      clearTimeout(session.attnTimer);
-      // Back at the prompt: run a queued command if there is one (session browser)
-      if (session.pendingCommand) {
-        const cmd = session.pendingCommand;
-        session.pendingCommand = null;
-        try { session.proc.write(cmd + '\r'); } catch { /* session gone */ }
+    // Command line of the started command (reported by the shell integration)
+    if (g.cmdB64 !== undefined) {
+      let cmd = '';
+      try { cmd = Buffer.from(g.cmdB64, 'base64').toString('utf8'); } catch { /* never mind */ }
+      session.currentCmd = cmd;
+      session.cmdWatched = WATCHED_CMD_RE.test(cmd);
+      if (session.cmdWatched) {
+        beginAgentBinding(session, cmd);
+        // Freshly started: the agent shows its interface and waits for the first
+        // prompt. That is not a "needs you" but the normal state - attention
+        // notices only make sense from the first prompt onwards.
+        session.agentPrompted = false;
       }
-    }
-  }
+      addHistory(session, cmd, 'shell');
 
-  // Native Claude signals (title: spinner = working, U+2733 = waiting for you)
-  OSC_TITLE_RE.lastIndex = 0;
-  while ((m = OSC_TITLE_RE.exec(text)) !== null) {
-    if (m.index + m[0].length <= tailLen) continue;
-    const first = m[1].charAt(0);
-    if (!first) continue;
-    const code = first.charCodeAt(0);
-    if (code >= 0x2800 && code <= 0x28ff) {          // braille spinner
-      session.hasClaudeOsc = true;
-      clearTimeout(session.attnTimer);
-      setState(session, 'busy');
-    } else if (first === '✳') {                  // asterisk: input expected
-      session.hasClaudeOsc = true;
-      clearTimeout(session.attnTimer);
-      setAttention(session);
-    }
-  }
+    // Report from the claude wrapper - the shell emits OSC 7770 before the
+    // command runs and the wrapper its OSC 7771 afterwards, so stream order
+    // already puts the binding after the beginAgentBinding() that resets it.
+    } else if (g.sessKind !== undefined) {
+      if (g.sessKind === 'session' && g.sessId) bindAgentSession(session, g.sessId, true);
+      else if (g.sessKind === 'continue') bindContinuedSession(session);
 
-  // OSC 9: progress (9;4;...) or explicit notifications from Claude
-  OSC9_RE.lastIndex = 0;
-  while ((m = OSC9_RE.exec(text)) !== null) {
-    if (m.index + m[0].length <= tailLen) continue;
-    const payload = m[1];
-    if (payload.startsWith('9;')) continue;           // ConEmu cwd, see OSC99_RE
-    if (payload.startsWith('4;')) {                   // progress indicator
-      const level = payload.split(';')[1];
-      if (level === '1' || level === '2' || level === '3') {
+    } else if (g.mark !== undefined) {
+      saw = true;
+      if (g.mark === 'C') setState(session, 'busy');
+      else if (g.mark === 'A' || g.mark === 'D') {
+        setState(session, 'idle');
+        session.currentCmd = null;
+        session.cmdWatched = false;
+        session.hasClaudeOsc = false;
+        clearTimeout(session.attnTimer);
+        // Back at the prompt: run a queued command if there is one (session browser)
+        if (session.pendingCommand) {
+          const cmd = session.pendingCommand;
+          session.pendingCommand = null;
+          try { session.proc.write(cmd + '\r'); } catch { /* session gone */ }
+        }
+      }
+
+    // Native Claude signals (title: spinner = working, U+2733 = waiting for you)
+    } else if (g.title !== undefined) {
+      const first = g.title.charAt(0);
+      if (!first) continue;
+      const code = first.charCodeAt(0);
+      if (code >= 0x2800 && code <= 0x28ff) {          // braille spinner
         session.hasClaudeOsc = true;
+        clearTimeout(session.attnTimer);
         setState(session, 'busy');
+      } else if (first === '✳') {                  // asterisk: input expected
+        session.hasClaudeOsc = true;
+        clearTimeout(session.attnTimer);
+        setAttention(session);
       }
-      continue;
-    }
-    // Explicit notification ("Claude needs your attention", permission request, ...)
-    if (setAttention(session) && win && !win.isDestroyed()) {
-      win.webContents.send('session:notify', session.id, payload.slice(0, 200));
+
+    // OSC 9: progress (9;4;...) or explicit notifications from Claude
+    } else if (g.osc9 !== undefined) {
+      const payload = g.osc9;
+      if (payload.startsWith('9;')) continue;           // ConEmu cwd, see OSC99_RE
+      if (payload.startsWith('4;')) {                   // progress indicator
+        const level = payload.split(';')[1];
+        if (level === '1' || level === '2' || level === '3') {
+          session.hasClaudeOsc = true;
+          setState(session, 'busy');
+        }
+        continue;
+      }
+      // Explicit notification ("Claude needs your attention", permission request, ...)
+      if (setAttention(session) && win && !win.isDestroyed()) {
+        win.webContents.send('session:notify', session.id, payload.slice(0, 200));
+      }
     }
   }
+
   if (saw) {
     session.hasOsc133 = true;
     clearTimeout(session.idleTimer);
@@ -676,22 +685,26 @@ function resumeCommand(resume) {
 // node-pty hands over thousands of chunks per second for `cat` on a large file
 // or an install log. One IPC send per chunk means one structured clone and one
 // xterm write per chunk; the chunks are collected here and go out together
-// after FLUSH_MS or once FLUSH_BYTES have accumulated.
+// after FLUSH_MS or once FLUSH_CHARS have accumulated.
 //
 // The renderer acknowledges every batch once xterm has processed it. Above
-// FLOW_HIGH_WATER unacknowledged characters the PTY is paused, below
-// FLOW_LOW_WATER it is resumed - without this, a producer faster than the
+// FLOW_HIGH_WATER_CHARS unacknowledged characters the PTY is paused, below
+// FLOW_LOW_WATER_CHARS it is resumed - without this, a producer faster than the
 // renderer grows xterm's internal buffer up to its 50 MB limit.
+//
+// All four limits count UTF-16 code units (String.length), not bytes: node-pty
+// hands over decoded strings and that is what crosses the IPC boundary.
 const FLUSH_MS = 16;
-const FLUSH_BYTES = 65536;
-const FLOW_HIGH_WATER = 262144;
-const FLOW_LOW_WATER = 65536;
+const FLUSH_CHARS = 65536;
+const FLOW_HIGH_WATER_CHARS = 262144;
+const FLOW_LOW_WATER_CHARS = 65536;
+const GRID_BUFFER_CHARS = 262144;
 const GRID_PREVIEW_CHARS = 20480;
 
 function queueOutput(session, data) {
   session.pending.push(data);
   session.pendingSize += data.length;
-  if (session.pendingSize >= FLUSH_BYTES) { flushOutput(session); return; }
+  if (session.pendingSize >= FLUSH_CHARS) { flushOutput(session); return; }
   if (!session.flushTimer) {
     session.flushTimer = setTimeout(() => flushOutput(session), FLUSH_MS);
   }
@@ -707,23 +720,27 @@ function flushOutput(session) {
   if (win && !win.isDestroyed()) {
     win.webContents.send('session:data', session.id, data);
     session.unacked += data.length;
-    if (!session.flowPaused && session.unacked > FLOW_HIGH_WATER) {
+    if (!session.flowPaused && session.unacked > FLOW_HIGH_WATER_CHARS) {
       session.flowPaused = true;
       try { session.proc.pause(); } catch { /* session gone */ }
     }
   }
 
-  // Scrollback buffer for the grid preview (max. 256 KB)
+  // Scrollback buffer for the grid preview
   session.outputBuffer.push(data);
   session.outputBufferSize += data.length;
-  while (session.outputBufferSize > 262144 && session.outputBuffer.length > 1) {
+  while (session.outputBufferSize > GRID_BUFFER_CHARS && session.outputBuffer.length > 1) {
     session.outputBufferSize -= session.outputBuffer.shift().length;
   }
 
-  // Alternate screen mode (full-screen TUIs such as vim, htop, Claude dialogs)
+  // Alternate screen mode (full-screen TUIs such as vim, htop, Claude dialogs).
+  // A batch regularly holds both switches - less quitting into a pager, one
+  // Claude dialog closing as the next opens - so the last one in the stream
+  // decides, not the order the two checks happen to stand in.
   if (data.includes('\x1b[?')) {
-    if (data.includes('\x1b[?1049h') || data.includes('\x1b[?47h')) session.altScreen = true;
-    if (data.includes('\x1b[?1049l') || data.includes('\x1b[?47l')) session.altScreen = false;
+    const enter = Math.max(data.lastIndexOf('\x1b[?1049h'), data.lastIndexOf('\x1b[?47h'));
+    const leave = Math.max(data.lastIndexOf('\x1b[?1049l'), data.lastIndexOf('\x1b[?47l'));
+    if (enter !== leave) session.altScreen = enter > leave;
   }
 
   const tailLen = session.oscTail.length;
@@ -741,9 +758,24 @@ function flushOutput(session) {
 // backlog is small enough the PTY reads on.
 function ackOutput(session, chars) {
   session.unacked = Math.max(0, session.unacked - chars);
-  if (session.flowPaused && session.unacked <= FLOW_LOW_WATER) {
+  if (session.flowPaused && session.unacked <= FLOW_LOW_WATER_CHARS) {
     session.flowPaused = false;
     try { session.proc.resume(); } catch { /* session gone */ }
+  }
+}
+
+// A reload of the renderer (Ctrl+R) drops the batches in flight, which are then
+// never acknowledged. The lost characters would stay in `unacked` as a
+// permanent offset and, once past the low-water mark, leave the session paused
+// with no ack able to release it. The backlog belongs to a document that no
+// longer exists, so it is dropped with it.
+function resetFlowControl() {
+  for (const s of sessions.values()) {
+    s.unacked = 0;
+    if (s.flowPaused) {
+      s.flowPaused = false;
+      try { s.proc.resume(); } catch { /* session gone */ }
+    }
   }
 }
 
@@ -991,6 +1023,12 @@ ipcMain.handle('session:create', (e, shellId, opts) => createSession(shellId, op
 
 // The grid thumbnail keeps 50 lines of scrollback - the last 20 KB fill them,
 // the remaining 236 KB of the ring buffer would only be parsed and thrown away.
+//
+// Whole chunks only: cutting to exactly 20 KB would leave a lone surrogate half
+// or the middle of an escape sequence at the head, and xterm would then print
+// the tail of a window title as text or swallow output up to the next
+// terminator. The loop stops after the first chunk that reaches the limit, so
+// the result is 20 KB plus at most one chunk.
 ipcMain.handle('session:buffer', (e, id) => {
   const s = sessions.get(id);
   if (!s) return '';
@@ -1000,14 +1038,15 @@ ipcMain.handle('session:buffer', (e, id) => {
     parts.push(s.outputBuffer[i]);
     size += s.outputBuffer[i].length;
   }
-  const text = parts.reverse().join('');
-  return text.length > GRID_PREVIEW_CHARS ? text.slice(-GRID_PREVIEW_CHARS) : text;
+  return parts.reverse().join('');
 });
 
-// Flow control: the renderer reports the batch it has written to xterm.
+// Flow control: the renderer reports the batch it has written to xterm. A
+// negative count would inflate `unacked` instead of reducing it and leave the
+// session paused for good, so the count has to be a non-negative integer.
 ipcMain.on('session:ack', (e, id, chars) => {
   const s = sessions.get(id);
-  if (s && !s.exited && Number.isFinite(chars)) ackOutput(s, chars);
+  if (s && !s.exited && Number.isInteger(chars) && chars >= 0) ackOutput(s, chars);
 });
 
 ipcMain.handle('claude:sessions', () => listClaudeSessions());
@@ -1172,6 +1211,11 @@ function createWindow() {
   const blockNavigation = (e) => e.preventDefault();
   win.webContents.on('will-navigate', blockNavigation);
   win.webContents.on('will-frame-navigate', blockNavigation);
+
+  // A reload (Ctrl+R still reaches the window; setMenuBarVisibility only hides
+  // the bar) leaves the batches in flight unacknowledged. The new document
+  // starts with an empty backlog, so the flow control does too.
+  win.webContents.on('did-finish-load', resetFlowControl);
 
   // No new windows either; http(s) links go to the system browser.
   win.webContents.setWindowOpenHandler(({ url }) => {

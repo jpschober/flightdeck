@@ -315,13 +315,23 @@ function buildMoreMenu() {
 // node per cell. The addon has to be loaded after term.open(), because it needs
 // the element. A lost GPU context (driver reset, suspend) cannot be restored by
 // the addon; it is disposed and xterm falls back to the DOM renderer.
+//
+// Inactive panes keep their context: they are hidden with `visibility`, not
+// removed. Chromium caps the contexts per page at around 16 and evicts the
+// oldest one beyond that, which costs the affected terminal a redraw and the
+// three seconds the addon waits for a restore before it falls back.
 function loadWebgl(term) {
   if (typeof WebglAddon === 'undefined') return;
+  let webgl = null;
   try {
-    const webgl = new WebglAddon.WebglAddon();
+    webgl = new WebglAddon.WebglAddon();
     webgl.onContextLoss(() => webgl.dispose());
     term.loadAddon(webgl);
-  } catch { /* no WebGL context available: the DOM renderer stays */ }
+  } catch {
+    // No WebGL context, or activate() failed partway and left the addon
+    // registered with only some of its disposables attached.
+    if (webgl) { try { webgl.dispose(); } catch { /* never mind */ } }
+  }
 }
 
 async function newSession(shellId, opts) {
@@ -2106,6 +2116,10 @@ window.api.onNotify((id, message) => {
 // batch has been parsed, so the main process learns the actual backlog and
 // pauses the PTY while xterm is behind.
 window.api.onData((id, data) => {
+  // The thumbnail write stays unacknowledged on purpose: the pane terminal
+  // parses the same batch and is the slower of the two, so its ack already
+  // covers the backlog. With `scrollback: 50` the thumbnail cannot fall behind
+  // far enough to matter.
   const gridEntry = gridCards.get(id);
   if (gridEntry) gridEntry.term.write(data);
   const s = sessions.get(id);
