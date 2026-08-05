@@ -206,6 +206,8 @@ module.exports = {
   'file.readError': 'No se ha podido leer el archivo: {message}',
   'file.truncated': '… (truncado)',
   'file.noSession': 'Sesión no encontrada',
+  'file.outsideRoot': 'Esta ruta está fuera del proyecto.',
+  'file.symlink': 'Esto es un enlace simbólico. La vista previa no sigue los enlaces.',
 
   // --- main process: usage endpoint ---
   'usage.error.noLogin': 'No se ha encontrado ninguna sesión de Claude ({path}).',
