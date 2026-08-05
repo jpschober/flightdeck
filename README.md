@@ -104,10 +104,17 @@ When the shell starts, its prompt is extended (PowerShell via
 
 The main process parses these sequences out of the PTY stream and derives from
 them the directory, branch, changed files, PR (refresh 4 s, PR cache 45 s) and
-the busy/idle state. A reported directory is taken over only if it exists, and
-git runs in it with `core.fsmonitor` and `core.hooksPath` overridden: the
-directory comes from the output, and a repository must not name a program
-through its own `.git/config` that then starts unprompted.
+the busy/idle state. A reported directory is taken over only once a check says
+it exists.
+
+Git then runs in a directory nobody clicked on, which is why it is not handed
+that directory's configuration: `core.fsmonitor` and `core.hooksPath` are
+overridden per call, `--no-ext-diff --no-textconv` keeps the diff drivers out,
+and the system configuration stays out. Filter drivers (`filter.<name>.clean`
+and friends) cannot be overridden — their names are free — so before the first
+git call the repository configuration is read, and if it names a program in one
+of those keys, git is not started in that directory at all. The panel says so
+and names the key.
 
 `OSC 52` writes the clipboard — that is how Claude copies. Every write is shown
 in the app with the number of characters, control characters other than tab and

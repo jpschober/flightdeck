@@ -46,6 +46,7 @@ module.exports = {
   'git.pr.by': 'von {author}',
   'git.pr.none': 'Kein Pull Request für {branch}',
   'git.noRepo': 'Kein Git-Repository',
+  'git.blocked': 'Hier kein Git: Die Konfiguration dieses Repositorys benennt in {key} ein Programm. Das Verzeichnis stammt aus der Terminal-Ausgabe, deshalb wird Git hier nichts gefragt, was es starten würde.',
   'git.pr.description': 'Beschreibung',
   'git.pr.checks': 'Checks ({success}✓ {failure}✗ {pending}●)',
   'git.pr.commits': 'Commits ({count})',

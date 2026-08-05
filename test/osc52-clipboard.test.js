@@ -67,6 +67,21 @@ test('a payload longer than the cap is cut to it', () => {
   assert.strictEqual(res.written, LIMIT);
 });
 
+test('the cut does not split a surrogate pair', () => {
+  // The emoji starts on the last position the cap allows, so cutting at the cap
+  // would leave its first half behind.
+  const res = write('a'.repeat(LIMIT - 1) + '😀' + 'tail');
+  assert.strictEqual(res.written, LIMIT - 1);
+  assert.strictEqual(written[0], 'a'.repeat(LIMIT - 1));
+  assert.deepStrictEqual([...written[0]].length, LIMIT - 1, 'a lone surrogate is on the clipboard');
+});
+
+test('an emoji that ends exactly on the cap stays whole', () => {
+  const res = write('a'.repeat(LIMIT - 2) + '😀' + 'tail');
+  assert.strictEqual(res.written, LIMIT);
+  assert.ok(written[0].endsWith('😀'), 'the emoji was cut off although it fit');
+});
+
 test('switched off, nothing is written and the caller learns why', () => {
   enabled = false;
   const res = write('take this');

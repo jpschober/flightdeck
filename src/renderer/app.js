@@ -549,6 +549,7 @@ async function newSession(shellId, opts) {
     exited: false,
     state: 'idle',
     gitRoot: null,
+    gitBlocked: null,
     agentCwd: null,
     worktree: null,
     history: [],
@@ -748,6 +749,12 @@ function renderContextPanel() {
   } else if (s.branch) {
     prCardEl.innerHTML = `<div class="muted">${
       escapeHtml(t('git.pr.none', { branch: '\u0000' })).replace('\u0000', `<code>${escapeHtml(s.branch)}</code>`)}</div>`;
+    prExtraEl.innerHTML = '';
+  } else if (s.gitBlocked) {
+    // Not the same as "no repository": there is one here, and git is kept out
+    // of it on purpose - see gitinfo.js.
+    prCardEl.innerHTML = `<div class="git-blocked">${
+      escapeHtml(t('git.blocked', { key: '\u0000' })).replace('\u0000', `<code>${escapeHtml(s.gitBlocked)}</code>`)}</div>`;
     prExtraEl.innerHTML = '';
   } else {
     prCardEl.innerHTML = `<div class="muted">${escapeHtml(t('git.noRepo'))}</div>`;
@@ -2296,6 +2303,7 @@ window.api.onInfo((info) => {
     cwd: info.cwd,
     branch: info.branch,
     gitRoot: info.gitRoot,
+    gitBlocked: info.gitBlocked,
     agentCwd: info.agentCwd,
     worktree: info.worktree,
     agents: info.agents,

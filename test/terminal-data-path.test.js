@@ -45,8 +45,20 @@ const sandbox = {
   win: { isDestroyed: () => false, webContents: { send: (ch, id, data) => sent.push({ ch, id, data }) } },
   extractCwd: () => null,
   applyStateFromData: () => {},
-  refreshSession: () => {},
+  refreshSession: (s) => refreshed.push(s.id),
+  // The reported directory is checked before it is taken over. The check runs
+  // through fs.promises, and the answers are handed out by the tests below.
+  fs: { promises: { stat: (p) => statFor(p) } },
 };
+const refreshed = [];
+let statPlan = new Map(); // path -> 'dir' | 'file' | 'error' | a promise to resolve by hand
+function statFor(p) {
+  const answer = statPlan.get(p);
+  if (answer && typeof answer.then === 'function') return answer;
+  if (answer === 'dir') return Promise.resolve({ isDirectory: () => true });
+  if (answer === 'file') return Promise.resolve({ isDirectory: () => false });
+  return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+}
 vm.createContext(sandbox);
 vm.runInContext(`${block}
 this.api = { queueOutput, flushOutput, ackOutput, resetFlowControl };
@@ -295,6 +307,80 @@ test('the ring buffer stays under its limit', () => {
   for (let i = 0; i < 200; i++) queueOutput(s, 'r'.repeat(L.FLUSH_CHARS));
   assert.ok(s.outputBufferSize <= L.GRID_BUFFER_CHARS + L.FLUSH_CHARS,
     `ring buffer grew to ${s.outputBufferSize}`);
+});
+
+// ---------------------------------------------------------------------------
+// The reported working directory
+//
+// It comes out of the terminal output, so it is taken over only once it turns
+// out to be a directory - and the question is asked asynchronously: flushOutput
+// is the PTY data path, and a stat on a hung mount would stop the output of
+// every session.
+// ---------------------------------------------------------------------------
+function reportCwd(s, dir) {
+  sandbox.extractCwd = () => dir;
+  queueOutput(s, 'x');
+  flushOutput(s);
+  sandbox.extractCwd = () => null;
+}
+const settled = () => new Promise((r) => setTimeout(r, 0));
+
+test('a reported directory is taken over once the answer is in, not before', async () => {
+  refreshed.length = 0;
+  statPlan = new Map([['/new', 'dir']]);
+  const s = mkSession();
+  reportCwd(s, '/new');
+  assert.strictEqual(s.cwd, '/x', 'flushOutput waited for the answer');
+  assert.deepStrictEqual(refreshed, []);
+  await settled();
+  assert.strictEqual(s.cwd, '/new');
+  assert.deepStrictEqual(refreshed, [s.id]);
+});
+
+test('a path that is not a directory, and one that is not there, are not taken over', async () => {
+  refreshed.length = 0;
+  statPlan = new Map([['/afile', 'file']]);
+  const s = mkSession();
+  reportCwd(s, '/afile');
+  reportCwd(s, '/gone');
+  await settled();
+  assert.strictEqual(s.cwd, '/x');
+  assert.deepStrictEqual(refreshed, []);
+});
+
+test('while the answer is outstanding the output goes on', async () => {
+  sent.length = 0;
+  refreshed.length = 0;
+  let release;
+  statPlan = new Map([['/slow', new Promise((r) => { release = r; })]]);
+  const s = mkSession();
+  reportCwd(s, '/slow');
+  // The mount is hanging; the session keeps writing and keeps its directory.
+  queueOutput(s, 'still running');
+  flushOutput(s);
+  assert.strictEqual(s.cwd, '/x');
+  assert.ok(sent.some((x) => x.data === 'still running'), 'the output stopped at the stat');
+  release({ isDirectory: () => true });
+  await settled();
+  assert.strictEqual(s.cwd, '/slow', 'the answer arrived late and was still used');
+});
+
+test('a newer report wins over an answer that arrives late', async () => {
+  refreshed.length = 0;
+  let releaseSlow;
+  statPlan = new Map([
+    ['/slow', new Promise((r) => { releaseSlow = r; })],
+    ['/fast', 'dir'],
+  ]);
+  const s = mkSession();
+  reportCwd(s, '/slow');
+  reportCwd(s, '/fast');
+  await settled();
+  assert.strictEqual(s.cwd, '/fast');
+  releaseSlow({ isDirectory: () => true });
+  await settled();
+  assert.strictEqual(s.cwd, '/fast', 'the older answer overwrote the newer directory');
+  assert.deepStrictEqual(refreshed, [s.id], 'the discarded answer triggered a refresh');
 });
 
 // ---------------------------------------------------------------------------

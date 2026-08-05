@@ -391,14 +391,6 @@ function normalizeOscPath(raw) {
   return p;
 }
 
-// The reported directory becomes the base for git, the file list and the
-// preview - and git runs there unprompted every few seconds. Anything writing
-// to the terminal can name a directory, so what is named has to be there.
-function isExistingDir(p) {
-  try { return fs.statSync(p).isDirectory(); }
-  catch (e) { log.debug('osc7: reported directory not usable', { path: p, err: e }); return false; }
-}
-
 function extractCwd(text) {
   let cwd = null; let m;
   OSC7_RE.lastIndex = 0;
@@ -806,10 +798,32 @@ function flushOutput(session) {
   const found = extractCwd(text);
   applyStateFromData(session, text, tailLen, data);
   session.oscTail = text.slice(-512);
-  if (found && found !== session.cwd && isExistingDir(found)) {
-    session.cwd = found;
+  if (found && found !== session.cwd) adoptCwd(session, found);
+}
+
+// The reported directory becomes the base for git, the file list and the
+// preview - and git runs there unprompted every few seconds. Anything writing
+// to the terminal can name a directory, so what is named has to exist before it
+// is taken over.
+//
+// The question is put asynchronously. flushOutput is the PTY data path: a stat
+// on a hung network mount stands for seconds, and every session's output stands
+// with it. Until the answer is in, the session keeps the directory it had.
+function adoptCwd(session, dir) {
+  if (session.cwdCandidate === dir) return; // the same report is already on its way
+  session.cwdCandidate = dir;
+  fs.promises.stat(dir).then((st) => {
+    // A newer report, a session that has since ended, or a directory that has
+    // meanwhile become the current one: in each case this answer is stale.
+    if (session.cwdCandidate !== dir || session.exited || session.cwd === dir) return;
+    if (!st.isDirectory()) { log.debug('osc7: reported path is not a directory', { session: session.id, path: dir }); return; }
+    session.cwd = dir;
     refreshSession(session, true);
-  }
+  }, (e) => {
+    log.debug('osc7: reported directory not usable', { session: session.id, path: dir, err: e });
+  }).finally(() => {
+    if (session.cwdCandidate === dir) session.cwdCandidate = null;
+  });
 }
 
 // The renderer reports how many characters xterm has processed. Once the
@@ -863,9 +877,11 @@ function createSession(shellId, opts = {}) {
     title: null,   // manually set title
     label: null,   // manually set label
     oscTail: '',
+    cwdCandidate: null,      // a reported directory whose stat is still running
     lastInfoJson: '',
     branch: null,
     gitRoot: null,
+    gitBlocked: null,        // the config key that keeps git out of this directory
     files: [],
     fileMemory: new Map(),   // path -> entry; survives commits
     pr: null,
@@ -986,9 +1002,12 @@ async function doRefresh(session, force, cwdAtStart) {
   }
   session.branch = git ? git.branch : null;
   session.gitRoot = git ? git.root : null;
+  // Git was refused in this directory (see gitinfo.js). The panel says so, and
+  // nothing further is asked of git here.
+  session.gitBlocked = git ? git.blocked || null : null;
   if (!git) resetFileMemory(session);
   session.files = git ? mergeFileMemory(session, git.files) : [];
-  const pr = git ? await getPrInfo(gitCwd, git.root, git.branch, force) : null;
+  const pr = git && !git.blocked ? await getPrInfo(gitCwd, git.root, git.branch, force) : null;
   if (session.cwd !== cwdAtStart || session.exited) return; // cd in the meantime -> discard
   session.pr = pr;
 
@@ -1019,6 +1038,7 @@ async function doRefresh(session, force, cwdAtStart) {
     label: session.label,
     branch: session.branch,
     gitRoot: session.gitRoot,
+    gitBlocked: session.gitBlocked,
     agentCwd: session.agentCwd,
     worktree: session.agentCwd ? path.basename(session.agentCwd) : null,
     agents: session.agents,
@@ -1303,13 +1323,22 @@ const OSC52_MAX_CHARS = 100 * 1024;
 const osc52Enabled = () => settings.get('osc52Write', true) !== false;
 const OSC52_STRIP_RE = /[\u0000-\u0008\u000b-\u001f\u007f]/g; // every control character but \t and \n
 
+// An emoji is two code units, and a cut between them leaves half of it on the
+// clipboard. The cut goes back one unit when it lands between the two.
+function capChars(text) {
+  if (text.length <= OSC52_MAX_CHARS) return text;
+  const last = text.charCodeAt(OSC52_MAX_CHARS - 1);
+  const cut = last >= 0xd800 && last <= 0xdbff ? OSC52_MAX_CHARS - 1 : OSC52_MAX_CHARS;
+  return text.slice(0, cut);
+}
+
 ipcMain.handle('clipboard:write-osc52', (e, text) => {
   if (typeof text !== 'string' || !text) return { written: 0, off: false };
   if (!osc52Enabled()) {
     log.debug('osc52: write refused, switched off', { chars: text.length });
     return { written: 0, off: true };
   }
-  const clean = text.replace(OSC52_STRIP_RE, '').slice(0, OSC52_MAX_CHARS);
+  const clean = capChars(text.replace(OSC52_STRIP_RE, ''));
   if (!clean) return { written: 0, off: false };
   clipboard.writeText(clean);
   log.debug('osc52: clipboard written', { chars: clean.length, dropped: text.length - clean.length });
