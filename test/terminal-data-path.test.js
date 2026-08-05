@@ -312,6 +312,10 @@ assert.ok(!/while \(\(m = OSC(133|CMD|SESS|_TITLE|9)_RE\.exec/.test(oscBlock),
 const calls = [];
 const oscSandbox = {
   console, Buffer, setTimeout, clearTimeout, Date, log,
+  // Which command lines count as an agent comes from the plugins; the real
+  // function goes into the sandbox so this test cannot pass against a stub that
+  // says yes to everything. What it matches is test/agent-commands.test.js.
+  isAgentCommand: require('../src/main/agents').isAgentCommand,
   win: { isDestroyed: () => false, webContents: { send: (ch, id, v) => calls.push(`${ch}:${v}`) } },
   beginAgentBinding: (s, cmd) => calls.push('bind:' + cmd),
   bindAgentSession: (s, id) => calls.push('session:' + id),
