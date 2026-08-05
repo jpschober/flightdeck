@@ -40,12 +40,18 @@ const NO_PLUGIN_TTL = 15_000;
 function clearCache() {
   cache.clear();
   defaultBranchCache.clear();
+  baselineCache.clear();
+}
+
+// Newest last, oldest evicted first.
+function putBounded(map, key, entry, max) {
+  map.delete(key);
+  map.set(key, entry);
+  while (map.size > max) map.delete(map.keys().next().value);
 }
 
 function cachePut(key, entry) {
-  cache.delete(key);
-  cache.set(key, entry);
-  while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+  putBounded(cache, key, entry, CACHE_MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,16 +171,35 @@ async function defaultBranch(root) {
   return ref;
 }
 
+// The options follow from the commit HEAD points at and from the PR the labels
+// name. `git rev-parse HEAD` reports the first of those and is asked every
+// time; it is also what the entry hangs on, so a commit, a checkout and a
+// different repository each produce a different key on their own, and the
+// panel never compares against a baseline that HEAD has already left.
+//
+// The lifetime on top of that covers the one change the key does not see: a
+// fetch that moves `origin/<base>` can move the merge base without HEAD moving.
+const baselineCache = new Map(); // root|head|pr -> { at, options }
+const BASELINE_MAX = 60;
+const BASELINE_TTL = 300_000;
+
 /**
  * The possible comparison baselines, best first. Offering more than one is not
  * a luxury: "what did I just change" (HEAD) and "what does this branch change
  * in total" (branch point) are different questions, and when reviewing a PR the
  * second one is the right one.
+ *
+ * The returned array is shared with the cache - callers read it, they do not
+ * change it.
  */
-async function baselineOptions(root, pr) {
+async function baselineOptions(root, pr, force = false) {
   const headOut = await run('git', ['rev-parse', 'HEAD'], root);
   const head = headOut && headOut.trim() ? headOut.trim() : null;
   if (!head) return []; // no commit, so no "before"
+
+  const key = `${root}|${head}|${pr ? pr.number : ''}|${pr ? pr.baseRefName : ''}`;
+  const hit = baselineCache.get(key);
+  if (hit && !force && Date.now() - hit.at < BASELINE_TTL) return hit.options;
 
   const options = [];
   const seen = new Set();
@@ -225,6 +250,7 @@ async function baselineOptions(root, pr) {
     hint: t('baseline.head.hint'),
   });
 
+  putBounded(baselineCache, key, { at: Date.now(), options }, BASELINE_MAX);
   return options;
 }
 
@@ -263,7 +289,7 @@ async function getSchemaView(root, opts = {}) {
   if (!current.plugin) return view;
 
   // Without git there is no "before" - we still show the schema.
-  const baselines = await baselineOptions(root, opts.pr);
+  const baselines = await baselineOptions(root, opts.pr, Boolean(opts.force));
   view.baselines = baselines.map(({ mode, label, hint }) => ({ mode, label, hint }));
   if (!baselines.length) return view;
 
@@ -285,4 +311,6 @@ async function getSchemaView(root, opts = {}) {
   return view;
 }
 
-module.exports = { getSchemaView, clearCache, PLUGINS };
+// `baselineOptions` is exported so the test can count the git processes it
+// starts; the panel goes through `getSchemaView`.
+module.exports = { getSchemaView, baselineOptions, clearCache, PLUGINS };

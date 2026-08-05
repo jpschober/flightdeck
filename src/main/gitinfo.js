@@ -2,6 +2,7 @@
 // Collects git and pull request information for a working directory.
 const { execFile } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const log = require('./log');
 
 function run(cmd, args, cwd, timeout = 8000) {
@@ -35,15 +36,48 @@ function parseStatus(porcelain) {
   return files;
 }
 
+// --- repo root per working directory ---------------------------------------
+//
+// `rev-parse --show-toplevel` gives the same answer for a working directory
+// until the repository underneath it changes: a `git init` in a subdirectory,
+// a worktree that takes the directory's place, the directory disappearing. A
+// deleted directory is caught by the caller before it gets here; the other two
+// happen without announcing themselves, so the entry carries a lifetime. At the
+// four-second refresh that is one process per working directory per minute
+// instead of fifteen.
+const rootCache = new Map(); // cwd -> { root, at }
+const ROOT_TTL = 60_000;
+const ROOT_CACHE_MAX = 64;
+
+async function gitRoot(cwd) {
+  const hit = rootCache.get(cwd);
+  const now = Date.now();
+  if (hit && now - hit.at < ROOT_TTL) return hit.root;
+
+  const out = await run('git', ['rev-parse', '--show-toplevel'], cwd);
+  const root = out && out.trim() ? out.trim().replace(/\//g, path.sep) : null;
+  // A failed or empty answer is not cached: it is a timeout or a directory
+  // outside a repository, and both are answered again next time.
+  if (!root) return null;
+  rootCache.delete(cwd);
+  rootCache.set(cwd, { root, at: now });
+  while (rootCache.size > ROOT_CACHE_MAX) rootCache.delete(rootCache.keys().next().value);
+  return root;
+}
+
 async function getGitInfo(cwd) {
   if (!cwd || !fs.existsSync(cwd)) return null;
   const branch = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
   if (branch === null) return null;
-  const root = await run('git', ['rev-parse', '--show-toplevel'], cwd);
-  const status = await run('git', ['status', '--porcelain'], cwd);
+  // Root and status do not depend on each other, so they run together. The
+  // branch above stays the abort condition and therefore stays on its own.
+  const [root, status] = await Promise.all([
+    gitRoot(cwd),
+    run('git', ['status', '--porcelain'], cwd),
+  ]);
   return {
     branch: branch.trim(),
-    root: root ? root.trim().replace(/\//g, require('path').sep) : cwd,
+    root: root || cwd,
     files: status ? parseStatus(status) : [],
   };
 }
