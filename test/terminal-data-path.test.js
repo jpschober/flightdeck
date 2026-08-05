@@ -1,13 +1,15 @@
 'use strict';
 // Batching, flow control and the grid preview tail from src/main/main.js.
 //
-// The repository has no test harness and main.js requires Electron, so the
-// functions under test are pulled out of the source and run against stub
-// sessions. They are pure given a session object: they touch `win`, the PTY
-// handle and the state parser only through names the sandbox provides.
+// main.js requires Electron, so the functions under test are pulled out of the
+// source and run against stub sessions. They are pure given a session object:
+// they touch `win`, the PTY handle and the state parser only through names the
+// sandbox provides.
 //
-//   node test/terminal-data-path.test.js
+// The tests share `sent`, `ptyLog` and the sandbox's session map and run in the
+// order they stand here.
 
+const test = require('node:test');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -74,8 +76,6 @@ function mkSession() {
   return s;
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const tests = [];
-const test = (name, fn) => tests.push([name, fn]);
 
 // ---------------------------------------------------------------------------
 // Batching
@@ -406,19 +406,3 @@ test('the title asterisk raises attention only once the agent was prompted', () 
   applyStateFromData(s, osc.title('✳ waiting'), 0, osc.title('✳ waiting'));
   assert.deepStrictEqual(calls, ['session:state:attention']);
 });
-
-// ---------------------------------------------------------------------------
-(async () => {
-  let failed = 0;
-  for (const [name, fn] of tests) {
-    try {
-      await fn();
-      console.log('ok   ' + name);
-    } catch (e) {
-      failed++;
-      console.log('FAIL ' + name + '\n     ' + (e && e.message));
-    }
-  }
-  console.log(`\n${tests.length - failed}/${tests.length} passed`);
-  process.exit(failed ? 1 : 0);
-})();

@@ -6,7 +6,7 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node test/terminal-data-path.test.js"
+    "test": "node --test test/*.test.js"
   },
   "license": "MIT",
   "devDependencies": {
