@@ -227,9 +227,9 @@ function claude
 end
 `;
 
-// Zsh loads its configuration from $ZDOTDIR. We point that at a temporary
-// directory which first loads the user's real configuration and then installs
-// the hooks.
+// Zsh loads its configuration from $ZDOTDIR. We point that at our own directory
+// (see getRcDir), which first loads the user's real configuration and then
+// installs the hooks.
 // Important: after loading the user's .zshenv, ZDOTDIR must point back at our
 // directory, otherwise zsh will not find our .zshrc in the next step.
 const ZSH_ENV = `
@@ -256,20 +256,44 @@ add-zsh-hook precmd __flightdeck_prompt
 add-zsh-hook preexec __flightdeck_preexec
 `;
 
-// The integration files live in their own directory under tmp; zsh needs a
-// directory (ZDOTDIR), the others only a file.
+// The integration files live in their own directory under userData; zsh needs a
+// directory (ZDOTDIR), the others only a file. A world-writable location such as
+// os.tmpdir() lets another local user create the directory first and place files
+// in it, and zsh sources everything it finds in ZDOTDIR.
+
+// Zsh startup files that Flightdeck never writes but would source from ZDOTDIR.
+// One of them left behind by an older version or another writer runs on every
+// session, so they are removed. Other entries are left alone: a second instance
+// may be writing its own temporary file at any moment.
+const ZSH_STALE_FILES = ['.zprofile', '.zlogin', '.zlogout'];
+
 let rcDir = null;
 function getRcDir() {
   if (!rcDir) {
-    rcDir = path.join(os.tmpdir(), 'flightdeck-shell-' + process.pid);
-    fs.mkdirSync(rcDir, { recursive: true });
+    const dir = path.join(app.getPath('userData'), 'shell-integration');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // mkdirSync with recursive: true also accepts a symlink to a directory, and
+    // the chmod and the removals below would then apply to the target.
+    if (!fs.lstatSync(dir).isDirectory()) throw new Error('not a directory: ' + dir);
+    if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
+    for (const name of ZSH_STALE_FILES) {
+      try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); } catch { /* never mind */ }
+    }
+    rcDir = dir;
   }
   return rcDir;
 }
 
+// Written to a separate file and renamed over the old one, so a session started
+// by a second Flightdeck instance reads either the previous or the new content
+// and never a half-written file. Other users are kept out by the 0700 directory;
+// the temporary name only needs to be unique per instance.
 function writeRc(name, content) {
   const p = path.join(getRcDir(), name);
-  fs.writeFileSync(p, content);
+  const tmp = p + '.' + process.pid + '.tmp';
+  fs.rmSync(tmp, { force: true });
+  fs.writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(tmp, p);
   return p.replace(/\\/g, '/');
 }
 
@@ -287,12 +311,17 @@ function spawnArgsFor(shell) {
     case 'gitbash':
     case 'bash':
       return { file: shell.file, args: ['--rcfile', getRc('bashrc.sh', BASH_RC), '-i'], env: {} };
-    case 'fish':
+    case 'fish': {
+      // -C takes a string that fish parses, and the userData path contains a
+      // space on macOS, so the path is quoted. Inside single quotes fish treats
+      // only \' and \\ as escapes.
+      const rc = getRc('init.fish', FISH_RC).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       return {
         file: shell.file,
-        args: ['-C', 'source ' + getRc('init.fish', FISH_RC), '-i'],
+        args: ['-C', "source '" + rc + "'", '-i'],
         env: {},
       };
+    }
     case 'zsh': {
       getRc('.zshenv', ZSH_ENV);
       getRc('.zshrc', ZSH_RC);
@@ -923,45 +952,91 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 const MAX_PREVIEW = 512 * 1024;
 
+/** Is `p` `root` itself or below it? Both have to be resolved already. */
+function isInside(root, p) {
+  return p === root || p.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+// Opening without following a link: not available on Windows, where the lstat
+// below stays the only check.
+const O_NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
+
+// Git reads `:/`, `:(exclude)x` and `:!x` as pathspec magic, and a repository
+// may contain a file with such a name. Both diff calls treat the path as the
+// literal name it is.
+const GIT_LITERAL = '--literal-pathspecs';
+
+// The path comes from the renderer and is foreign input. Anything that is not
+// a relative path below the session root is rejected here, before a git command
+// or a read sees it. `base` has to be resolved already.
+function resolveInRoot(base, relPath) {
+  if (typeof relPath !== 'string' || !relPath || relPath.includes('\0')) return null;
+  if (path.isAbsolute(relPath)) return null;
+  const abs = path.resolve(base, relPath);
+  return isInside(base, abs) ? abs : null;
+}
+
+// Reading for the preview: a symlink is not followed, neither the file itself
+// nor a directory on the way to it. A cloned repository can contain a link to
+// any file the user can read, and for untracked files the preview reads from
+// the file system directly.
+//
+// The read goes through one file handle opened with O_NOFOLLOW, so the file
+// that was checked is the file that is read. It takes at most MAX_PREVIEW + 1
+// bytes, which bounds the memory a huge file can claim and decides the
+// truncation from what was actually read rather than from an earlier stat.
+async function readForPreview(base, abs, relPath) {
+  let fh = null;
+  try {
+    const stat = await fs.promises.lstat(abs);
+    if (stat.isSymbolicLink()) return { kind: 'error', path: relPath, text: t('file.symlink') };
+    if (stat.isDirectory()) return { kind: 'error', path: relPath, text: t('file.isDir') };
+    const [realRoot, real] = await Promise.all([fs.promises.realpath(base), fs.promises.realpath(abs)]);
+    if (!isInside(realRoot, real)) return { kind: 'error', path: relPath, text: t('file.outsideRoot') };
+
+    fh = await fs.promises.open(abs, fs.constants.O_RDONLY | O_NOFOLLOW);
+    const buf = Buffer.alloc(MAX_PREVIEW + 1);
+    let got = 0;
+    while (got < buf.length) {
+      const { bytesRead } = await fh.read(buf, got, buf.length - got, got);
+      if (!bytesRead) break;   // end of file
+      got += bytesRead;
+    }
+    if (got > MAX_PREVIEW) {
+      return { kind: 'content', path: relPath, text: buf.subarray(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
+    }
+    return { kind: 'content', path: relPath, text: buf.subarray(0, got).toString('utf8') };
+  } catch (e) {
+    return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
+  } finally {
+    if (fh) await fh.close().catch(() => { /* nothing left to do about it */ });
+  }
+}
+
 async function previewFile(session, relPath, source, opts = {}) {
-  const root = session.gitRoot || session.cwd;
-  const abs = path.resolve(root, relPath);
+  const base = path.resolve(session.gitRoot || session.cwd);
+  const abs = resolveInRoot(base, relPath);
+  if (!abs) {
+    const shown = typeof relPath === 'string' ? relPath : '';
+    return { kind: 'error', path: shown, text: t('file.outsideRoot') };
+  }
 
   // The preview can request the file content instead of the diff - for the
   // rendered markdown view, which could show nothing based on the diff.
-  if (opts.content) {
-    try {
-      const stat = fs.statSync(abs);
-      if (stat.isDirectory()) return { kind: 'error', path: relPath, text: t('file.isDir') };
-      if (stat.size > MAX_PREVIEW) {
-        return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
-      }
-      return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
-    } catch (e) {
-      return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
-    }
-  }
+  if (opts.content) return readForPreview(base, abs, relPath);
 
   if (source === 'pr' && session.pr && session.pr.baseRefName) {
-    const diff = await run('git', ['diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], root);
+    const diff = await run('git', [GIT_LITERAL, 'diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], base);
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
   const entry = session.files.find((f) => f.path === relPath);
   if (!entry || !entry.untracked) {
-    const diff = await run('git', ['diff', '--no-color', 'HEAD', '--', relPath], root);
+    const diff = await run('git', [GIT_LITERAL, 'diff', '--no-color', 'HEAD', '--', relPath], base);
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
-  try {
-    const stat = fs.statSync(abs);
-    if (stat.size > MAX_PREVIEW) {
-      return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
-    }
-    return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
-  } catch (e) {
-    return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
-  }
+  return readForPreview(base, abs, relPath);
 }
 
 // ---------------------------------------------------------------------------
@@ -1163,6 +1238,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* never mind */ } }
   stopWatchingProjects();
-  if (rcDir) { try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch { /* never mind */ } }
+  // The integration directory stays: it is shared with any second instance,
+  // whose sessions would otherwise start without the hooks.
   app.quit();
 });

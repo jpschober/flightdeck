@@ -1,21 +1,20 @@
 'use strict';
-// Checks the transcript lookup in src/main/claude-sessions.js and the way the
-// Claude plugin takes the resolved path from ctx.
+// The transcript lookup in src/main/claude-sessions.js and the way the Claude
+// plugin takes the resolved path from ctx.
 //
-//   node test/transcript-cache.js
-//
-// There is no test runner in this repo; the file runs on its own and exits
-// non-zero on the first failed check. It builds a ~/.claude/projects tree in a
-// temp directory, points HOME at it and drives the real modules, counting
-// readdirSync and statSync calls - the point of the cache is which of those do
-// not happen.
+// A ~/.claude/projects tree is built in a temp directory, HOME points at it and
+// the real modules are driven against it, counting readdirSync and statSync
+// calls - the point of the cache is which of those do not happen. The tests
+// share that tree and run in the order they stand here.
 //
 // Time is faked (see `advance`) so the age limits of the listing can be reached
 // without waiting for them.
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-test-'));
 process.env.HOME = home;
@@ -50,11 +49,6 @@ fs.readdirSync = function (...a) { readdirs++; return realReaddir.apply(fs, a); 
 fs.statSync = function (...a) { stats++; return realStat.apply(fs, a); };
 function counted(fn) { readdirs = 0; stats = 0; const value = fn(); return { value, readdirs, stats }; }
 
-let failed = 0;
-function check(name, ok, detail) {
-  console.log(ok ? 'ok   ' : 'FAIL ', name, detail === undefined ? '' : `(${detail})`);
-  if (!ok) failed++;
-}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function reload(file) {
   delete require.cache[require.resolve(file)];
@@ -63,112 +57,127 @@ function reload(file) {
 
 let cs = require(MODULE);
 
-async function withRealWatcher() {
-  console.log('\n# lookup and cache, real fs.watch');
+test.after(() => {
+  fs.readdirSync = realReaddir;
+  fs.statSync = realStat;
+  Date.now = realNow;
+  fs.rmSync(home, { recursive: true, force: true });
+});
 
+// --- lookup and cache, real fs.watch ---------------------------------------
+
+test('cold lookup finds the transcript and reads the listing once', () => {
   const cold = counted(() => cs.findTranscriptById(ID));
-  check('cold lookup finds the transcript', cold.value === path.join(REPO, ID + '.jsonl'), cold.value);
-  check('cold lookup reads the listing once', cold.readdirs === 1, `readdirs=${cold.readdirs}`);
+  assert.strictEqual(cold.value, path.join(REPO, ID + '.jsonl'));
+  assert.strictEqual(cold.readdirs, 1);
+});
 
+test('a warm lookup costs one stat and no listing', () => {
   const warm = counted(() => cs.findTranscriptById(ID));
-  check('warm lookup returns the same path', warm.value === cold.value);
-  check('warm lookup does no readdir', warm.readdirs === 0, `readdirs=${warm.readdirs}`);
-  check('warm lookup does one stat', warm.stats === 1, `stats=${warm.stats}`);
+  assert.strictEqual(warm.value, path.join(REPO, ID + '.jsonl'));
+  assert.strictEqual(warm.readdirs, 0);
+  assert.strictEqual(warm.stats, 1);
 
   const many = counted(() => { for (let i = 0; i < 10; i++) cs.findTranscriptById(ID); });
-  check('10 warm lookups stay at 0 readdirs / 10 stats',
-    many.readdirs === 0 && many.stats === 10, `readdirs=${many.readdirs} stats=${many.stats}`);
+  assert.strictEqual(many.readdirs, 0, 'readdirs over 10 warm lookups');
+  assert.strictEqual(many.stats, 10, 'stats over 10 warm lookups');
+});
 
+test('a moved transcript is found at its new path without an extra listing', () => {
   // The agent moves into a worktree: the transcript lands in another project
   // directory, one that was already in the listing.
   fs.renameSync(path.join(REPO, ID + '.jsonl'), path.join(WORKTREE, ID + '.jsonl'));
   const moved = counted(() => cs.findTranscriptById(ID));
-  check('moved transcript is found at its new path',
-    moved.value === path.join(WORKTREE, ID + '.jsonl'), moved.value);
-  check('the move costs no extra listing', moved.readdirs === 0, `readdirs=${moved.readdirs}`);
+  assert.strictEqual(moved.value, path.join(WORKTREE, ID + '.jsonl'));
+  assert.strictEqual(moved.readdirs, 0);
+});
 
-  // A project directory created after the listing was taken. The watch event
-  // may not have arrived; the forced re-read on a miss covers that.
-  advance(5000); // the forced re-read is rate-limited to one per 4 s
+test('a new session ID in a directory created after the listing is found', () => {
+  // The watch event may not have arrived; the forced re-read on a miss covers
+  // that. It is rate-limited to one per 4 s.
+  advance(5000);
   const other = path.join(PROJECTS, '-home-me-other');
   fs.mkdirSync(other);
   fs.writeFileSync(path.join(other, ID_NEW + '.jsonl'), line().repeat(3));
   const fresh = counted(() => cs.findTranscriptById(ID_NEW));
-  check('a new session ID in a new directory is found',
-    fresh.value === path.join(other, ID_NEW + '.jsonl'), fresh.value);
-  check('the miss costs at most one extra listing', fresh.readdirs <= 1, `readdirs=${fresh.readdirs}`);
+  assert.strictEqual(fresh.value, path.join(other, ID_NEW + '.jsonl'));
+  assert.ok(fresh.readdirs <= 1, `the miss cost ${fresh.readdirs} listings`);
+
   const again = counted(() => cs.findTranscriptById(ID_NEW));
-  check('the next lookup of that ID is warm',
-    again.readdirs === 0 && again.stats === 1, `readdirs=${again.readdirs} stats=${again.stats}`);
+  assert.strictEqual(again.readdirs, 0, 'the next lookup of that ID is warm');
+  assert.strictEqual(again.stats, 1);
 
   fs.unlinkSync(path.join(other, ID_NEW + '.jsonl'));
   const gone = counted(() => cs.findTranscriptById(ID_NEW));
-  check('a deleted transcript reports null', gone.value === null, String(gone.value));
+  assert.strictEqual(gone.value, null, 'a deleted transcript reports null');
+});
 
-  // fs.watch delivering: a directory appears while nothing is being looked up
+test('the watch event lets a new directory through', async () => {
   await sleep(150);
   const third = path.join(PROJECTS, '-home-me-third');
   fs.mkdirSync(third);
   fs.writeFileSync(path.join(third, ID_WATCH + '.jsonl'), line());
   await sleep(250); // let the watch event land
   const watched = counted(() => cs.findTranscriptById(ID_WATCH));
-  check('the watch event lets a new directory through',
-    watched.value === path.join(third, ID_WATCH + '.jsonl'), watched.value);
-}
+  assert.strictEqual(watched.value, path.join(third, ID_WATCH + '.jsonl'));
+});
 
-async function missState() {
-  console.log('\n# a session bound to a transcript that does not exist');
+// --- a session bound to a transcript that does not exist --------------------
+
+test('a permanent miss does not cost more than the scan it replaces', () => {
   // `claude --session-id <fresh-uuid>` binds an ID before Claude has written
-  // the file. Every lookup misses until it appears - the state must not cost
-  // more than the scan it replaces.
+  // the file. Every lookup misses until it appears.
   advance(5000);
   const first = counted(() => cs.findTranscriptById(GHOST));
-  check('the first miss reports null', first.value === null, String(first.value));
-  check('the first miss re-reads the listing once', first.readdirs <= 1, `readdirs=${first.readdirs}`);
+  assert.strictEqual(first.value, null);
+  assert.ok(first.readdirs <= 1, `the first miss read ${first.readdirs} listings`);
 
   const repeat = counted(() => { for (let i = 0; i < 5; i++) cs.findTranscriptById(GHOST); });
-  check('further misses in the same tick read no listing',
-    repeat.readdirs === 0, `readdirs=${repeat.readdirs}`);
-  const dirCount = fs.readdirSync(PROJECTS).length;
-  check('further misses scan once each, not twice',
-    repeat.stats <= 5 * dirCount, `stats=${repeat.stats} dirs=${dirCount}`);
+  assert.strictEqual(repeat.readdirs, 0, 'further misses in the same tick read no listing');
+  const dirCount = realReaddir(PROJECTS).length;
+  assert.ok(repeat.stats <= 5 * dirCount,
+    `further misses scan once each, not twice: stats=${repeat.stats} dirs=${dirCount}`);
 
   advance(5000);
   const later = counted(() => cs.findTranscriptById(GHOST));
-  check('after the rate limit the re-read is allowed again',
-    later.readdirs === 1, `readdirs=${later.readdirs}`);
+  assert.strictEqual(later.readdirs, 1, 'after the rate limit the re-read is allowed again');
+});
 
-  // A transcript that exists but is still empty counts as a miss as well.
+test('a transcript that exists but is still empty counts as a miss', () => {
   fs.writeFileSync(path.join(REPO, GHOST + '.jsonl'), '');
-  const empty = counted(() => cs.findTranscriptById(GHOST));
-  check('an empty transcript is not bound', empty.value === null, String(empty.value));
+  assert.strictEqual(counted(() => cs.findTranscriptById(GHOST)).value, null);
+
   fs.writeFileSync(path.join(REPO, GHOST + '.jsonl'), line());
   advance(5000);
   const written = counted(() => cs.findTranscriptById(GHOST));
-  check('once written it is found', written.value === path.join(REPO, GHOST + '.jsonl'), written.value);
+  assert.strictEqual(written.value, path.join(REPO, GHOST + '.jsonl'));
   fs.unlinkSync(path.join(REPO, GHOST + '.jsonl'));
-}
+});
 
-async function readCwd() {
-  console.log('\n# readAgentCwd');
+// --- readAgentCwd -----------------------------------------------------------
+
+test('readAgentCwd reads the last cwd off the transcript', async () => {
   const file = path.join(WORKTREE, ID + '.jsonl');
   const wt = '/home/me/repo/wt/x';
   fs.appendFileSync(file, JSON.stringify({ type: 'assistant', cwd: wt }) + '\n');
+
   const p = cs.readAgentCwd(ID, file);
-  check('returns a promise', typeof p.then === 'function');
-  check('reads the last cwd', (await p) === wt);
-  check('resolves the path itself when none is passed', (await cs.readAgentCwd(ID)) === wt);
-  check('unknown session -> null', (await cs.readAgentCwd('deadbeef-0000-0000-0000-000000000000')) === null);
+  assert.strictEqual(typeof p.then, 'function', 'returns a promise');
+  assert.strictEqual(await p, wt);
+  assert.strictEqual(await cs.readAgentCwd(ID), wt, 'resolves the path itself when none is passed');
+  assert.strictEqual(await cs.readAgentCwd('deadbeef-0000-0000-0000-000000000000'), null);
+
   const emptyFile = path.join(REPO, 'empty.jsonl');
   fs.writeFileSync(emptyFile, '');
-  check('empty file -> null', (await cs.readAgentCwd(ID, emptyFile)) === null);
+  assert.strictEqual(await cs.readAgentCwd(ID, emptyFile), null);
 
   const list = cs.listClaudeSessions(10);
-  check('listClaudeSessions still finds the session', list.some((s) => s.id === ID), JSON.stringify(list.map((s) => s.id)));
-}
+  assert.ok(list.some((s) => s.id === ID), JSON.stringify(list.map((s) => s.id)));
+});
 
-async function pluginCtx() {
-  console.log('\n# the plugin takes the path from ctx');
+// --- the plugin takes the path from ctx -------------------------------------
+
+test('the plugin uses ctx.claudeTranscript instead of looking the path up', () => {
   const plugin = require(PLUGIN);
   const transcript = path.join(WORKTREE, ID + '.jsonl');
   const subagents = path.join(WORKTREE, ID, 'subagents');
@@ -179,36 +188,40 @@ async function pluginCtx() {
 
   const ctx = { claudeSessionId: ID, claudeTranscript: transcript };
   const det = counted(() => plugin.detect(ctx));
-  check('detect sees the subagents directory',
-    det.value && det.value.evidence.includes('subagents/'), JSON.stringify(det.value));
-  check('detect reads no listing', det.readdirs === 0, `readdirs=${det.readdirs}`);
+  assert.ok(det.value && det.value.evidence.includes('subagents/'), JSON.stringify(det.value));
+  assert.strictEqual(det.readdirs, 0, 'detect reads no listing');
 
   const rd = counted(() => plugin.read(ctx));
-  check('read lists the agent',
-    rd.value.agents.length === 1 && rd.value.agents[0].description === 'do a thing',
-    JSON.stringify(rd.value.agents));
-  check('read reads only the subagents directory', rd.readdirs === 1, `readdirs=${rd.readdirs}`);
+  assert.strictEqual(rd.value.agents.length, 1);
+  assert.strictEqual(rd.value.agents[0].description, 'do a thing');
+  assert.strictEqual(rd.readdirs, 1, 'read reads only the subagents directory');
+});
 
+test('a null ctx.claudeTranscript is a resolved nothing, not a missing key', () => {
   // The refresh resolved nothing: the key is present and null, and the plugin
   // must not run the scan again for it.
+  const plugin = require(PLUGIN);
   advance(5000);
   const nullCtx = { claudeSessionId: GHOST, claudeTranscript: null };
+
   const nd = counted(() => plugin.detect(nullCtx));
-  check('detect with a null path does not look it up',
-    nd.readdirs === 0 && nd.stats === 0, `readdirs=${nd.readdirs} stats=${nd.stats}`);
+  assert.strictEqual(nd.readdirs, 0);
+  assert.strictEqual(nd.stats, 0);
+
   const nr = counted(() => plugin.read(nullCtx));
-  check('read with a null path returns nothing and looks nothing up',
-    nr.value.agents.length === 0 && nr.readdirs === 0 && nr.stats === 0,
-    `readdirs=${nr.readdirs} stats=${nr.stats}`);
+  assert.strictEqual(nr.value.agents.length, 0);
+  assert.strictEqual(nr.readdirs, 0);
+  assert.strictEqual(nr.stats, 0);
 
   // A caller that only knows the session ID leaves the key out.
   const noKey = plugin.detect({ claudeSessionId: ID });
-  check('without the key the plugin resolves the path itself',
-    noKey && noKey.evidence.includes('subagents/'), JSON.stringify(noKey));
-}
+  assert.ok(noKey && noKey.evidence.includes('subagents/'),
+    `without the key the plugin resolves the path itself: ${JSON.stringify(noKey)}`);
+});
 
-async function silentWatcher() {
-  console.log('\n# fs.watch that succeeds and never fires');
+// --- fs.watch that succeeds and never fires ---------------------------------
+
+test('the listing ages out even when no watch event ever arrives', () => {
   // The case a network file system produces: the watch is installed on the
   // local mount point and no event ever arrives. The listing must age out
   // anyway, otherwise a project directory created later stays invisible.
@@ -216,8 +229,7 @@ async function silentWatcher() {
   fs.watch = () => ({ on() {}, close() {}, unref() {} });
   const mod = reload(MODULE);
 
-  const before = mod.listClaudeSessions(50).length;
-  check('the listing is read at all', before > 0, `sessions=${before}`);
+  assert.ok(mod.listClaudeSessions(50).length > 0, 'the listing is read at all');
 
   const quiet = path.join(PROJECTS, '-home-me-quiet');
   fs.mkdirSync(quiet);
@@ -227,54 +239,43 @@ async function silentWatcher() {
 
   advance(1000);
   const pinned = counted(() => mod.findTranscriptById('12345678-0000-0000-0000-000000000000'));
-  check('within the age limit the listing is not re-read every lookup',
-    pinned.readdirs <= 1, `readdirs=${pinned.readdirs}`);
+  assert.ok(pinned.readdirs <= 1,
+    `within the age limit the listing is not re-read every lookup: readdirs=${pinned.readdirs}`);
 
   advance(61000); // past the age limit for a watched directory
   const aged = counted(() => mod.findTranscriptById(ID_QUIET));
-  check('after the age limit the new directory is found',
-    aged.value === path.join(quiet, ID_QUIET + '.jsonl'), aged.value);
+  assert.strictEqual(aged.value, path.join(quiet, ID_QUIET + '.jsonl'));
 
   // listClaudeSessions reads fresh, so it sees a new directory immediately.
   fs.watch = realWatch;
   const mod2 = reload(MODULE);
   fs.watch = () => ({ on() {}, close() {}, unref() {} });
-  const seen = mod2.listClaudeSessions(200).some((s) => s.id === ID_QUIET);
-  check('listClaudeSessions reads the listing fresh', seen);
+  assert.ok(mod2.listClaudeSessions(200).some((s) => s.id === ID_QUIET),
+    'listClaudeSessions reads the listing fresh');
 
   fs.watch = realWatch;
   cs = reload(MODULE);
-}
+});
 
-async function missingProjectsDir() {
-  console.log('\n# ~/.claude/projects does not exist');
+// --- ~/.claude/projects does not exist --------------------------------------
+
+test('without a projects directory nothing is scanned and fs.watch is tried once', () => {
   const gone = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-nohome-'));
   process.env.HOME = gone;
   const mod = reload(MODULE);
+
   let watchCalls = 0;
   const realWatch = fs.watch;
   fs.watch = (...a) => { watchCalls++; return realWatch.apply(fs, a); };
+
   const empty = mod.listClaudeSessions(10);
-  check('no projects directory -> empty list', Array.isArray(empty) && empty.length === 0);
-  check('lookup reports null', mod.findTranscriptById(ID) === null);
+  assert.ok(Array.isArray(empty) && empty.length === 0);
+  assert.strictEqual(mod.findTranscriptById(ID), null);
   for (let i = 0; i < 5; i++) { advance(6000); mod.findTranscriptById(ID); }
-  check('a failing fs.watch is not retried on every lookup', watchCalls <= 1, `watch calls=${watchCalls}`);
+  assert.ok(watchCalls <= 1, `a failing fs.watch is not retried on every lookup: ${watchCalls} calls`);
+
   fs.watch = realWatch;
   fs.rmSync(gone, { recursive: true, force: true });
   process.env.HOME = home;
   cs = reload(MODULE);
-}
-
-(async () => {
-  await withRealWatcher();
-  await missState();
-  await readCwd();
-  await pluginCtx();
-  await silentWatcher();
-  await missingProjectsDir();
-
-  fs.rmSync(home, { recursive: true, force: true });
-  Date.now = realNow;
-  console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
-  process.exit(failed ? 1 : 0);
-})();
+});
