@@ -107,7 +107,17 @@ test('codex and aider keep their state detection without a plugin that counts', 
     assert.ok(p, `no plugin registered for ${id}`);
     assert.strictEqual(p.detect({ command: id }), null,
       `${id} claims a terminal, so the agent panel would appear with nothing in it`);
-    assert.deepStrictEqual(p.read({ command: id }), { agents: [] });
+  }
+});
+
+test('codex and aider carry a placeholder read() that nothing calls today', () => {
+  // The sensor only calls read() on the plugin that won detection, and neither
+  // of these two ever claims a terminal. What is checked here is the shape a
+  // later detect() would find waiting for it, not behaviour the app reaches.
+  for (const id of ['codex', 'aider']) {
+    const p = PLUGINS.find((x) => x.id === id);
+    assert.deepStrictEqual(p.read({ command: id }), { agents: [] },
+      `${id}'s placeholder does not return the empty agent list the sensor expects`);
   }
 });
 
@@ -145,11 +155,43 @@ test('the merged pattern widens the plugin only by quotes and a trailing dot', (
 // One place, not two
 // ---------------------------------------------------------------------------
 
+// Prose may name any CLI it likes - the check applies to code. Trailing and
+// block comments come out as well as whole comment lines, otherwise a line like
+// `foo(); // as with codex` would fail a test about hardcoded lists.
+//
+// A `//` preceded by a backslash, a colon or a slash is left alone: those are
+// the escaped ones inside regex literals (`/^\/[a-z]\//`) and the ones in URLs,
+// and cutting there would swallow the code behind them. Stripping can only
+// remove text, so anything it gets wrong costs the check a hit, never invents
+// one.
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^\\:/])\/\/.*$/gm, '$1');
+}
+
 test('main.js names no agent CLI of its own', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
   assert.ok(!src.includes('WATCHED_CMD_RE'), 'the hardcoded command pattern is back in main.js');
   assert.ok(src.includes('isAgentCommand'), 'main.js no longer asks the plugins');
-  const code = src.replace(/^\s*\/\/.*$/gm, '');
-  assert.ok(!/\b(codex|aider)\b/i.test(code),
+  assert.ok(!/\b(codex|aider)\b/i.test(stripComments(src)),
     'main.js names an agent CLI again - the answer belongs to the plugins');
+});
+
+test('the comment stripping keeps code and drops every form of comment', () => {
+  const kept = stripComments([
+    'const re = /^\\/[a-z]\\//;',
+    "const url = 'https://example.invalid/codex';",
+  ].join('\n'));
+  assert.ok(kept.includes('/^\\/[a-z]\\//'), 'an escaped slash in a regex was taken for a comment');
+  assert.ok(kept.includes('example.invalid'), 'a URL was taken for a comment');
+
+  const gone = stripComments([
+    'foo(); // as with codex',
+    '// aider does the same',
+    '/* codex\n   aider */',
+    'bar(); /* codex */',
+  ].join('\n'));
+  assert.ok(!/\b(codex|aider)\b/i.test(gone), 'a comment survived the stripping');
+  assert.ok(gone.includes('foo();') && gone.includes('bar();'), 'the code around the comments went too');
 });
