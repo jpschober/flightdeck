@@ -4,6 +4,7 @@ const {
   TRANSCRIPT_ID_RE,
   listClaudeSessions,
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
+  findTranscriptById, stopWatchingProjects,
 } = require('./claude-sessions');
 const path = require('path');
 const os = require('os');
@@ -229,9 +230,9 @@ function claude
 end
 `;
 
-// Zsh loads its configuration from $ZDOTDIR. We point that at a temporary
-// directory which first loads the user's real configuration and then installs
-// the hooks.
+// Zsh loads its configuration from $ZDOTDIR. We point that at our own directory
+// (see getRcDir), which first loads the user's real configuration and then
+// installs the hooks.
 // Important: after loading the user's .zshenv, ZDOTDIR must point back at our
 // directory, otherwise zsh will not find our .zshrc in the next step.
 const ZSH_ENV = `
@@ -258,20 +259,44 @@ add-zsh-hook precmd __flightdeck_prompt
 add-zsh-hook preexec __flightdeck_preexec
 `;
 
-// The integration files live in their own directory under tmp; zsh needs a
-// directory (ZDOTDIR), the others only a file.
+// The integration files live in their own directory under userData; zsh needs a
+// directory (ZDOTDIR), the others only a file. A world-writable location such as
+// os.tmpdir() lets another local user create the directory first and place files
+// in it, and zsh sources everything it finds in ZDOTDIR.
+
+// Zsh startup files that Flightdeck never writes but would source from ZDOTDIR.
+// One of them left behind by an older version or another writer runs on every
+// session, so they are removed. Other entries are left alone: a second instance
+// may be writing its own temporary file at any moment.
+const ZSH_STALE_FILES = ['.zprofile', '.zlogin', '.zlogout'];
+
 let rcDir = null;
 function getRcDir() {
   if (!rcDir) {
-    rcDir = path.join(os.tmpdir(), 'flightdeck-shell-' + process.pid);
-    fs.mkdirSync(rcDir, { recursive: true });
+    const dir = path.join(app.getPath('userData'), 'shell-integration');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // mkdirSync with recursive: true also accepts a symlink to a directory, and
+    // the chmod and the removals below would then apply to the target.
+    if (!fs.lstatSync(dir).isDirectory()) throw new Error('not a directory: ' + dir);
+    if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
+    for (const name of ZSH_STALE_FILES) {
+      try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); } catch { /* never mind */ }
+    }
+    rcDir = dir;
   }
   return rcDir;
 }
 
+// Written to a separate file and renamed over the old one, so a session started
+// by a second Flightdeck instance reads either the previous or the new content
+// and never a half-written file. Other users are kept out by the 0700 directory;
+// the temporary name only needs to be unique per instance.
 function writeRc(name, content) {
   const p = path.join(getRcDir(), name);
-  fs.writeFileSync(p, content);
+  const tmp = p + '.' + process.pid + '.tmp';
+  fs.rmSync(tmp, { force: true });
+  fs.writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(tmp, p);
   return p.replace(/\\/g, '/');
 }
 
@@ -289,12 +314,17 @@ function spawnArgsFor(shell) {
     case 'gitbash':
     case 'bash':
       return { file: shell.file, args: ['--rcfile', getRc('bashrc.sh', BASH_RC), '-i'], env: {} };
-    case 'fish':
+    case 'fish': {
+      // -C takes a string that fish parses, and the userData path contains a
+      // space on macOS, so the path is quoted. Inside single quotes fish treats
+      // only \' and \\ as escapes.
+      const rc = getRc('init.fish', FISH_RC).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       return {
         file: shell.file,
-        args: ['-C', 'source ' + getRc('init.fish', FISH_RC), '-i'],
+        args: ['-C', "source '" + rc + "'", '-i'],
         env: {},
       };
+    }
     case 'zsh': {
       getRc('.zshenv', ZSH_ENV);
       getRc('.zshrc', ZSH_RC);
@@ -317,13 +347,28 @@ function spawnArgsFor(shell) {
 // ---------------------------------------------------------------------------
 const OSC7_RE = /\x1b\]7;file:\/\/[^/\x07\x1b]*([^\x07\x1b]+)(?:\x07|\x1b\\)/g;
 const OSC99_RE = /\x1b\]9;9;"?([^"\x07\x1b]+)"?(?:\x07|\x1b\\)/g;
-const OSC133_RE = /\x1b\]133;([A-D])[^\x07\x1b]*(?:\x07|\x1b\\)/g;
-const OSCCMD_RE = /\x1b\]7770;cmd;([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)/g;
-const OSCSESS_RE = /\x1b\]7771;([a-z]+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+const OSC133_RE = /\x1b\]133;(?<mark>[A-D])[^\x07\x1b]*(?:\x07|\x1b\\)/;
+const OSCCMD_RE = /\x1b\]7770;cmd;(?<cmdB64>[A-Za-z0-9+/=]*)(?:\x07|\x1b\\)/;
+const OSCSESS_RE = /\x1b\]7771;(?<sessKind>[a-z]+);(?<sessId>[^\x07\x1b]*)(?:\x07|\x1b\\)/;
 const OSC_ANY_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // Claude Code (addressed as iTerm): OSC 0/2 = title, OSC 9 = notification
-const OSC_TITLE_RE = /\x1b\](?:0|2);([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
-const OSC9_RE = /\x1b\]9;([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+const OSC_TITLE_RE = /\x1b\](?:0|2);(?<title>[^\x07\x1b]*)(?:\x07|\x1b\\)/;
+const OSC9_RE = /\x1b\]9;(?<osc9>[^\x07\x1b]*)(?:\x07|\x1b\\)/;
+
+// The state sequences are scanned in one pass. Seven separate scans grouped
+// their effects by sequence type: OSC 7770 was evaluated in full before
+// OSC 133, so a batch holding "133;D (previous command finished) ... 7770;cmd
+// (claude starts) ... 133;C" first marked the session as watched and then
+// cleared that again from the earlier D. With one pass the matches are
+// dispatched in the order they stand in the stream.
+//
+// None of the alternatives can start at the same position as another (they
+// differ from the character after `\x1b]` onwards) and none can match inside
+// another (the payloads exclude \x1b and \x07), so the combined scan finds
+// exactly the matches the individual expressions found.
+const OSC_EVENT_RE = new RegExp(
+  [OSCCMD_RE, OSCSESS_RE, OSC133_RE, OSC_TITLE_RE, OSC9_RE]
+    .map((r) => `(?:${r.source})`).join('|'), 'g');
 
 // Commands for which "quiet = waiting for input" holds (agentic TUIs:
 // working = continuously rendering a spinner/timer/streaming output)
@@ -376,90 +421,84 @@ function setAttention(session) {
 function applyStateFromData(session, text, tailLen, rawData) {
   let saw = false; let m;
 
-  // Command line of the started command (reported by the shell integration)
-  OSCCMD_RE.lastIndex = 0;
-  while ((m = OSCCMD_RE.exec(text)) !== null) {
+  OSC_EVENT_RE.lastIndex = 0;
+  while ((m = OSC_EVENT_RE.exec(text)) !== null) {
     if (m.index + m[0].length <= tailLen) continue;
-    let cmd = '';
-    try { cmd = Buffer.from(m[1], 'base64').toString('utf8'); } catch (e) { log.debug('osc7770: command line not decodable', { session: session.id, err: e }); }
-    session.currentCmd = cmd;
-    session.cmdWatched = WATCHED_CMD_RE.test(cmd);
-    if (session.cmdWatched) {
-      beginAgentBinding(session, cmd);
-      // Freshly started: the agent shows its interface and waits for the first
-      // prompt. That is not a "needs you" but the normal state - attention
-      // notices only make sense from the first prompt onwards.
-      session.agentPrompted = false;
-    }
-    addHistory(session, cmd, 'shell');
-  }
+    const g = m.groups;
 
-  // Report from the claude wrapper - has to be evaluated after OSC 7770,
-  // because beginAgentBinding() resets the binding.
-  OSCSESS_RE.lastIndex = 0;
-  while ((m = OSCSESS_RE.exec(text)) !== null) {
-    if (m.index + m[0].length <= tailLen) continue;
-    if (m[1] === 'session' && m[2]) bindAgentSession(session, m[2], true);
-    else if (m[1] === 'continue') bindContinuedSession(session);
-  }
-
-  OSC133_RE.lastIndex = 0;
-  while ((m = OSC133_RE.exec(text)) !== null) {
-    if (m.index + m[0].length <= tailLen) continue;
-    saw = true;
-    if (m[1] === 'C') setState(session, 'busy');
-    else if (m[1] === 'A' || m[1] === 'D') {
-      setState(session, 'idle');
-      session.currentCmd = null;
-      session.cmdWatched = false;
-      session.hasClaudeOsc = false;
-      clearTimeout(session.attnTimer);
-      // Back at the prompt: run a queued command if there is one (session browser)
-      if (session.pendingCommand) {
-        const cmd = session.pendingCommand;
-        session.pendingCommand = null;
-        try { session.proc.write(cmd + '\r'); } catch (e) { log.debug('session: queued command not sent, session gone', { session: session.id, cmd, err: e }); }
+    // Command line of the started command (reported by the shell integration)
+    if (g.cmdB64 !== undefined) {
+      let cmd = '';
+      try { cmd = Buffer.from(g.cmdB64, 'base64').toString('utf8'); } catch (e) { log.debug('osc7770: command line not decodable', { session: session.id, err: e }); }
+      session.currentCmd = cmd;
+      session.cmdWatched = WATCHED_CMD_RE.test(cmd);
+      if (session.cmdWatched) {
+        beginAgentBinding(session, cmd);
+        // Freshly started: the agent shows its interface and waits for the first
+        // prompt. That is not a "needs you" but the normal state - attention
+        // notices only make sense from the first prompt onwards.
+        session.agentPrompted = false;
       }
-    }
-  }
+      addHistory(session, cmd, 'shell');
 
-  // Native Claude signals (title: spinner = working, U+2733 = waiting for you)
-  OSC_TITLE_RE.lastIndex = 0;
-  while ((m = OSC_TITLE_RE.exec(text)) !== null) {
-    if (m.index + m[0].length <= tailLen) continue;
-    const first = m[1].charAt(0);
-    if (!first) continue;
-    const code = first.charCodeAt(0);
-    if (code >= 0x2800 && code <= 0x28ff) {          // braille spinner
-      session.hasClaudeOsc = true;
-      clearTimeout(session.attnTimer);
-      setState(session, 'busy');
-    } else if (first === '✳') {                  // asterisk: input expected
-      session.hasClaudeOsc = true;
-      clearTimeout(session.attnTimer);
-      setAttention(session);
-    }
-  }
+    // Report from the claude wrapper - the shell emits OSC 7770 before the
+    // command runs and the wrapper its OSC 7771 afterwards, so stream order
+    // already puts the binding after the beginAgentBinding() that resets it.
+    } else if (g.sessKind !== undefined) {
+      if (g.sessKind === 'session' && g.sessId) bindAgentSession(session, g.sessId, true);
+      else if (g.sessKind === 'continue') bindContinuedSession(session);
 
-  // OSC 9: progress (9;4;...) or explicit notifications from Claude
-  OSC9_RE.lastIndex = 0;
-  while ((m = OSC9_RE.exec(text)) !== null) {
-    if (m.index + m[0].length <= tailLen) continue;
-    const payload = m[1];
-    if (payload.startsWith('9;')) continue;           // ConEmu cwd, see OSC99_RE
-    if (payload.startsWith('4;')) {                   // progress indicator
-      const level = payload.split(';')[1];
-      if (level === '1' || level === '2' || level === '3') {
+    } else if (g.mark !== undefined) {
+      saw = true;
+      if (g.mark === 'C') setState(session, 'busy');
+      else if (g.mark === 'A' || g.mark === 'D') {
+        setState(session, 'idle');
+        session.currentCmd = null;
+        session.cmdWatched = false;
+        session.hasClaudeOsc = false;
+        clearTimeout(session.attnTimer);
+        // Back at the prompt: run a queued command if there is one (session browser)
+        if (session.pendingCommand) {
+          const cmd = session.pendingCommand;
+          session.pendingCommand = null;
+          try { session.proc.write(cmd + '\r'); } catch (e) { log.debug('session: queued command not sent, session gone', { session: session.id, cmd, err: e }); }
+        }
+      }
+
+    // Native Claude signals (title: spinner = working, U+2733 = waiting for you)
+    } else if (g.title !== undefined) {
+      const first = g.title.charAt(0);
+      if (!first) continue;
+      const code = first.charCodeAt(0);
+      if (code >= 0x2800 && code <= 0x28ff) {          // braille spinner
         session.hasClaudeOsc = true;
+        clearTimeout(session.attnTimer);
         setState(session, 'busy');
+      } else if (first === '✳') {                  // asterisk: input expected
+        session.hasClaudeOsc = true;
+        clearTimeout(session.attnTimer);
+        setAttention(session);
       }
-      continue;
-    }
-    // Explicit notification ("Claude needs your attention", permission request, ...)
-    if (setAttention(session) && win && !win.isDestroyed()) {
-      win.webContents.send('session:notify', session.id, payload.slice(0, 200));
+
+    // OSC 9: progress (9;4;...) or explicit notifications from Claude
+    } else if (g.osc9 !== undefined) {
+      const payload = g.osc9;
+      if (payload.startsWith('9;')) continue;           // ConEmu cwd, see OSC99_RE
+      if (payload.startsWith('4;')) {                   // progress indicator
+        const level = payload.split(';')[1];
+        if (level === '1' || level === '2' || level === '3') {
+          session.hasClaudeOsc = true;
+          setState(session, 'busy');
+        }
+        continue;
+      }
+      // Explicit notification ("Claude needs your attention", permission request, ...)
+      if (setAttention(session) && win && !win.isDestroyed()) {
+        win.webContents.send('session:notify', session.id, payload.slice(0, 200));
+      }
     }
   }
+
   if (saw) {
     session.hasOsc133 = true;
     clearTimeout(session.idleTimer);
@@ -533,8 +572,8 @@ function beginAgentBinding(session, cmd) {
   if (m && !/--fork-session/.test(cmd)) bindAgentSession(session, m[1], true);
 }
 
-function updateAgentBinding(session) {
-  if (!session.bindingBase) return;
+async function updateAgentBinding(session) {
+  if (!session.bindingBase) { session.transcript = null; return; }
   // If the shell leaves the directory in which `claude` was started, the
   // binding no longer fits.
   if (session.cwd !== session.bindingBase) {
@@ -543,6 +582,7 @@ function updateAgentBinding(session) {
     session.agentCwd = null;
     session.bindingBase = null;
     session.transcriptSnapshot = null;
+    session.transcript = null;
     return;
   }
   // Last resort for cases without a wrapper report (`command claude`, npx, a
@@ -555,9 +595,17 @@ function updateAgentBinding(session) {
     );
     if (id) bindAgentSession(session, id, false);
   }
-  if (!session.claudeSessionId) return;
+  if (!session.claudeSessionId) { session.transcript = null; return; }
 
-  const agentCwd = readAgentCwd(session.claudeSessionId);
+  // Resolved once per pass and handed to the agent sensor below, which would
+  // otherwise look up the same path three more times. ID and path are stored
+  // together: PTY data arriving during the awaits below can bind a different
+  // session, and a path from the previous one would then point into a foreign
+  // transcript.
+  const id = session.claudeSessionId;
+  const file = findTranscriptById(id);
+  session.transcript = { id, path: file };
+  const agentCwd = file ? await readAgentCwd(id, file) : null;
   // Only adopt it if it lies below the shell's directory (i.e. a worktree or
   // similar) - anything else would be a foreign transcript.
   if (agentCwd && agentCwd !== session.cwd
@@ -675,6 +723,105 @@ function resumeCommand(resume) {
   return `claude --resume ${resume.id}${resume.fork ? ' --fork-session' : ''}`;
 }
 
+// Output batching and flow control
+// --------------------------------
+// node-pty hands over thousands of chunks per second for `cat` on a large file
+// or an install log. One IPC send per chunk means one structured clone and one
+// xterm write per chunk; the chunks are collected here and go out together
+// after FLUSH_MS or once FLUSH_CHARS have accumulated.
+//
+// The renderer acknowledges every batch once xterm has processed it. Above
+// FLOW_HIGH_WATER_CHARS unacknowledged characters the PTY is paused, below
+// FLOW_LOW_WATER_CHARS it is resumed - without this, a producer faster than the
+// renderer grows xterm's internal buffer up to its 50 MB limit.
+//
+// All four limits count UTF-16 code units (String.length), not bytes: node-pty
+// hands over decoded strings and that is what crosses the IPC boundary.
+const FLUSH_MS = 16;
+const FLUSH_CHARS = 65536;
+const FLOW_HIGH_WATER_CHARS = 262144;
+const FLOW_LOW_WATER_CHARS = 65536;
+const GRID_BUFFER_CHARS = 262144;
+const GRID_PREVIEW_CHARS = 20480;
+
+function queueOutput(session, data) {
+  session.pending.push(data);
+  session.pendingSize += data.length;
+  if (session.pendingSize >= FLUSH_CHARS) { flushOutput(session); return; }
+  if (!session.flushTimer) {
+    session.flushTimer = setTimeout(() => flushOutput(session), FLUSH_MS);
+  }
+}
+
+function flushOutput(session) {
+  if (session.flushTimer) { clearTimeout(session.flushTimer); session.flushTimer = null; }
+  if (!session.pending.length) return;
+  const data = session.pending.length === 1 ? session.pending[0] : session.pending.join('');
+  session.pending.length = 0;
+  session.pendingSize = 0;
+
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('session:data', session.id, data);
+    session.unacked += data.length;
+    if (!session.flowPaused && session.unacked > FLOW_HIGH_WATER_CHARS) {
+      session.flowPaused = true;
+      try { session.proc.pause(); } catch { /* session gone */ }
+    }
+  }
+
+  // Scrollback buffer for the grid preview
+  session.outputBuffer.push(data);
+  session.outputBufferSize += data.length;
+  while (session.outputBufferSize > GRID_BUFFER_CHARS && session.outputBuffer.length > 1) {
+    session.outputBufferSize -= session.outputBuffer.shift().length;
+  }
+
+  // Alternate screen mode (full-screen TUIs such as vim, htop, Claude dialogs).
+  // A batch regularly holds both switches - less quitting into a pager, one
+  // Claude dialog closing as the next opens - so the last one in the stream
+  // decides, not the order the two checks happen to stand in.
+  if (data.includes('\x1b[?')) {
+    const enter = Math.max(data.lastIndexOf('\x1b[?1049h'), data.lastIndexOf('\x1b[?47h'));
+    const leave = Math.max(data.lastIndexOf('\x1b[?1049l'), data.lastIndexOf('\x1b[?47l'));
+    if (enter !== leave) session.altScreen = enter > leave;
+  }
+
+  const tailLen = session.oscTail.length;
+  const text = session.oscTail + data;
+  const found = extractCwd(text);
+  applyStateFromData(session, text, tailLen, data);
+  session.oscTail = text.slice(-512);
+  if (found && found !== session.cwd) {
+    session.cwd = found;
+    refreshSession(session, true);
+  }
+}
+
+// The renderer reports how many characters xterm has processed. Once the
+// backlog is small enough the PTY reads on.
+function ackOutput(session, chars) {
+  session.unacked = Math.max(0, session.unacked - chars);
+  if (session.flowPaused && session.unacked <= FLOW_LOW_WATER_CHARS) {
+    session.flowPaused = false;
+    try { session.proc.resume(); } catch { /* session gone */ }
+  }
+}
+
+// A reload of the renderer (Ctrl+R) drops the batches in flight, which are then
+// never acknowledged. The lost characters would stay in `unacked` as a
+// permanent offset and, once past the low-water mark, leave the session paused
+// with no ack able to release it. The backlog belongs to a document that no
+// longer exists, so it is dropped with it.
+function resetFlowControl() {
+  for (const s of sessions.values()) {
+    s.unacked = 0;
+    if (s.flowPaused) {
+      s.flowPaused = false;
+      try { s.proc.resume(); } catch { /* session gone */ }
+    }
+  }
+}
+
 function createSession(shellId, opts = {}) {
   const shell = availableShells.find((s) => s.id === shellId) || availableShells[0];
   const { file, args, env } = spawnArgsFor(shell);
@@ -705,6 +852,7 @@ function createSession(shellId, opts = {}) {
     fileMemory: new Map(),   // path -> entry; survives commits
     pr: null,
     claudeSessionId: null,   // transcript of the running Claude session
+    transcript: null,        // { id, path }, resolved once per refresh
     bindingExact: false,     // ID reported by the wrapper instead of guessed via timestamps
     agentCwd: null,          // the agent's working directory (a worktree, if any)
     agents: null,            // running subagents (from the agent sensor)
@@ -727,40 +875,21 @@ function createSession(shellId, opts = {}) {
     altScreen: false,
     outputBuffer: [],
     outputBufferSize: 0,
+    pending: [],          // PTY chunks not yet sent to the renderer
+    pendingSize: 0,
+    flushTimer: null,
+    unacked: 0,           // characters sent but not yet processed by xterm
+    flowPaused: false,
     pendingCommand: resumeCommand(opts.resume),
   };
   sessions.set(id, session);
 
-  proc.onData((data) => {
-    if (win && !win.isDestroyed()) win.webContents.send('session:data', id, data);
-
-    // Scrollback buffer for the grid preview (max. 256 KB)
-    session.outputBuffer.push(data);
-    session.outputBufferSize += data.length;
-    while (session.outputBufferSize > 262144 && session.outputBuffer.length > 1) {
-      session.outputBufferSize -= session.outputBuffer.shift().length;
-    }
-
-    // Alternate screen mode (full-screen TUIs such as vim, htop, Claude dialogs)
-    if (data.includes('\x1b[?')) {
-      if (data.includes('\x1b[?1049h') || data.includes('\x1b[?47h')) session.altScreen = true;
-      if (data.includes('\x1b[?1049l') || data.includes('\x1b[?47l')) session.altScreen = false;
-    }
-
-    const tailLen = session.oscTail.length;
-    const text = session.oscTail + data;
-    const found = extractCwd(text);
-    applyStateFromData(session, text, tailLen, data);
-    session.oscTail = text.slice(-512);
-    if (found && found !== session.cwd) {
-      session.cwd = found;
-      refreshSession(session, true);
-    }
-  });
+  proc.onData((data) => queueOutput(session, data));
 
   proc.onExit(() => {
     clearTimeout(session.idleTimer);
     clearTimeout(session.attnTimer);
+    flushOutput(session);
     session.exited = true;
     if (win && !win.isDestroyed()) win.webContents.send('session:exit', id);
   });
@@ -825,7 +954,8 @@ function resetFileMemory(session) {
 }
 
 async function doRefresh(session, force, cwdAtStart) {
-  updateAgentBinding(session);
+  await updateAgentBinding(session);
+  if (session.cwd !== cwdAtStart || session.exited) return; // stale -> discard
   // If the agent works in a worktree, that worktree's branch counts - not the
   // one of the shell that stayed behind in the repo.
   const gitCwd = session.agentCwd || cwdAtStart;
@@ -847,12 +977,19 @@ async function doRefresh(session, force, cwdAtStart) {
   // Who is working here right now? The sensor puts that question to the
   // plugins - which agent CLI runs in the terminal is none of the refresh's
   // business.
-  session.agents = await getAgentView({
+  const ctx = {
     cwd: cwdAtStart,
     agentCwd: session.agentCwd,
     command: session.currentCmd,
     claudeSessionId: session.claudeSessionId,
-  });
+  };
+  // The binding can have moved on while the git and PR lookups above were
+  // running. The resolved path only travels with the ID it was resolved for;
+  // otherwise the key stays out and the plugin resolves it itself.
+  if (session.transcript && session.transcript.id === session.claudeSessionId) {
+    ctx.claudeTranscript = session.transcript.path;
+  }
+  session.agents = await getAgentView(ctx);
   if (session.cwd !== cwdAtStart || session.exited) return;
 
   const shell = availableShells.find((s) => s.id === session.shellId);
@@ -879,57 +1016,121 @@ async function doRefresh(session, force, cwdAtStart) {
   }
 }
 
-// periodic refresh (branch switches, new changes, PR status)
+// periodic refresh (branch switches, new changes, PR status). Nobody reads the
+// result while the window is hidden or minimised, so the pass then runs every
+// 30 s instead of every 4 s; showing the window refreshes right away.
+const REFRESH_MS = 4000;
+const REFRESH_HIDDEN_MS = 30000;
+let lastRefreshAt = 0;
+
+function refreshAll(force = false) {
+  // Restoring a minimised window emits `restore` and `show`, and app:focus
+  // calls restore() and show() itself - one pass covers all of that.
+  const now = Date.now();
+  if (now - lastRefreshAt < 500) return;
+  lastRefreshAt = now;
+  for (const s of sessions.values()) refreshSession(s, force);
+}
+
 setInterval(() => {
-  for (const s of sessions.values()) refreshSession(s);
-}, 4000);
+  // A minimised window still counts as visible on some platforms, so it is
+  // asked separately.
+  const visible = Boolean(win) && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+  if (Date.now() - lastRefreshAt < (visible ? REFRESH_MS : REFRESH_HIDDEN_MS)) return;
+  refreshAll();
+}, REFRESH_MS);
 
 // ---------------------------------------------------------------------------
 // File preview
 // ---------------------------------------------------------------------------
 const MAX_PREVIEW = 512 * 1024;
 
+/** Is `p` `root` itself or below it? Both have to be resolved already. */
+function isInside(root, p) {
+  return p === root || p.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+// Opening without following a link: not available on Windows, where the lstat
+// below stays the only check.
+const O_NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
+
+// Git reads `:/`, `:(exclude)x` and `:!x` as pathspec magic, and a repository
+// may contain a file with such a name. Both diff calls treat the path as the
+// literal name it is.
+const GIT_LITERAL = '--literal-pathspecs';
+
+// The path comes from the renderer and is foreign input. Anything that is not
+// a relative path below the session root is rejected here, before a git command
+// or a read sees it. `base` has to be resolved already.
+function resolveInRoot(base, relPath) {
+  if (typeof relPath !== 'string' || !relPath || relPath.includes('\0')) return null;
+  if (path.isAbsolute(relPath)) return null;
+  const abs = path.resolve(base, relPath);
+  return isInside(base, abs) ? abs : null;
+}
+
+// Reading for the preview: a symlink is not followed, neither the file itself
+// nor a directory on the way to it. A cloned repository can contain a link to
+// any file the user can read, and for untracked files the preview reads from
+// the file system directly.
+//
+// The read goes through one file handle opened with O_NOFOLLOW, so the file
+// that was checked is the file that is read. It takes at most MAX_PREVIEW + 1
+// bytes, which bounds the memory a huge file can claim and decides the
+// truncation from what was actually read rather than from an earlier stat.
+async function readForPreview(base, abs, relPath) {
+  let fh = null;
+  try {
+    const stat = await fs.promises.lstat(abs);
+    if (stat.isSymbolicLink()) return { kind: 'error', path: relPath, text: t('file.symlink') };
+    if (stat.isDirectory()) return { kind: 'error', path: relPath, text: t('file.isDir') };
+    const [realRoot, real] = await Promise.all([fs.promises.realpath(base), fs.promises.realpath(abs)]);
+    if (!isInside(realRoot, real)) return { kind: 'error', path: relPath, text: t('file.outsideRoot') };
+
+    fh = await fs.promises.open(abs, fs.constants.O_RDONLY | O_NOFOLLOW);
+    const buf = Buffer.alloc(MAX_PREVIEW + 1);
+    let got = 0;
+    while (got < buf.length) {
+      const { bytesRead } = await fh.read(buf, got, buf.length - got, got);
+      if (!bytesRead) break;   // end of file
+      got += bytesRead;
+    }
+    if (got > MAX_PREVIEW) {
+      return { kind: 'content', path: relPath, text: buf.subarray(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
+    }
+    return { kind: 'content', path: relPath, text: buf.subarray(0, got).toString('utf8') };
+  } catch (e) {
+    log.warn('preview: file not readable', { path: abs, err: e });
+    return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
+  } finally {
+    if (fh) await fh.close().catch((e) => log.debug('preview: file handle not closable', { path: abs, err: e }));
+  }
+}
+
 async function previewFile(session, relPath, source, opts = {}) {
-  const root = session.gitRoot || session.cwd;
-  const abs = path.resolve(root, relPath);
+  const base = path.resolve(session.gitRoot || session.cwd);
+  const abs = resolveInRoot(base, relPath);
+  if (!abs) {
+    const shown = typeof relPath === 'string' ? relPath : '';
+    return { kind: 'error', path: shown, text: t('file.outsideRoot') };
+  }
 
   // The preview can request the file content instead of the diff - for the
   // rendered markdown view, which could show nothing based on the diff.
-  if (opts.content) {
-    try {
-      const stat = fs.statSync(abs);
-      if (stat.isDirectory()) return { kind: 'error', path: relPath, text: t('file.isDir') };
-      if (stat.size > MAX_PREVIEW) {
-        return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
-      }
-      return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
-    } catch (e) {
-      log.warn('preview: content not readable', { path: abs, err: e });
-      return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
-    }
-  }
+  if (opts.content) return readForPreview(base, abs, relPath);
 
   if (source === 'pr' && session.pr && session.pr.baseRefName) {
-    const diff = await run('git', ['diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], root);
+    const diff = await run('git', [GIT_LITERAL, 'diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], base);
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
   const entry = session.files.find((f) => f.path === relPath);
   if (!entry || !entry.untracked) {
-    const diff = await run('git', ['diff', '--no-color', 'HEAD', '--', relPath], root);
+    const diff = await run('git', [GIT_LITERAL, 'diff', '--no-color', 'HEAD', '--', relPath], base);
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
-  try {
-    const stat = fs.statSync(abs);
-    if (stat.size > MAX_PREVIEW) {
-      return { kind: 'content', path: relPath, text: fs.readFileSync(abs).slice(0, MAX_PREVIEW).toString('utf8') + '\n\n' + t('file.truncated') };
-    }
-    return { kind: 'content', path: relPath, text: fs.readFileSync(abs, 'utf8') };
-  } catch (e) {
-    log.warn('preview: file not readable', { path: abs, source, err: e });
-    return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
-  }
+  return readForPreview(base, abs, relPath);
 }
 
 // ---------------------------------------------------------------------------
@@ -938,9 +1139,32 @@ async function previewFile(session, relPath, source, opts = {}) {
 ipcMain.handle('shells:list', () => availableShells.map((s) => ({ id: s.id, name: shellName(s) })));
 ipcMain.handle('session:create', (e, shellId, opts) => createSession(shellId, opts || {}));
 
+// The grid thumbnail keeps 50 lines of scrollback - the last 20 KB fill them,
+// the remaining 236 KB of the ring buffer would only be parsed and thrown away.
+//
+// Whole chunks only: cutting to exactly 20 KB would leave a lone surrogate half
+// or the middle of an escape sequence at the head, and xterm would then print
+// the tail of a window title as text or swallow output up to the next
+// terminator. The loop stops after the first chunk that reaches the limit, so
+// the result is 20 KB plus at most one chunk.
 ipcMain.handle('session:buffer', (e, id) => {
   const s = sessions.get(id);
-  return s ? s.outputBuffer.join('') : '';
+  if (!s) return '';
+  const parts = [];
+  let size = 0;
+  for (let i = s.outputBuffer.length - 1; i >= 0 && size < GRID_PREVIEW_CHARS; i--) {
+    parts.push(s.outputBuffer[i]);
+    size += s.outputBuffer[i].length;
+  }
+  return parts.reverse().join('');
+});
+
+// Flow control: the renderer reports the batch it has written to xterm. A
+// negative count would inflate `unacked` instead of reducing it and leave the
+// session paused for good, so the count has to be a non-negative integer.
+ipcMain.on('session:ack', (e, id, chars) => {
+  const s = sessions.get(id);
+  if (s && !s.exited && Number.isInteger(chars) && chars >= 0) ackOutput(s, chars);
 });
 
 ipcMain.handle('claude:sessions', () => listClaudeSessions());
@@ -1057,6 +1281,11 @@ ipcMain.on('session:resize', (e, id, cols, rows) => {
 ipcMain.handle('session:close', (e, id) => {
   const s = sessions.get(id);
   if (s) {
+    // A refresh may be in flight; without this it would run to the end and send
+    // session:info for a session that no longer exists.
+    s.exited = true;
+    clearTimeout(s.flushTimer);
+    s.flushTimer = null;
     try { s.proc.kill(); } catch (e) { log.debug('session: kill failed, already terminated', { session: id, err: e }); }
     sessions.delete(id);
   }
@@ -1131,6 +1360,11 @@ function createWindow() {
   });
   win.setMenuBarVisibility(false);
 
+  // Coming back from hidden or minimised, the data is up to 30 s old - the
+  // window gets a fresh pass instead of showing that.
+  win.on('show', () => refreshAll(true));
+  win.on('restore', () => refreshAll(true));
+
   // The preload script runs again on every navigation of this webContents, so a
   // foreign page loaded here would own the full window.api bridge. The interface
   // never navigates - the document below is loaded once via loadFile, which these
@@ -1139,6 +1373,11 @@ function createWindow() {
   const blockNavigation = (e) => e.preventDefault();
   win.webContents.on('will-navigate', blockNavigation);
   win.webContents.on('will-frame-navigate', blockNavigation);
+
+  // A reload (Ctrl+R still reaches the window; setMenuBarVisibility only hides
+  // the bar) leaves the batches in flight unacknowledged. The new document
+  // starts with an empty backlog, so the flow control does too.
+  win.webContents.on('did-finish-load', resetFlowControl);
 
   // No new windows either; http(s) links go to the system browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -1165,8 +1404,8 @@ app.on('window-all-closed', () => {
   for (const s of sessions.values()) {
     try { s.proc.kill(); } catch (e) { log.debug('shutdown: kill failed', { session: s.id, err: e }); }
   }
-  if (rcDir) {
-    try { fs.rmSync(rcDir, { recursive: true, force: true }); } catch (e) { log.debug('shutdown: rc directory not removed', { path: rcDir, err: e }); }
-  }
+  stopWatchingProjects();
+  // The integration directory stays: it is shared with any second instance,
+  // whose sessions would otherwise start without the hooks.
   app.quit();
 });

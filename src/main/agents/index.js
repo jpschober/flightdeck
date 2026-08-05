@@ -11,7 +11,8 @@
 //   read(ctx)   -> { agents: [...] }
 //
 // `ctx` is whatever the shell observation can tell about the terminal:
-// directory, running command, bound session. Which of those a plugin needs is
+// directory, running command, bound session, and anything the refresh has
+// already resolved for it. Which of those a plugin needs is
 // its own business - the Claude plugin recognises itself by the bound session,
 // a plugin for a different agent CLI could go by the command.
 //
@@ -53,7 +54,7 @@ async function detectAll(ctx) {
  * responsible - then nothing we know about is running there, and the display
  * stays empty.
  *
- * @param {object} ctx  { cwd, agentCwd, command, claudeSessionId }
+ * @param {object} ctx  { cwd, agentCwd, command, claudeSessionId, claudeTranscript }
  */
 async function getAgentView(ctx) {
   if (!ctx) return null;

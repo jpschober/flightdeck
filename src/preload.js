@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('api', {
   listClaudeSessions: () => ipcRenderer.invoke('claude:sessions'),
   focusWindow: () => ipcRenderer.send('app:focus'),
   input: (id, data) => ipcRenderer.send('session:input', id, data),
+  // Flow control: reports a batch as processed so the main process reads on
+  ackData: (id, chars) => ipcRenderer.send('session:ack', id, chars),
   resize: (id, cols, rows) => ipcRenderer.send('session:resize', id, cols, rows),
   closeSession: (id) => ipcRenderer.invoke('session:close', id),
   setMeta: (id, meta) => ipcRenderer.invoke('session:setMeta', id, meta),

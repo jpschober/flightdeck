@@ -56,8 +56,19 @@ const NOTIF_STATUS_RE = /<status>([^<]+)<\/status>/;
 // ---------------------------------------------------------------------------
 // The binding goes through the session ID, not the path: if the agent moves
 // into a worktree, the transcript wanders into a different project directory.
-function subagentsDir(sessionId) {
-  const transcript = findTranscriptById(sessionId);
+//
+// The refresh resolves the transcript once per pass and hands it over in
+// `ctx.claudeTranscript`; detect and read then work from that single value.
+// The key is set even when the path is null - a session whose transcript does
+// not exist yet is the expensive case, and looking it up again here would run
+// the same fruitless scan three more times per pass. A caller that only knows
+// the session ID leaves the key out and gets the lookup.
+function transcriptOf(ctx) {
+  if (ctx.claudeTranscript !== undefined) return ctx.claudeTranscript;
+  return findTranscriptById(ctx.claudeSessionId);
+}
+
+function subagentsDir(sessionId, transcript) {
   if (!transcript) return null;
   return path.join(path.dirname(transcript), sessionId, 'subagents');
 }
@@ -210,7 +221,7 @@ function scanFile(state, file) {
  */
 function detect(ctx) {
   if (ctx.claudeSessionId) {
-    const dir = subagentsDir(ctx.claudeSessionId);
+    const dir = subagentsDir(ctx.claudeSessionId, transcriptOf(ctx));
     const evidence = [`session ${ctx.claudeSessionId.slice(0, 8)}`];
     if (dir && fs.existsSync(dir)) evidence.push('subagents/');
     return { confidence: 0.95, evidence };
@@ -230,7 +241,8 @@ function detect(ctx) {
  */
 function read(ctx) {
   if (!ctx.claudeSessionId) return { agents: [] };
-  const dir = subagentsDir(ctx.claudeSessionId);
+  const transcript = transcriptOf(ctx);
+  const dir = subagentsDir(ctx.claudeSessionId, transcript);
   if (!dir) return { agents: [] };
 
   let entries;
@@ -246,7 +258,6 @@ function read(ctx) {
   if (!metas.length) return { agents: [] };
 
   const state = scanState(ctx.claudeSessionId);
-  const transcript = findTranscriptById(ctx.claudeSessionId);
   if (transcript) scanFile(state, transcript);
   // A nested agent reports its completion to its caller - and that caller is
   // itself a subagent. Only then are their transcripts needed.
