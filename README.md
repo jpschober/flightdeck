@@ -30,6 +30,9 @@ clearance for takeoff.
   - **DB schema**: the project's tables, columns, types and constraints —
     plus a signal as soon as the current work or PR changes the schema
     (see below)
+  - **Usage**: the limits of your Claude subscription against the share of the
+    window that has already passed — this reads Claude Code's login and an
+    undocumented endpoint (see below)
 - Panels are resizable via the dividers.
 
 ## Getting started
@@ -51,6 +54,7 @@ src/main/main.js     Electron main: PTY sessions (node-pty), shell detection,
 src/main/gitinfo.js  git status/branch + PR info via gh (cached)
 src/main/agents/     Running agents: plugin registry ("sensor") + plugins
 src/main/dbschema/   DB schema: plugin registry ("sensor"), DDL reader, diff
+src/main/usage.js    limits of the Claude subscription (OAuth usage endpoint)
 src/main/settings.js persisted settings (interface language)
 src/i18n/            interface languages: runtime, registry, one file per language
 src/preload.js       contextBridge API for the renderer
@@ -231,3 +235,26 @@ Relationships are shown as foreign keys in plain text, including target and
 
 A re-read only happens when the fingerprint of the involved files (mtime/size)
 changes — which makes the background poll every 10 s essentially free.
+
+### Usage limits
+
+The tab shows how much of each limit window of your Claude subscription is used
+up, against the share of the window that has already passed: after three of
+seven days, 42.9 % is the target, and above that the limit falls before the
+window ends. The mark in the bar sits at that target.
+
+The numbers come from `https://api.anthropic.com/api/oauth/usage`, the endpoint
+behind `/usage` in Claude Code. It is undocumented and can change or disappear
+without notice; the tab then shows an error instead of numbers. Which windows
+appear is up to the endpoint: a window it adds shows up without a change here,
+its length read out of the key name, sorted in by that length. Until it has a
+translation it carries its raw key from the endpoint as its title.
+
+Reaching the endpoint takes Claude Code's own login. Flightdeck reads the OAuth
+access token from `~/.claude/.credentials.json`, on macOS from the login
+keychain entry `Claude Code-credentials`, which macOS asks permission for the
+first time it is read. The token stays in the main process: it does not go over
+the bridge to the renderer, it appears in no error message and in no log line,
+and it is sent to the endpoint above and to no other address. Without a Claude
+Code login the tab says so and stays empty; nothing else in the app depends on
+it.
