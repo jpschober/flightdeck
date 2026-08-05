@@ -1689,6 +1689,10 @@ function renderLimit(title, limit, opts = {}) {
 // The worst status wins - the dot on the tab should show the tightest limit
 const SEVERITY = { unknown: 0, early: 0, ok: 1, warn: 2, over: 3 };
 
+// Every window the endpoint delivers counts, including the ones that used to be
+// left out of this (seven days Sonnet) and any that come later. A limit that
+// bites stops work, whichever window it sits in - a dot that stays green while
+// one of them is exhausted would be showing the wrong thing.
 function worstStatus(data) {
   let worst = 'unknown';
   for (const l of data.limits || []) {

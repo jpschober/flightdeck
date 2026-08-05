@@ -34,7 +34,9 @@ const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 // nobody is sitting in front of ends.
 const KEYCHAIN_TIMEOUT = 20_000;
 // After a failed lookup - denied, cancelled, nothing stored - the keychain is
-// left alone for this long. Without it every poll would put the dialog up again.
+// left alone for this long. Without it every poll would put the dialog up
+// again. It holds off the unasked-for poll, not the user: a refresh they
+// pressed themselves goes to the keychain right away.
 const KEYCHAIN_RETRY_AFTER = 5 * 60 * 1000;
 
 const HOUR = 60 * 60 * 1000;
@@ -60,7 +62,12 @@ let cache = { at: 0, data: null };
 let keychainRetryAt = 0;
 
 // Where the credentials were looked for. Goes into the "no login found"
-// message, so the answer names the place that was actually searched.
+// message, so the answer names the place that was actually searched - on macOS
+// the file alone would name the one place they are not.
+//
+// `Keychain` stays English inside a translated message. The alternative would
+// be a key per language, and the word is the one the system shows in its own
+// dialog. A locale key can replace this later.
 const SOURCE = process.platform === 'darwin'
   ? `~/.claude/.credentials.json, Keychain "${KEYCHAIN_SERVICE}"`
   : '~/.claude/.credentials.json';
@@ -81,8 +88,8 @@ function readFile() {
 //
 // Untested: this project is developed on Linux, and the path only runs on
 // macOS.
-function readKeychain() {
-  if (Date.now() < keychainRetryAt) {
+function readKeychain(force = false) {
+  if (!force && Date.now() < keychainRetryAt) {
     log.debug('usage: keychain lookup skipped, still in backoff');
     return Promise.resolve(null);
   }
@@ -150,9 +157,11 @@ function parseCredentials(raw, source) {
 // file costs nothing while the keychain may put a dialog in the way. A source
 // that yields no usable token is not the end of the search - the next one gets
 // its turn, and only if none of them delivers does the first complaint stand.
-async function readToken() {
+async function readToken(force = false) {
   const sources = [{ name: 'file', read: readFile }];
-  if (process.platform === 'darwin') sources.push({ name: 'keychain', read: readKeychain });
+  if (process.platform === 'darwin') {
+    sources.push({ name: 'keychain', read: () => readKeychain(force) });
+  }
 
   let firstError = null;
   for (const source of sources) {
@@ -265,9 +274,11 @@ function shape(json, plan) {
   const limits = [];
   for (const [key, raw] of Object.entries(json && typeof json === 'object' ? json : {})) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-    // A window says how much of it is used up, or when it resets. Anything
-    // else the endpoint carries alongside is not one.
-    if (typeof raw.utilization !== 'number' && raw.resets_at == null) continue;
+    // A window says how much of it is used up. Anything else the endpoint
+    // carries alongside stays out - without utilization the row would say
+    // nothing, and a related object put next to the windows tomorrow would
+    // land in the panel as an empty line.
+    if (typeof raw.utilization !== 'number') continue;
     if (!announced.has(key)) {
       announced.add(key);
       log.info('usage: limit window from the endpoint', { key });
@@ -281,7 +292,9 @@ function shape(json, plan) {
 async function getUsage(force = false) {
   if (!force && cache.data && Date.now() - cache.at < TTL) return cache.data;
 
-  const creds = await readToken();
+  // `force` is the refresh button. It reaches through to the keychain, whose
+  // backoff exists against the background poll, not against the user.
+  const creds = await readToken(force);
   if (creds.error) return { error: creds.error };
 
   const res = await fetchUsage(creds.token);

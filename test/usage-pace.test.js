@@ -167,6 +167,9 @@ test('anything that is not a limit window stays out', () => {
     flags: ['a', 'b'],
     account: { id: 'abc', email: 'someone@example.com' },
     empty: null,
+    // Carries a reset but no utilization: a row from this would show a title
+    // and nothing else.
+    next_cycle: { resets_at: new Date(NOW + DAY).toISOString() },
   }, null));
   assert.deepStrictEqual(data.limits.map((l) => l.key), ['five_hour']);
 });

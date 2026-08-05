@@ -241,7 +241,9 @@ changes — which makes the background poll every 10 s essentially free.
 The tab shows how much of each limit window of your Claude subscription is used
 up, against the share of the window that has already passed: after three of
 seven days, 42.9 % is the target, and above that the limit falls before the
-window ends. The mark in the bar sits at that target.
+window ends. The mark in the bar sits at that target. The dot on the tab
+follows the tightest of all reported windows, so a limit about to fall is
+visible with the tab closed.
 
 The numbers come from `https://api.anthropic.com/api/oauth/usage`, the endpoint
 behind `/usage` in Claude Code. It is undocumented and can change or disappear
