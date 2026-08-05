@@ -136,10 +136,11 @@ button:active { transform: translateY(0.5px); }
   letter-spacing: 0.5px;
   color: var(--text-faint);
 }
-/* The active language carries the tick in the icon column, so the names stay
-   flush with the entries above them. */
-.menu .menu-item.lang.active { color: var(--accent); font-weight: 600; }
-.menu .menu-item.lang.active .mi-icon { color: var(--accent); }
+/* What is switched on carries the tick in the icon column - the active language,
+   the clipboard from terminal output - so the labels stay flush with the entries
+   above them. */
+.menu .menu-item.active { color: var(--accent); font-weight: 600; }
+.menu .menu-item.active .mi-icon { color: var(--accent); }
 
 #btn-new, #btn-new-menu {
   background: var(--bg-panel-2);
@@ -1772,6 +1773,28 @@ button:active { transform: translateY(0.5px); }
 .dbd-row.changed .dbd-mark { color: var(--yellow); }
 .dbd-row .hot { color: var(--yellow); font-weight: 600; }
 .dbd-row.absent { opacity: 0.4; }
+
+/* ------------------------------------------------------------------ */
+/* Toast: one line, bottom right, for things that happened unasked      */
+/* ------------------------------------------------------------------ */
+#toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 130;
+  max-width: 420px;
+  padding: 9px 13px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  font-size: 12px;
+  /* The pointer goes through: the line sits over the terminal and must not
+     swallow a click meant for what is underneath it. */
+  pointer-events: none;
+  animation: pop-in 140ms var(--ease-out);
+}
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 9px; height: 9px; }

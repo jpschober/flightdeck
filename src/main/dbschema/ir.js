@@ -122,17 +122,12 @@ function empty(meta = {}) {
 // on what "equal" means - which is why it lives here, not there.
 // ---------------------------------------------------------------------------
 
-/** The properties of a column that the diff reports individually. */
+/**
+ * The properties of a column that the diff reports individually. The names go
+ * to the renderer as they are; it puts them in front of the user through the
+ * `db.field.*` entries of the dictionary.
+ */
 const COLUMN_FIELDS = ['type', 'nullable', 'default', 'identity', 'generated', 'comment'];
-
-const FIELD_LABEL = {
-  type: 'type',
-  nullable: 'NULL allowed',
-  default: 'default',
-  identity: 'identity',
-  generated: 'generated',
-  comment: 'comment',
-};
 
 function constraintSignature(c) {
   const parts = [c.kind, (c.columns || []).join(',')];
@@ -161,7 +156,6 @@ module.exports = {
   empty,
   qualify,
   COLUMN_FIELDS,
-  FIELD_LABEL,
   constraintSignature,
   policySignature,
 };

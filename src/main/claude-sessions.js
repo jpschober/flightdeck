@@ -305,6 +305,13 @@ let lastMissRescanAt = 0;
 
 function findTranscriptById(sessionId) {
   if (!sessionId) return null;
+  // The ID reaches this point from the data stream as well (OSC 7771), and the
+  // path is built from it below. A basename cannot leave PROJECTS_DIR whatever
+  // the caller passed in.
+  if (path.basename(sessionId) !== sessionId) {
+    log.debug('sessions: id is not a plain name, lookup skipped', { session: sessionId });
+    return null;
+  }
   const known = transcriptPaths.get(sessionId);
   if (known) {
     try { if (fs.statSync(known).size > 0) return known; } catch (e) { log.debug('sessions: the remembered transcript is gone', { session: sessionId, file: known, err: e }); }

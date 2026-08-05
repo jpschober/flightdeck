@@ -121,6 +121,14 @@ module.exports = {
   'db.tag.policy': 'policy',
   'db.col.generated': 'generated',
   'db.policy.for': 'for {roles}',
+  // The column properties the comparison reports one by one (COLUMN_FIELDS in
+  // dbschema/ir.js); they name the change in the tooltip of a changed column.
+  'db.field.type': 'type',
+  'db.field.nullable': 'NULL allowed',
+  'db.field.default': 'default',
+  'db.field.identity': 'identity',
+  'db.field.generated': 'generated',
+  'db.field.comment': 'comment',
 
   // --- DB schema: before/after ---
   'dbdiff.scope': 'Scope',
@@ -249,4 +257,12 @@ module.exports = {
   'ddl.warn.addConstraint': 'ADD CONSTRAINT not parsed: {text}',
   'ddl.warn.addColumn': 'ADD COLUMN not parsed: {text}',
   'ddl.warn.skipped': 'Statement skipped ({message}): {text}',
+
+  // --- clipboard from terminal output (OSC 52) ---
+  'menu.osc52': 'Clipboard from terminal output',
+  'osc52.written': {
+    one: 'Terminal output wrote {count} character to the clipboard',
+    other: 'Terminal output wrote {count} characters to the clipboard',
+  },
+  'osc52.off': 'Terminal output wanted to write the clipboard – switched off in the menu',
 };

@@ -51,7 +51,7 @@ src/main/main.js     Electron main: PTY sessions (node-pty), shell detection,
 src/main/gitinfo.js  git status/branch + PR info via gh (cached)
 src/main/agents/     Running agents: plugin registry ("sensor") + plugins
 src/main/dbschema/   DB schema: plugin registry ("sensor"), DDL reader, diff
-src/main/settings.js persisted settings (interface language)
+src/main/settings.js persisted settings (interface language, OSC 52 clipboard)
 src/i18n/            interface languages: runtime, registry, one file per language
 src/preload.js       contextBridge API for the renderer
 src/renderer/        UI: sidebar, xterm terminals, tab panel, preview
@@ -104,7 +104,16 @@ When the shell starts, its prompt is extended (PowerShell via
 
 The main process parses these sequences out of the PTY stream and derives from
 them the directory, branch, changed files, PR (refresh 4 s, PR cache 45 s) and
-the busy/idle state. For the agent TUIs we watch (`claude`, `codex`, `aider`)
+the busy/idle state. A reported directory is taken over only if it exists, and
+git runs in it with `core.fsmonitor` and `core.hooksPath` overridden: the
+directory comes from the output, and a repository must not name a program
+through its own `.git/config` that then starts unprompted.
+
+`OSC 52` writes the clipboard — that is how Claude copies. Every write is shown
+in the app with the number of characters, control characters other than tab and
+newline are dropped and the payload is capped at 100 KB. The clipboard is still
+replaced without a prompt; the report is what makes it visible before the next
+paste. "Clipboard from terminal output" in the ⋯ menu switches the write off. For the agent TUIs we watch (`claude`, `codex`, `aider`)
 one more rule applies: >2 s of silence while a command is running = "input
 expected" (blue dot), because these TUIs render continuously while working.
 

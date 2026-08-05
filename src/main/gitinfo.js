@@ -4,9 +4,24 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const log = require('./log');
 
+// Git reads the .git/config of the directory it runs in, and that directory
+// comes from the terminal output - the shell changes into it, nobody clicks
+// anything. The settings that let a repository name a program git then starts
+// are overridden for every call, and the system configuration stays out. A
+// `git clone` does not carry these settings along, a project unpacked from an
+// archive with its .git directory included does.
+//
+// `diff.external` and the textconv drivers are not in here: an empty value
+// makes git try to run the empty command instead of falling back to its own
+// diff. They are switched off at the one place that diffs, with --no-ext-diff
+// and --no-textconv (see main.js).
+const GIT_NEUTRAL = ['-c', 'core.fsmonitor=', '-c', 'core.hooksPath=/dev/null'];
+
 function run(cmd, args, cwd, timeout = 8000) {
+  const argv = cmd === 'git' ? [...GIT_NEUTRAL, ...args] : args;
+  const env = cmd === 'git' ? { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } : process.env;
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    execFile(cmd, argv, { cwd, env, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       // `null` is the answer for "nothing there" as well as for "gh is not set
       // up" and "git timed out". The callers cannot tell those apart, so the
       // reason is recorded here.

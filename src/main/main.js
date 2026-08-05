@@ -349,6 +349,9 @@ const OSC7_RE = /\x1b\]7;file:\/\/[^/\x07\x1b]*([^\x07\x1b]+)(?:\x07|\x1b\\)/g;
 const OSC99_RE = /\x1b\]9;9;"?([^"\x07\x1b]+)"?(?:\x07|\x1b\\)/g;
 const OSC133_RE = /\x1b\]133;(?<mark>[A-D])[^\x07\x1b]*(?:\x07|\x1b\\)/;
 const OSCCMD_RE = /\x1b\]7770;cmd;(?<cmdB64>[A-Za-z0-9+/=]*)(?:\x07|\x1b\\)/;
+// The payload class is deliberately wide so that a malformed report is still
+// consumed as one sequence; what counts as a session ID is decided in
+// applyStateFromData.
 const OSCSESS_RE = /\x1b\]7771;(?<sessKind>[a-z]+);(?<sessId>[^\x07\x1b]*)(?:\x07|\x1b\\)/;
 const OSC_ANY_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // Claude Code (addressed as iTerm): OSC 0/2 = title, OSC 9 = notification
@@ -386,6 +389,14 @@ function normalizeOscPath(raw) {
     p = p[1].toUpperCase() + ':' + p.slice(2).replace(/\//g, '\\');
   }
   return p;
+}
+
+// The reported directory becomes the base for git, the file list and the
+// preview - and git runs there unprompted every few seconds. Anything writing
+// to the terminal can name a directory, so what is named has to be there.
+function isExistingDir(p) {
+  try { return fs.statSync(p).isDirectory(); }
+  catch (e) { log.debug('osc7: reported directory not usable', { path: p, err: e }); return false; }
 }
 
 function extractCwd(text) {
@@ -445,7 +456,11 @@ function applyStateFromData(session, text, tailLen, rawData) {
     // command runs and the wrapper its OSC 7771 afterwards, so stream order
     // already puts the binding after the beginAgentBinding() that resets it.
     } else if (g.sessKind !== undefined) {
-      if (g.sessKind === 'session' && g.sessId) bindAgentSession(session, g.sessId, true);
+      // Only a session UUID is accepted. The sequence arrives in the data
+      // stream, so every program writing to the terminal can send one, and the
+      // ID becomes part of a file path (findTranscriptById) and of the
+      // directory the agent sensor reads.
+      if (g.sessKind === 'session' && TRANSCRIPT_ID_RE.test(g.sessId)) bindAgentSession(session, g.sessId, true);
       else if (g.sessKind === 'continue') bindContinuedSession(session);
 
     } else if (g.mark !== undefined) {
@@ -791,7 +806,7 @@ function flushOutput(session) {
   const found = extractCwd(text);
   applyStateFromData(session, text, tailLen, data);
   session.oscTail = text.slice(-512);
-  if (found && found !== session.cwd) {
+  if (found && found !== session.cwd && isExistingDir(found)) {
     session.cwd = found;
     refreshSession(session, true);
   }
@@ -1062,6 +1077,12 @@ const O_NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
 // literal name it is.
 const GIT_LITERAL = '--literal-pathspecs';
 
+// The repository the shell is standing in can name the program that produces
+// the diff - `diff.external`, or a textconv driver via .gitattributes. Both
+// stay out; what is shown is git's own diff. The remaining settings of that
+// kind are neutralised in gitinfo.js, which starts every git call.
+const GIT_OWN_DIFF = ['--no-ext-diff', '--no-textconv'];
+
 // The path comes from the renderer and is foreign input. Anything that is not
 // a relative path below the session root is rejected here, before a git command
 // or a read sees it. `base` has to be resolved already.
@@ -1126,13 +1147,13 @@ async function previewFile(session, relPath, source, opts = {}) {
   if (opts.content) return readForPreview(base, abs, relPath, 'content');
 
   if (source === 'pr' && session.pr && session.pr.baseRefName) {
-    const diff = await run('git', [GIT_LITERAL, 'diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], base);
+    const diff = await run('git', [GIT_LITERAL, 'diff', ...GIT_OWN_DIFF, '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], base);
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
   const entry = session.files.find((f) => f.path === relPath);
   if (!entry || !entry.untracked) {
-    const diff = await run('git', [GIT_LITERAL, 'diff', '--no-color', 'HEAD', '--', relPath], base);
+    const diff = await run('git', [GIT_LITERAL, 'diff', ...GIT_OWN_DIFF, '--no-color', 'HEAD', '--', relPath], base);
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
@@ -1265,6 +1286,42 @@ ipcMain.on('clipboard:write', (e, text) => {
 });
 
 ipcMain.handle('clipboard:read', () => clipboard.readText());
+
+// ---------------------------------------------------------------------------
+// OSC 52: the program in the terminal asks for the clipboard
+//
+// Its own channel, separate from the copy above: the user clicked for that one,
+// here a line of output is enough - a build script, a downloaded file, any
+// output at all. The setting therefore switches off this path alone.
+//
+// What arrives is cut down to what a clipboard is for. Control characters are
+// dropped, tab and newline stay: Claude copies code blocks over this route, and
+// those are multi-line. An escape sequence in the clipboard would act on the
+// next terminal it is pasted into, and it would not be visible in the report.
+// ---------------------------------------------------------------------------
+const OSC52_MAX_CHARS = 100 * 1024;
+const osc52Enabled = () => settings.get('osc52Write', true) !== false;
+const OSC52_STRIP_RE = /[\u0000-\u0008\u000b-\u001f\u007f]/g; // every control character but \t and \n
+
+ipcMain.handle('clipboard:write-osc52', (e, text) => {
+  if (typeof text !== 'string' || !text) return { written: 0, off: false };
+  if (!osc52Enabled()) {
+    log.debug('osc52: write refused, switched off', { chars: text.length });
+    return { written: 0, off: true };
+  }
+  const clean = text.replace(OSC52_STRIP_RE, '').slice(0, OSC52_MAX_CHARS);
+  if (!clean) return { written: 0, off: false };
+  clipboard.writeText(clean);
+  log.debug('osc52: clipboard written', { chars: clean.length, dropped: text.length - clean.length });
+  return { written: clean.length, off: false };
+});
+
+ipcMain.handle('osc52:enabled', () => osc52Enabled());
+
+ipcMain.handle('osc52:set-enabled', (e, on) => {
+  settings.set('osc52Write', Boolean(on));
+  return Boolean(on);
+});
 
 ipcMain.on('session:input', (e, id, data) => {
   const s = sessions.get(id);

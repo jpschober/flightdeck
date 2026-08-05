@@ -120,6 +120,12 @@ module.exports = {
   'db.tag.policy': 'política',
   'db.col.generated': 'calculada',
   'db.policy.for': 'para {roles}',
+  'db.field.type': 'tipo',
+  'db.field.nullable': 'NULL permitido',
+  'db.field.default': 'valor predeterminado',
+  'db.field.identity': 'identidad',
+  'db.field.generated': 'calculada',
+  'db.field.comment': 'comentario',
 
   // --- DB schema: before/after ---
   'dbdiff.scope': 'Alcance',
@@ -248,4 +254,12 @@ module.exports = {
   'ddl.warn.addConstraint': 'ADD CONSTRAINT no interpretado: {text}',
   'ddl.warn.addColumn': 'ADD COLUMN no interpretado: {text}',
   'ddl.warn.skipped': 'Instrucción omitida ({message}): {text}',
+
+  // --- clipboard from terminal output (OSC 52) ---
+  'menu.osc52': 'Portapapeles desde la salida del terminal',
+  'osc52.written': {
+    one: 'La salida del terminal escribió {count} carácter en el portapapeles',
+    other: 'La salida del terminal escribió {count} caracteres en el portapapeles',
+  },
+  'osc52.off': 'La salida del terminal quiso escribir en el portapapeles – desactivado en el menú',
 };
