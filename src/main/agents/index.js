@@ -20,6 +20,7 @@
 // PLUGINS, done.
 
 const log = require('../log');
+const registry = require('../plugin-registry');
 
 const PLUGINS = [
   require('./plugins/claude'),
@@ -31,22 +32,9 @@ const PLUGINS = [
 // the plugin holds on to that itself.
 
 async function detectAll(ctx) {
-  const found = [];
-  for (const plugin of PLUGINS) {
-    let d = null;
-    try {
-      d = await plugin.detect(ctx);
-    } catch (e) {
-      // A broken plugin must not take the others down with it
-      log.warn('agents: detection failed', { plugin: plugin.id, session: ctx.claudeSessionId || null, cwd: ctx.cwd || null, err: e });
-      d = null;
-    }
-    if (d && d.confidence > 0) {
-      found.push({ plugin, confidence: d.confidence, evidence: d.evidence || [] });
-    }
-  }
-  // The most confident plugin wins; on a tie, the order above decides.
-  return found.sort((a, b) => b.confidence - a.confidence);
+  return registry.detectAll(PLUGINS, ctx, {
+    onError: (plugin, e) => log.warn('agents: detection failed', { plugin: plugin.id, session: ctx.claudeSessionId || null, cwd: ctx.cwd || null, err: e }),
+  });
 }
 
 /**
@@ -64,12 +52,7 @@ async function getAgentView(ctx) {
   if (!winner) return null;
 
   const view = {
-    plugin: {
-      id: winner.plugin.id,
-      label: winner.plugin.label,
-      confidence: winner.confidence,
-      evidence: winner.evidence,
-    },
+    plugin: registry.pluginInfo(winner),
     running: 0,
     total: 0,
     agents: [],
