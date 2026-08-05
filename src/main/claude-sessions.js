@@ -357,7 +357,7 @@ async function readAgentCwd(sessionId, file) {
     log.warn('sessions: agent cwd not readable', { session: sessionId, file, err: e });
     return null;
   } finally {
-    if (handle) { try { await handle.close(); } catch { /* already closed */ } }
+    if (handle) { try { await handle.close(); } catch (e) { log.debug('sessions: transcript handle not closable', { session: sessionId, file, err: e }); } }
   }
 }
 

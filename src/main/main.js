@@ -280,7 +280,7 @@ function getRcDir() {
     if (!fs.lstatSync(dir).isDirectory()) throw new Error('not a directory: ' + dir);
     if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
     for (const name of ZSH_STALE_FILES) {
-      try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); } catch { /* never mind */ }
+      try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); } catch (e) { log.debug('shell: stale integration file not removed', { file: path.join(dir, name), err: e }); }
     }
     rcDir = dir;
   }
@@ -765,7 +765,7 @@ function flushOutput(session) {
     session.unacked += data.length;
     if (!session.flowPaused && session.unacked > FLOW_HIGH_WATER_CHARS) {
       session.flowPaused = true;
-      try { session.proc.pause(); } catch { /* session gone */ }
+      try { session.proc.pause(); } catch (e) { log.debug('flow: PTY not paused, session gone', { session: session.id, err: e }); }
     }
   }
 
@@ -803,7 +803,10 @@ function ackOutput(session, chars) {
   session.unacked = Math.max(0, session.unacked - chars);
   if (session.flowPaused && session.unacked <= FLOW_LOW_WATER_CHARS) {
     session.flowPaused = false;
-    try { session.proc.resume(); } catch { /* session gone */ }
+    // `flowPaused` is already false, so no later ack takes this path again: if
+    // the PTY stays paused here, the session delivers nothing for the rest of
+    // its life. Worth a line even though the usual cause is a session that ended.
+    try { session.proc.resume(); } catch (e) { log.warn('flow: PTY not resumed, the session stays without output', { session: session.id, err: e }); }
   }
 }
 
@@ -817,7 +820,7 @@ function resetFlowControl() {
     s.unacked = 0;
     if (s.flowPaused) {
       s.flowPaused = false;
-      try { s.proc.resume(); } catch { /* session gone */ }
+      try { s.proc.resume(); } catch (e) { log.warn('flow: PTY not resumed after a renderer reload', { session: s.id, err: e }); }
     }
   }
 }
@@ -1078,7 +1081,10 @@ function resolveInRoot(base, relPath) {
 // that was checked is the file that is read. It takes at most MAX_PREVIEW + 1
 // bytes, which bounds the memory a huge file can claim and decides the
 // truncation from what was actually read rather than from an earlier stat.
-async function readForPreview(base, abs, relPath) {
+// `via` names the caller for the log line: the rendered markdown view asks for
+// the content directly, the other path arrives here after the diff came back
+// empty, and a read error reads differently in each case.
+async function readForPreview(base, abs, relPath, via) {
   let fh = null;
   try {
     const stat = await fs.promises.lstat(abs);
@@ -1100,7 +1106,7 @@ async function readForPreview(base, abs, relPath) {
     }
     return { kind: 'content', path: relPath, text: buf.subarray(0, got).toString('utf8') };
   } catch (e) {
-    log.warn('preview: file not readable', { path: abs, err: e });
+    log.warn('preview: file not readable', { path: abs, via, err: e });
     return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
   } finally {
     if (fh) await fh.close().catch((e) => log.debug('preview: file handle not closable', { path: abs, err: e }));
@@ -1117,7 +1123,7 @@ async function previewFile(session, relPath, source, opts = {}) {
 
   // The preview can request the file content instead of the diff - for the
   // rendered markdown view, which could show nothing based on the diff.
-  if (opts.content) return readForPreview(base, abs, relPath);
+  if (opts.content) return readForPreview(base, abs, relPath, 'content');
 
   if (source === 'pr' && session.pr && session.pr.baseRefName) {
     const diff = await run('git', [GIT_LITERAL, 'diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], base);
@@ -1130,7 +1136,7 @@ async function previewFile(session, relPath, source, opts = {}) {
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
-  return readForPreview(base, abs, relPath);
+  return readForPreview(base, abs, relPath, source || 'worktree');
 }
 
 // ---------------------------------------------------------------------------

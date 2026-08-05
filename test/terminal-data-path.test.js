@@ -31,9 +31,10 @@ for (const fn of ['queueOutput', 'flushOutput', 'ackOutput', 'resetFlowControl']
 
 const sent = [];
 const ptyLog = [];
-// The extracted code logs in its catch blocks. Without this a test that reaches
-// one of them would fail with a ReferenceError instead of its assertion; what
-// the logger does with a line is test/log.test.js's business.
+// Both extracted blocks log in their catch blocks - flow control here, the OSC
+// dispatch below. Without this a test that reaches one of them would fail with
+// a ReferenceError instead of its assertion; what the logger does with a line
+// is test/log.test.js's business.
 const logged = [];
 const rec = (level) => (message, data) => logged.push({ level, message, data });
 const log = { error: rec('error'), warn: rec('warn'), info: rec('info'), debug: rec('debug') };

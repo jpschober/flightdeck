@@ -378,10 +378,12 @@ function loadWebgl(term) {
     webgl = new WebglAddon.WebglAddon();
     webgl.onContextLoss(() => webgl.dispose());
     term.loadAddon(webgl);
-  } catch {
+  } catch (e) {
     // No WebGL context, or activate() failed partway and left the addon
-    // registered with only some of its disposables attached.
-    if (webgl) { try { webgl.dispose(); } catch { /* never mind */ } }
+    // registered with only some of its disposables attached. The terminal falls
+    // back to the DOM renderer and gets slower, which is what the user sees.
+    logWarn('terminal: WebGL renderer not available, falling back to the DOM one', { err: e });
+    if (webgl) { try { webgl.dispose(); } catch (e2) { logDebug('terminal: WebGL addon not disposable', { err: e2 }); } }
   }
 }
 
