@@ -1,5 +1,5 @@
 'use strict';
-/* global Terminal, FitAddon, WebLinksAddon, I18nRuntime */
+/* global Terminal, FitAddon, WebLinksAddon, WebglAddon, I18nRuntime */
 
 // ---------------------------------------------------------------------------
 // Language
@@ -311,6 +311,29 @@ function buildMoreMenu() {
 // ---------------------------------------------------------------------------
 // Create / activate / close sessions
 // ---------------------------------------------------------------------------
+// The WebGL renderer draws the terminal on the GPU instead of building a DOM
+// node per cell. The addon has to be loaded after term.open(), because it needs
+// the element. A lost GPU context (driver reset, suspend) cannot be restored by
+// the addon; it is disposed and xterm falls back to the DOM renderer.
+//
+// Inactive panes keep their context: they are hidden with `visibility`, not
+// removed. Chromium caps the contexts per page at around 16 and evicts the
+// oldest one beyond that, which costs the affected terminal a redraw and the
+// three seconds the addon waits for a restore before it falls back.
+function loadWebgl(term) {
+  if (typeof WebglAddon === 'undefined') return;
+  let webgl = null;
+  try {
+    webgl = new WebglAddon.WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch {
+    // No WebGL context, or activate() failed partway and left the addon
+    // registered with only some of its disposables attached.
+    if (webgl) { try { webgl.dispose(); } catch { /* never mind */ } }
+  }
+}
+
 async function newSession(shellId, opts) {
   const meta = await window.api.createSession(shellId, opts || {});
 
@@ -332,6 +355,7 @@ async function newSession(shellId, opts) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => window.api.openExternal(uri)));
   handleOsc52(term);
   term.open(paneEl);
+  loadWebgl(term);
 
   term.onData((data) => window.api.input(meta.id, data));
   term.onResize(({ cols, rows }) => window.api.resize(meta.id, cols, rows));
@@ -2088,11 +2112,19 @@ window.api.onNotify((id, message) => {
 // ---------------------------------------------------------------------------
 // Events from the main process
 // ---------------------------------------------------------------------------
+// The acknowledgement runs through xterm's write callback: it fires once the
+// batch has been parsed, so the main process learns the actual backlog and
+// pauses the PTY while xterm is behind.
 window.api.onData((id, data) => {
-  const s = sessions.get(id);
-  if (s) s.term.write(data);
+  // The thumbnail write stays unacknowledged on purpose: the pane terminal
+  // parses the same batch and is the slower of the two, so its ack already
+  // covers the backlog. With `scrollback: 50` the thumbnail cannot fall behind
+  // far enough to matter.
   const gridEntry = gridCards.get(id);
   if (gridEntry) gridEntry.term.write(data);
+  const s = sessions.get(id);
+  if (s) s.term.write(data, () => window.api.ackData(id, data.length));
+  else window.api.ackData(id, data.length);
 });
 
 window.api.onState((id, state) => {
