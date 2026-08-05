@@ -11,6 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { t } = require('../i18n');
+const log = require('./log');
 
 const CREDENTIALS = path.join(os.homedir(), '.claude', '.credentials.json');
 const ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
@@ -38,13 +39,15 @@ function readToken() {
   let raw;
   try {
     raw = fs.readFileSync(CREDENTIALS, 'utf8');
-  } catch {
+  } catch (e) {
+    log.debug('usage: credentials not readable', { path: CREDENTIALS, err: e });
     return { error: t('usage.error.noLogin', { path: '~/.claude/.credentials.json' }) };
   }
   let json;
   try {
     json = JSON.parse(raw);
-  } catch {
+  } catch (e) {
+    log.warn('usage: credentials not parsable', { path: CREDENTIALS, err: e });
     return { error: t('usage.error.unreadable') };
   }
   const oauth = json.claudeAiOauth || {};
@@ -118,9 +121,14 @@ async function fetchUsage(token) {
     if (res.status === 401 || res.status === 403) {
       return { error: t('usage.error.rejected') };
     }
-    if (!res.ok) return { error: t('usage.error.http', { status: res.status }) };
+    if (!res.ok) {
+      log.warn('usage: endpoint answered with an error', { endpoint: ENDPOINT, status: res.status });
+      return { error: t('usage.error.http', { status: res.status }) };
+    }
     return { json: await res.json() };
   } catch (err) {
+    // The endpoint is undocumented; a change to it shows up here first.
+    log.warn('usage: request failed', { endpoint: ENDPOINT, name: err.name, err });
     if (err.name === 'AbortError') return { error: t('usage.error.timeout') };
     return { error: t('usage.error.network', { message: err.message }) };
   } finally {

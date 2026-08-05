@@ -17,6 +17,7 @@ const { getAgentView } = require('./agents');
 const i18n = require('../i18n');
 const { t } = i18n;
 const settings = require('./settings');
+const log = require('./log');
 
 let win = null;
 const sessions = new Map(); // id -> session
@@ -26,7 +27,9 @@ let nextId = 1;
 // Shell detection
 // ---------------------------------------------------------------------------
 function firstExisting(paths) {
-  return paths.find((p) => { try { return fs.existsSync(p); } catch { return false; } });
+  return paths.find((p) => {
+    try { return fs.existsSync(p); } catch (e) { log.debug('shells: candidate not checkable', { path: p, err: e }); return false; }
+  });
 }
 
 function detectShells() {
@@ -59,7 +62,7 @@ function detectShells() {
         const p = line.trim();
         if (p && !p.startsWith('#')) candidates.push(p);
       }
-    } catch { /* no /etc/shells (e.g. a minimal container) */ }
+    } catch (e) { log.debug('shells: no /etc/shells (e.g. a minimal container)', { err: e }); }
     candidates.push(process.env.SHELL || '');
     for (const name of ['bash', 'zsh', 'fish', 'nu', 'elvish', 'xonsh', 'ksh', 'tcsh', 'dash']) {
       candidates.push('/usr/bin/' + name, '/bin/' + name, '/usr/local/bin/' + name);
@@ -277,7 +280,7 @@ function getRcDir() {
     if (!fs.lstatSync(dir).isDirectory()) throw new Error('not a directory: ' + dir);
     if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
     for (const name of ZSH_STALE_FILES) {
-      try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); } catch { /* never mind */ }
+      try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); } catch (e) { log.debug('shell: stale integration file not removed', { file: path.join(dir, name), err: e }); }
     }
     rcDir = dir;
   }
@@ -374,7 +377,7 @@ const ATTENTION_QUIET_MS = 2000;
 
 function normalizeOscPath(raw) {
   let p;
-  try { p = decodeURIComponent(raw); } catch { p = raw; }
+  try { p = decodeURIComponent(raw); } catch (e) { log.debug('osc7: path not decodable, taken as is', { raw, err: e }); p = raw; }
   if (/^\/[A-Za-z]:/.test(p)) {
     // file://localhost/C:/Users/... -> C:\Users\...
     p = p.slice(1).replace(/\//g, '\\');
@@ -426,7 +429,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
     // Command line of the started command (reported by the shell integration)
     if (g.cmdB64 !== undefined) {
       let cmd = '';
-      try { cmd = Buffer.from(g.cmdB64, 'base64').toString('utf8'); } catch { /* never mind */ }
+      try { cmd = Buffer.from(g.cmdB64, 'base64').toString('utf8'); } catch (e) { log.debug('osc7770: command line not decodable', { session: session.id, err: e }); }
       session.currentCmd = cmd;
       session.cmdWatched = WATCHED_CMD_RE.test(cmd);
       if (session.cmdWatched) {
@@ -458,7 +461,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
         if (session.pendingCommand) {
           const cmd = session.pendingCommand;
           session.pendingCommand = null;
-          try { session.proc.write(cmd + '\r'); } catch { /* session gone */ }
+          try { session.proc.write(cmd + '\r'); } catch (e) { log.debug('session: queued command not sent, session gone', { session: session.id, cmd, err: e }); }
         }
       }
 
@@ -671,12 +674,13 @@ function todosPath() { return path.join(app.getPath('userData'), 'flightdeck-tod
 function loadTodos() {
   if (!todosStore) {
     try { todosStore = JSON.parse(fs.readFileSync(todosPath(), 'utf8')); }
-    catch {
+    catch (e) {
+      log.debug('todos: store not readable, trying the aibash migration', { path: todosPath(), err: e });
       // Migration from the earlier "aibash" installation
       try {
         const oldPath = path.join(app.getPath('userData'), '..', 'aibash', 'aibash-todos.json');
         todosStore = JSON.parse(fs.readFileSync(oldPath, 'utf8'));
-      } catch { todosStore = {}; }
+      } catch (e2) { log.debug('todos: no store to migrate, starting empty', { err: e2 }); todosStore = {}; }
     }
   }
   return todosStore;
@@ -761,7 +765,7 @@ function flushOutput(session) {
     session.unacked += data.length;
     if (!session.flowPaused && session.unacked > FLOW_HIGH_WATER_CHARS) {
       session.flowPaused = true;
-      try { session.proc.pause(); } catch { /* session gone */ }
+      try { session.proc.pause(); } catch (e) { log.debug('flow: PTY not paused, session gone', { session: session.id, err: e }); }
     }
   }
 
@@ -799,7 +803,10 @@ function ackOutput(session, chars) {
   session.unacked = Math.max(0, session.unacked - chars);
   if (session.flowPaused && session.unacked <= FLOW_LOW_WATER_CHARS) {
     session.flowPaused = false;
-    try { session.proc.resume(); } catch { /* session gone */ }
+    // `flowPaused` is already false, so no later ack takes this path again: if
+    // the PTY stays paused here, the session delivers nothing for the rest of
+    // its life. Worth a line even though the usual cause is a session that ended.
+    try { session.proc.resume(); } catch (e) { log.warn('flow: PTY not resumed, the session stays without output', { session: session.id, err: e }); }
   }
 }
 
@@ -813,7 +820,7 @@ function resetFlowControl() {
     s.unacked = 0;
     if (s.flowPaused) {
       s.flowPaused = false;
-      try { s.proc.resume(); } catch { /* session gone */ }
+      try { s.proc.resume(); } catch (e) { log.warn('flow: PTY not resumed after a renderer reload', { session: s.id, err: e }); }
     }
   }
 }
@@ -896,7 +903,7 @@ function createSession(shellId, opts = {}) {
       if (session.pendingCommand && !session.exited) {
         const cmd = session.pendingCommand;
         session.pendingCommand = null;
-        try { proc.write(cmd + '\r'); } catch { /* session gone */ }
+        try { proc.write(cmd + '\r'); } catch (e) { log.debug('session: start command not sent, session gone', { session: id, cmd, err: e }); }
       }
     }, 4000);
   }
@@ -1074,7 +1081,10 @@ function resolveInRoot(base, relPath) {
 // that was checked is the file that is read. It takes at most MAX_PREVIEW + 1
 // bytes, which bounds the memory a huge file can claim and decides the
 // truncation from what was actually read rather than from an earlier stat.
-async function readForPreview(base, abs, relPath) {
+// `via` names the caller for the log line: the rendered markdown view asks for
+// the content directly, the other path arrives here after the diff came back
+// empty, and a read error reads differently in each case.
+async function readForPreview(base, abs, relPath, via) {
   let fh = null;
   try {
     const stat = await fs.promises.lstat(abs);
@@ -1096,9 +1106,10 @@ async function readForPreview(base, abs, relPath) {
     }
     return { kind: 'content', path: relPath, text: buf.subarray(0, got).toString('utf8') };
   } catch (e) {
+    log.warn('preview: file not readable', { path: abs, via, err: e });
     return { kind: 'error', path: relPath, text: t('file.readError', { message: e.message }) };
   } finally {
-    if (fh) await fh.close().catch(() => { /* nothing left to do about it */ });
+    if (fh) await fh.close().catch((e) => log.debug('preview: file handle not closable', { path: abs, err: e }));
   }
 }
 
@@ -1112,7 +1123,7 @@ async function previewFile(session, relPath, source, opts = {}) {
 
   // The preview can request the file content instead of the diff - for the
   // rendered markdown view, which could show nothing based on the diff.
-  if (opts.content) return readForPreview(base, abs, relPath);
+  if (opts.content) return readForPreview(base, abs, relPath, 'content');
 
   if (source === 'pr' && session.pr && session.pr.baseRefName) {
     const diff = await run('git', [GIT_LITERAL, 'diff', '--no-color', `origin/${session.pr.baseRefName}...HEAD`, '--', relPath], base);
@@ -1125,7 +1136,7 @@ async function previewFile(session, relPath, source, opts = {}) {
     if (diff && diff.trim()) return { kind: 'diff', path: relPath, text: diff.slice(0, MAX_PREVIEW) };
   }
 
-  return readForPreview(base, abs, relPath);
+  return readForPreview(base, abs, relPath, source || 'worktree');
 }
 
 // ---------------------------------------------------------------------------
@@ -1166,6 +1177,41 @@ ipcMain.handle('claude:sessions', () => listClaudeSessions());
 
 ipcMain.handle('usage:get', (e, force) => getUsage(Boolean(force)));
 
+// The renderer runs sandboxed and has no file access of its own, so its lines
+// come through here and land in the same file as the main process's - one file
+// per report, not two. What arrives here is untrusted input like everything
+// else that crosses the bridge, so it is clamped in three ways: level, field
+// count, and rate. Without the rate limit a page in a loop turns into unbounded
+// synchronous writes on this process's event loop and the interface stops
+// moving; the renderer's own duplicate suppressor sits on the far side of the
+// bridge and proves nothing about what arrives.
+const RENDERER_LEVELS = new Set(['debug', 'info', 'warn', 'error']);
+const RENDERER_RATE = 20; // lines per second, burst of the same size
+let rendererTokens = RENDERER_RATE;
+let rendererRefill = Date.now();
+let rendererDropped = 0;
+
+ipcMain.on('log:renderer', (e, level, message, data) => {
+  const now = Date.now();
+  rendererTokens = Math.min(RENDERER_RATE, rendererTokens + ((now - rendererRefill) / 1000) * RENDERER_RATE);
+  rendererRefill = now;
+  if (rendererTokens < 1) { rendererDropped++; return; }
+  rendererTokens -= 1;
+
+  // An unknown level lands on info, not debug: below the default threshold the
+  // line would disappear entirely, and a renderer sending a wrong level is
+  // itself something to see.
+  const method = RENDERER_LEVELS.has(level) ? level : 'info';
+  const fields = {};
+  if (rendererDropped) { fields.suppressed = rendererDropped; rendererDropped = 0; }
+  if (data && typeof data === 'object') {
+    // Values go through as they are - log.js flattens and clamps them, and
+    // that is where the sink defends itself.
+    for (const [key, value] of Object.entries(data).slice(0, 8)) fields[key] = value;
+  }
+  log[method]('renderer: ' + String(message).slice(0, 300), fields);
+});
+
 // DB schema: the sensor looks for the responsible plugin and compares against
 // the requested baseline. The repo root is the right root - if the agent works
 // in a worktree, gitRoot already points there.
@@ -1180,6 +1226,7 @@ ipcMain.handle('dbschema:get', async (e, id, opts = {}) => {
       force: Boolean(opts.force),
     });
   } catch (err) {
+    log.warn('dbschema: view failed', { root, baseline: opts.baseline || 'auto', err });
     return { ok: false, reason: 'error', error: err.message };
   }
 });
@@ -1233,7 +1280,7 @@ ipcMain.on('session:input', (e, id, data) => {
 ipcMain.on('session:resize', (e, id, cols, rows) => {
   const s = sessions.get(id);
   if (s && !s.exited && cols > 0 && rows > 0) {
-    try { s.proc.resize(cols, rows); } catch { /* race while shutting down */ }
+    try { s.proc.resize(cols, rows); } catch (e) { log.debug('session: resize failed, race while shutting down', { session: id, cols, rows, err: e }); }
   }
 });
 
@@ -1245,7 +1292,7 @@ ipcMain.handle('session:close', (e, id) => {
     s.exited = true;
     clearTimeout(s.flushTimer);
     s.flushTimer = null;
-    try { s.proc.kill(); } catch { /* already terminated */ }
+    try { s.proc.kill(); } catch (e) { log.debug('session: kill failed, already terminated', { session: id, err: e }); }
     sessions.delete(id);
   }
 });
@@ -1291,7 +1338,7 @@ ipcMain.handle('todos:set', (e, id, todos) => {
   if (todos.length) store[key] = todos;
   else delete store[key];
   try { fs.writeFileSync(todosPath(), JSON.stringify(store, null, 2)); }
-  catch { /* disk full or similar - the notes stay in memory */ }
+  catch (e) { log.warn('todos: not written, the notes stay in memory', { path: todosPath(), key, err: e }); }
   if (win && !win.isDestroyed()) win.webContents.send('todos:changed', key, todos);
   return true;
 });
@@ -1351,11 +1398,18 @@ function createWindow() {
 // fall back to English inside normalize().
 app.whenReady().then(() => {
   i18n.setLocale(settings.get('locale') || app.getLocale());
+  // First line of a run: without it a log file cannot be told apart from the
+  // one before it.
+  log.info('app: started', {
+    version: app.getVersion(), electron: process.versions.electron, platform: process.platform, level: log.level(),
+  });
   createWindow();
 });
 
 app.on('window-all-closed', () => {
-  for (const s of sessions.values()) { try { s.proc.kill(); } catch { /* never mind */ } }
+  for (const s of sessions.values()) {
+    try { s.proc.kill(); } catch (e) { log.debug('shutdown: kill failed', { session: s.id, err: e }); }
+  }
   stopWatchingProjects();
   // The integration directory stays: it is shared with any second instance,
   // whose sessions would otherwise start without the hooks.

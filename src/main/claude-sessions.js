@@ -5,6 +5,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const log = require('./log');
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const cache = new Map(); // filePath -> { mtime, data }
@@ -40,11 +41,13 @@ function watchProjectsDir() {
   let watcher;
   try {
     watcher = fs.watch(PROJECTS_DIR, () => { projectDirsCache = null; });
-  } catch {
+  } catch (e) {
+    log.debug('sessions: project directory not watchable', { dir: PROJECTS_DIR, err: e });
     watchFailedAt = Date.now(); // the age limit carries the invalidation alone
     return;
   }
-  watcher.on('error', () => {
+  watcher.on('error', (e) => {
+    log.debug('sessions: watch on the project directory failed', { dir: PROJECTS_DIR, err: e });
     try { watcher.close(); } catch { /* already gone */ }
     // A successor may have been installed in the meantime; this one is then
     // history and must not take it down with it.
@@ -64,7 +67,7 @@ function projectDirs(opts = {}) {
     return projectDirsCache;
   }
   let dirs;
-  try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { dirs = []; }
+  try { dirs = fs.readdirSync(PROJECTS_DIR); } catch (e) { log.debug('sessions: no project directory', { dir: PROJECTS_DIR, err: e }); dirs = []; }
   // Handed out to every caller, so it is handed out unchangeable.
   projectDirsCache = Object.freeze(dirs);
   projectDirsAt = Date.now();
@@ -103,7 +106,8 @@ function readHeadSignals(filePath) {
     for (const line of lines) {
       if (!line.trim()) continue;
       let entry;
-      try { entry = JSON.parse(line); } catch { continue; } // last line may be cut off
+      // last line may be cut off
+      try { entry = JSON.parse(line); } catch (e) { log.debug('sessions: transcript line not parsable', { file: filePath, err: e }); continue; }
       if (entry.type === 'file-history-snapshot') continue;
       if (!cwd && entry.cwd) cwd = entry.cwd;
       if (!slug && entry.slug) slug = entry.slug;
@@ -120,7 +124,8 @@ function readHeadSignals(filePath) {
       if (cwd && preview && slug) break;
     }
     return { cwd, slug, preview: preview ? preview.replace(/\s+/g, ' ').trim().slice(0, 160) : null };
-  } catch {
+  } catch (e) {
+    log.warn('sessions: head of the transcript not readable', { file: filePath, err: e });
     return { cwd: null, slug: null, preview: null };
   }
 }
@@ -138,7 +143,8 @@ function readTailSlug(filePath) {
     if (!matches) return null;
     const last = matches[matches.length - 1].match(/"slug"\s*:\s*"([^"]+)"/);
     return last ? last[1] : null;
-  } catch {
+  } catch (e) {
+    log.debug('sessions: tail of the transcript not readable', { file: filePath, err: e });
     return null;
   }
 }
@@ -157,11 +163,11 @@ function listClaudeSessions(limit = 200) {
     try {
       files = fs.readdirSync(dirPath)
         .filter((f) => f.endsWith('.jsonl') && TRANSCRIPT_ID_RE.test(path.basename(f, '.jsonl')));
-    } catch { continue; }
+    } catch (e) { log.debug('sessions: project directory not readable', { dir: dirPath, err: e }); continue; }
     for (const f of files) {
       const filePath = path.join(dirPath, f);
       let stat;
-      try { stat = fs.statSync(filePath); } catch { continue; }
+      try { stat = fs.statSync(filePath); } catch (e) { log.debug('sessions: transcript not stattable', { file: filePath, err: e }); continue; }
       if (stat.size < 200) continue; // empty/aborted sessions
       found.push({ id: path.basename(f, '.jsonl'), file: filePath, mtime: stat.mtimeMs, size: stat.size });
     }
@@ -207,11 +213,11 @@ function projectDirsFor(cwd) {
 function eachTranscript(cwd, fn) {
   for (const dir of projectDirsFor(cwd)) {
     let files;
-    try { files = fs.readdirSync(dir); } catch { continue; }
+    try { files = fs.readdirSync(dir); } catch (e) { log.debug('sessions: project directory not readable', { dir, err: e }); continue; }
     for (const f of files) {
       if (!f.endsWith('.jsonl')) continue;
       let stat;
-      try { stat = fs.statSync(path.join(dir, f)); } catch { continue; }
+      try { stat = fs.statSync(path.join(dir, f)); } catch (e) { log.debug('sessions: transcript not stattable', { file: path.join(dir, f), err: e }); continue; }
       fn(path.basename(f, '.jsonl'), stat, path.join(dir, f));
     }
   }
@@ -271,12 +277,18 @@ function rememberTranscript(sessionId, filePath) {
   return filePath;
 }
 
-function scanForTranscript(sessionId, dirs) {
+// Probing: a miss is the normal case and says only that the session is
+// elsewhere, so it is counted rather than logged per directory. Anything that is
+// not a miss - no permission, a broken mount - is the reason the binding fails
+// and goes into `report`, which findTranscriptById puts into its summary.
+function scanForTranscript(sessionId, dirs, report) {
   for (const d of dirs) {
     const fp = path.join(PROJECTS_DIR, d, sessionId + '.jsonl');
     try {
       if (fs.statSync(fp).size > 0) return fp;
-    } catch { /* not here */ }
+    } catch (e) {
+      if (report && !report.problem && e.code !== 'ENOENT') report.problem = e.code || e.message;
+    }
   }
   return null;
 }
@@ -295,19 +307,23 @@ function findTranscriptById(sessionId) {
   if (!sessionId) return null;
   const known = transcriptPaths.get(sessionId);
   if (known) {
-    try { if (fs.statSync(known).size > 0) return known; } catch { /* gone */ }
+    try { if (fs.statSync(known).size > 0) return known; } catch (e) { log.debug('sessions: the remembered transcript is gone', { session: sessionId, file: known, err: e }); }
     transcriptPaths.delete(sessionId);
   }
+  const report = { problem: null };
   const listedAt = projectDirsAt;
-  const hit = scanForTranscript(sessionId, projectDirs());
+  let dirs = projectDirs();
+  const hit = scanForTranscript(sessionId, dirs, report);
   if (hit) return rememberTranscript(sessionId, hit);
 
   const now = Date.now();
   if (projectDirsAt === listedAt && now - lastMissRescanAt >= MISS_RESCAN_MS) {
     lastMissRescanAt = now;
-    const rescanned = scanForTranscript(sessionId, projectDirs({ fresh: true }));
+    dirs = projectDirs({ fresh: true });
+    const rescanned = scanForTranscript(sessionId, dirs, report);
     if (rescanned) return rememberTranscript(sessionId, rescanned);
   }
+  log.debug('sessions: no transcript for this session', { session: sessionId, dirs: dirs.length, err: report.problem });
   return null;
 }
 
@@ -336,11 +352,12 @@ async function readAgentCwd(sessionId, file) {
     CWD_RE.lastIndex = 0;
     while ((m = CWD_RE.exec(text)) !== null) last = m[1];
     if (!last) return null;
-    try { return JSON.parse('"' + last + '"'); } catch { return last; }
-  } catch {
+    try { return JSON.parse('"' + last + '"'); } catch (e) { log.debug('sessions: cwd not unescapable, taken as is', { session: sessionId, value: last, err: e }); return last; }
+  } catch (e) {
+    log.warn('sessions: agent cwd not readable', { session: sessionId, file, err: e });
     return null;
   } finally {
-    if (handle) { try { await handle.close(); } catch { /* already closed */ } }
+    if (handle) { try { await handle.close(); } catch (e) { log.debug('sessions: transcript handle not closable', { session: sessionId, file, err: e }); } }
   }
 }
 

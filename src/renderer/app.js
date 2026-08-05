@@ -27,6 +27,57 @@ for (const type of ['dragover', 'drop']) {
   document.addEventListener(type, (e) => { e.preventDefault(); }, false);
 }
 
+// ---------------------------------------------------------------------------
+// Logging
+//
+// The renderer is sandboxed and has no file access, so its lines go over the
+// bridge into the main process's log file - one file per bug report. The same
+// event repeated inside a few seconds is counted instead of written out again:
+// a failing fit() during a divider drag fires with every mouse move. "Same
+// event" means level, message and all fields - two sessions failing the same
+// way are two events, and the count goes out with the next line so that "twice"
+// and "two hundred times" stay distinguishable.
+// ---------------------------------------------------------------------------
+const logSeen = new Map(); // key -> { at, dropped }
+const LOG_REPEAT_MS = 5000;
+const LOG_KEYS_MAX = 100;
+
+function logLine(level, message, data) {
+  const fields = {};
+  for (const [name, value] of Object.entries(data || {})) {
+    if (!(value instanceof Error)) { fields[name] = value; continue; }
+    // Errors travel as text: whether the bridge can clone an Error depends on
+    // the Electron version, and a log line must not depend on that. The first
+    // frames go along - a TypeError from a changed data format says what broke,
+    // the stack says where.
+    fields[name] = `${value.name}: ${value.message}`;
+    if (value.stack && !fields.stack) fields.stack = String(value.stack).split('\n').slice(1, 4).join(' | ');
+  }
+  const key = `${level}|${message}|${Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(' ')}`;
+  const now = Date.now();
+  const seen = logSeen.get(key);
+  // Delete before setting, here and on the suppressed path: a Map keeps
+  // insertion order and set() on an existing key does not move it, so without
+  // this the message firing most often would be the first one evicted - and
+  // eviction resets its throttle.
+  if (seen && now - seen.at < LOG_REPEAT_MS) {
+    seen.dropped += 1;
+    logSeen.delete(key);
+    logSeen.set(key, seen);
+    return;
+  }
+  if (seen && seen.dropped) fields.repeats = seen.dropped;
+  logSeen.delete(key);
+  logSeen.set(key, { at: now, dropped: 0 });
+  while (logSeen.size > LOG_KEYS_MAX) logSeen.delete(logSeen.keys().next().value);
+  // Called from catch blocks, so it must not throw one of its own: a value the
+  // bridge cannot clone would otherwise skip whatever follows the catch.
+  try { window.api.log(level, message, fields); } catch { /* bridge gone or a value that will not travel */ }
+}
+
+const logDebug = (message, data) => logLine('debug', message, data);
+const logWarn = (message, data) => logLine('warn', message, data);
+
 const $ = (sel) => document.querySelector(sel);
 const sessionListEl = $('#session-list');
 const shellMenu = $('#shell-menu');
@@ -76,7 +127,7 @@ function handleOsc52(term) {
     try {
       const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
       window.api.clipboardWrite(new TextDecoder().decode(bytes));
-    } catch { /* not valid base64 */ }
+    } catch (e) { logDebug('osc52: payload is not valid base64', { err: e }); }
     return true;
   });
 }
@@ -238,8 +289,8 @@ async function retranslate() {
   // the renderer's own copy.
   dbState.lastJson = '';
   await Promise.all([
-    loadDbSchema(true).catch(() => {}),
-    loadUsage(true).catch(() => {}),
+    loadDbSchema(true).catch((e) => logWarn('retranslate: db schema not reloaded', { err: e })),
+    loadUsage(true).catch((e) => logWarn('retranslate: usage not reloaded', { err: e })),
   ]);
   if (!previewOverlay.classList.contains('hidden') && previewState) {
     renderPreviewModes(Boolean(previewState.cache.default
@@ -327,10 +378,12 @@ function loadWebgl(term) {
     webgl = new WebglAddon.WebglAddon();
     webgl.onContextLoss(() => webgl.dispose());
     term.loadAddon(webgl);
-  } catch {
+  } catch (e) {
     // No WebGL context, or activate() failed partway and left the addon
-    // registered with only some of its disposables attached.
-    if (webgl) { try { webgl.dispose(); } catch { /* never mind */ } }
+    // registered with only some of its disposables attached. The terminal falls
+    // back to the DOM renderer and gets slower, which is what the user sees.
+    logWarn('terminal: WebGL renderer not available, falling back to the DOM one', { err: e });
+    if (webgl) { try { webgl.dispose(); } catch (e2) { logDebug('terminal: WebGL addon not disposable', { err: e2 }); } }
   }
 }
 
@@ -421,7 +474,7 @@ function setActive(id) {
     s.itemEl.classList.toggle('active', active);
     if (active) {
       requestAnimationFrame(() => {
-        try { s.fit.fit(); } catch { /* pane may still be 0px */ }
+        try { s.fit.fit(); } catch (e) { logDebug('terminal: fit failed, pane may still be 0px', { session: s.id, err: e }); }
         s.term.focus();
       });
     }
@@ -758,7 +811,7 @@ function renderHistory(s) {
     makeKeyActivatable(el);
     el.addEventListener('click', async (e) => {
       if (e.target.closest('.hist-send')) return;
-      try { await navigator.clipboard.writeText(entry.text); } catch { /* never mind */ }
+      try { await navigator.clipboard.writeText(entry.text); } catch (err) { logWarn('history: entry not copied to the clipboard', { err }); }
       el.classList.add('copied');
       setTimeout(() => el.classList.remove('copied'), 400);
     });
@@ -992,8 +1045,8 @@ async function loadDbSchema(force = false) {
     dbState.sessionId = s.id;
     renderDbPanel();
     if (!dbDiffOverlay.classList.contains('hidden')) renderDbDiff();
-  } catch {
-    /* session gone or similar */
+  } catch (e) {
+    logWarn('dbschema: panel not loaded', { session: s.id, baseline: dbState.baseline, err: e });
   } finally {
     dbState.loading = false;
   }
@@ -1010,7 +1063,9 @@ function setDbBadge(count) {
 // be searched for. The sensor serves from the cache as long as no file moves.
 function startDbPolling() {
   clearInterval(dbTimer);
-  dbTimer = setInterval(() => { loadDbSchema().catch(() => {}); }, 10_000);
+  dbTimer = setInterval(() => {
+    loadDbSchema().catch((e) => logWarn('dbschema: background poll failed', { err: e }));
+  }, 10_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,6 +1093,9 @@ function renderDbPanel() {
       <div class="db-hint">${escapeHtml(t('db.none.hint', { project: '\u0000', path: '\u0001' }))
         .replace('\u0000', `<code>${escapeHtml(view.project || view.root || '')}</code>`)
         .replace('\u0001', '<code>supabase/migrations</code>')}</div>`;
+    // "Nothing detected" and "a plugin broke on the way there" look the same
+    // in the panel otherwise. The warnings tell them apart.
+    dbTablesEl.insertAdjacentHTML('beforeend', warningsHtml(view.schema));
     setDbBadge(0);
     return;
   }
@@ -1047,6 +1105,19 @@ function renderDbPanel() {
   dbSearchEl.classList.remove('hidden');
   renderDbTables(view);
   setDbBadge(view.changeCount || 0);
+}
+
+// What the reader could not make sense of - an unparsable migration, a file it
+// could not read, a plugin that threw. The schema on display is incomplete by
+// exactly this list, which is why it stands next to it and not only in the log.
+function warningsHtml(schema) {
+  const warnings = (schema && schema.warnings) || [];
+  if (!warnings.length) return '';
+  return `
+    <details class="db-warn">
+      <summary>${escapeHtml(t('db.warnings', { count: warnings.length }))}</summary>
+      <ul>${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
+    </details>`;
 }
 
 function renderDbHead(view) {
@@ -1068,11 +1139,7 @@ function renderDbHead(view) {
       <button id="db-refresh" class="icon-btn" title="${escapeHtml(t('db.refresh'))}" aria-label="${escapeHtml(t('db.refresh'))}">↻</button>
     </div>
     <div class="db-baseline-row">${baseSel}</div>
-    ${view.schema.warnings.length ? `
-      <details class="db-warn">
-        <summary>${escapeHtml(t('db.warnings', { count: view.schema.warnings.length }))}</summary>
-        <ul>${view.schema.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
-      </details>` : ''}`;
+    ${warningsHtml(view.schema)}`;
 
   dbHeadEl.querySelector('#db-refresh').addEventListener('click', () => loadDbSchema(true));
   const sel = dbHeadEl.querySelector('#db-baseline');
@@ -1678,10 +1745,10 @@ async function loadUsage(force = false) {
 // Keep running in the background so the dot on the tab is right without having
 // to keep the tab open
 function startUsagePolling() {
-  loadUsage(true).catch(() => { /* offline or similar */ });
+  loadUsage(true).catch((e) => logWarn('usage: first load failed, offline or similar', { err: e }));
   clearInterval(usageTimer);
   usageTimer = setInterval(() => {
-    loadUsage().catch(() => { /* never mind */ });
+    loadUsage().catch((e) => logWarn('usage: background poll failed', { err: e }));
   }, 120_000);
 }
 
@@ -2188,7 +2255,7 @@ window.api.onInfo((info) => {
 function fitActive() {
   if (panelZoomed) return;
   const s = activeId && sessions.get(activeId);
-  if (s) { try { s.fit.fit(); } catch { /* pane may still be 0px */ } }
+  if (s) { try { s.fit.fit(); } catch (e) { logDebug('terminal: fit failed, pane may still be 0px', { session: s.id, err: e }); } }
 }
 
 function setupDivider(dividerEl, panelEl, growsRight) {

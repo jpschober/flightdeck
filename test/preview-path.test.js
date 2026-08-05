@@ -22,6 +22,13 @@ const SRC = path.join(__dirname, '..', 'src', 'main', 'main.js');
 // The stub returns the key itself, so the assertions do not depend on wording.
 const t = (key, params) => (params ? `${key}:${params.message}` : key);
 
+// Most of what these tests provoke is a refused read, which the preview logs.
+// The lines are collected instead of written so the output stays readable; what
+// the logger itself does with them is test/log.test.js's business.
+const logged = [];
+const log = { error: rec('error'), warn: rec('warn'), info: rec('info'), debug: rec('debug') };
+function rec(level) { return (message, data) => logged.push({ level, message, data }); }
+
 function loadPreview(pathModule = path) {
   const src = fs.readFileSync(SRC, 'utf8');
   const start = src.indexOf('const MAX_PREVIEW');
@@ -32,9 +39,9 @@ function loadPreview(pathModule = path) {
   for (const name of ['isInside', 'resolveInRoot', 'readForPreview', 'previewFile']) {
     assert.ok(block.includes(`function ${name}`), `${name} is not in the extracted block`);
   }
-  const make = new Function('fs', 'path', 't', 'run',
+  const make = new Function('fs', 'path', 't', 'run', 'log',
     `${block}\nreturn { isInside, resolveInRoot, readForPreview, previewFile };`);
-  return make(fs, pathModule, t, run);
+  return make(fs, pathModule, t, run, log);
 }
 
 const { resolveInRoot, previewFile } = loadPreview();

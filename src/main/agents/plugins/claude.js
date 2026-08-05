@@ -33,6 +33,7 @@
 const fs = require('fs');
 const path = require('path');
 const { findTranscriptById } = require('../../claude-sessions');
+const log = require('../../log');
 
 const id = 'claude';
 const label = 'Claude Code';
@@ -79,7 +80,7 @@ const META_CACHE_MAX = 400;
 // only read when its mtime has moved.
 function readMeta(file) {
   let stat;
-  try { stat = fs.statSync(file); } catch { return null; }
+  try { stat = fs.statSync(file); } catch (e) { log.debug('agents/claude: meta file gone', { file, err: e }); return null; }
   const hit = metaCache.get(file);
   if (hit && hit.mtimeMs === stat.mtimeMs) return hit.data;
 
@@ -93,7 +94,8 @@ function readMeta(file) {
       spawnDepth: parsed.spawnDepth || 1,
       startedAt: stat.mtimeMs,
     };
-  } catch {
+  } catch (e) {
+    log.debug('agents/claude: meta file not parsable, half-written or a changed format', { file, err: e });
     return null; // half-written file - try again on the next pass
   }
   metaCache.delete(file);
@@ -144,7 +146,7 @@ function applyLine(state, line) {
   if (!notif && !line.includes('"SendMessage"')) return;
 
   let entry;
-  try { entry = JSON.parse(line); } catch { return; }
+  try { entry = JSON.parse(line); } catch (e) { log.debug('agents/claude: transcript line not parsable', { err: e }); return; }
   const at = Date.parse(entry.timestamp) || Date.now();
 
   if (notif) {
@@ -175,7 +177,7 @@ function applyLine(state, line) {
 
 function scanFile(state, file) {
   let stat;
-  try { stat = fs.statSync(file); } catch { return; }
+  try { stat = fs.statSync(file); } catch (e) { log.debug('agents/claude: transcript not stattable', { file, err: e }); return; }
 
   let from = state.offsets.get(file) || 0;
   if (stat.size < from) from = 0; // file replaced or truncated -> start over
@@ -187,7 +189,10 @@ function scanFile(state, file) {
   try {
     const fd = fs.openSync(file, 'r');
     try { n = fs.readSync(fd, buf, 0, len, from); } finally { fs.closeSync(fd); }
-  } catch {
+  } catch (e) {
+    // Nothing new is read: stop and resume signals stay missing, agents keep
+    // the state they had.
+    log.warn('agents/claude: transcript not readable', { file, from, len, err: e });
     return;
   }
 
@@ -241,7 +246,7 @@ function read(ctx) {
   if (!dir) return { agents: [] };
 
   let entries;
-  try { entries = fs.readdirSync(dir); } catch { return { agents: [] }; }
+  try { entries = fs.readdirSync(dir); } catch (e) { log.debug('agents/claude: no subagents directory', { dir, session: ctx.claudeSessionId, err: e }); return { agents: [] }; }
 
   const metas = [];
   for (const f of entries) {
@@ -272,7 +277,7 @@ function read(ctx) {
     try {
       const stat = fs.statSync(path.join(dir, `agent-${m.id}.jsonl`));
       if (stat.mtimeMs > lastActivity) lastActivity = stat.mtimeMs;
-    } catch { /* transcript not created yet */ }
+    } catch (e) { log.debug('agents/claude: agent transcript not created yet', { agent: m.id, dir, err: e }); }
 
     return {
       id: m.id,

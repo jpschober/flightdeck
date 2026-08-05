@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
+const log = require('./log');
 
 let store = null;
 
@@ -17,7 +18,8 @@ function file() {
 function load() {
   if (!store) {
     try { store = JSON.parse(fs.readFileSync(file(), 'utf8')); }
-    catch { store = {}; } // no file yet, or unreadable - start with defaults
+    // no file yet, or unreadable - start with defaults
+    catch (e) { log.debug('settings: not readable, using defaults', { path: file(), err: e }); store = {}; }
   }
   return store;
 }
@@ -31,7 +33,7 @@ function set(key, value) {
   const s = load();
   s[key] = value;
   try { fs.writeFileSync(file(), JSON.stringify(s, null, 2), 'utf8'); }
-  catch { /* disk full or similar - the setting stays for this run */ }
+  catch (e) { log.warn('settings: not written, the setting stays for this run', { path: file(), key, err: e }); }
 }
 
 module.exports = { get, set };

@@ -2,11 +2,15 @@
 // Collects git and pull request information for a working directory.
 const { execFile } = require('child_process');
 const fs = require('fs');
+const log = require('./log');
 
 function run(cmd, args, cwd, timeout = 8000) {
   return new Promise((resolve) => {
     execFile(cmd, args, { cwd, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-      if (err) resolve(null);
+      // `null` is the answer for "nothing there" as well as for "gh is not set
+      // up" and "git timed out". The callers cannot tell those apart, so the
+      // reason is recorded here.
+      if (err) { log.debug('run: command failed', { cmd, args: args.join(' '), cwd, err }); resolve(null); }
       else resolve(stdout.toString());
     });
   });
@@ -75,7 +79,8 @@ async function fetchPrJson(cwd, fields) {
   if (!out) return null; // no PR / gh not set up
   try {
     return JSON.parse(out);
-  } catch {
+  } catch (e) {
+    log.warn('gitinfo: gh returned unparsable JSON', { cwd, fields, err: e });
     return null;
   }
 }

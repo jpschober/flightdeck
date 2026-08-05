@@ -31,8 +31,16 @@ for (const fn of ['queueOutput', 'flushOutput', 'ackOutput', 'resetFlowControl']
 
 const sent = [];
 const ptyLog = [];
+// Both extracted blocks log in their catch blocks - flow control here, the OSC
+// dispatch below. Without this a test that reaches one of them would fail with
+// a ReferenceError instead of its assertion; what the logger does with a line
+// is test/log.test.js's business.
+const logged = [];
+const rec = (level) => (message, data) => logged.push({ level, message, data });
+const log = { error: rec('error'), warn: rec('warn'), info: rec('info'), debug: rec('debug') };
+
 const sandbox = {
-  setTimeout, clearTimeout, console,
+  setTimeout, clearTimeout, console, log,
   sessions: new Map(),
   win: { isDestroyed: () => false, webContents: { send: (ch, id, data) => sent.push({ ch, id, data }) } },
   extractCwd: () => null,
@@ -303,7 +311,7 @@ assert.ok(!/while \(\(m = OSC(133|CMD|SESS|_TITLE|9)_RE\.exec/.test(oscBlock),
 
 const calls = [];
 const oscSandbox = {
-  console, Buffer, setTimeout, clearTimeout, Date,
+  console, Buffer, setTimeout, clearTimeout, Date, log,
   win: { isDestroyed: () => false, webContents: { send: (ch, id, v) => calls.push(`${ch}:${v}`) } },
   beginAgentBinding: (s, cmd) => calls.push('bind:' + cmd),
   bindAgentSession: (s, id) => calls.push('session:' + id),
