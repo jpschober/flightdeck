@@ -17,9 +17,20 @@ const os = require('os');
 const MAIN = path.join(__dirname, '..', 'src', 'main');
 const registry = require(path.join(MAIN, 'plugin-registry.js'));
 
-// The logger writes warnings to the console; the test runner owns it here.
-console.error = () => {};
-console.log = () => {};
+// Some of these tests drive the real logger, which writes warnings to the
+// console. Silencing it stays around the calls that do: a failure anywhere else
+// keeps the output that explains it.
+async function quiet(fn) {
+  const { error, log } = console;
+  console.error = () => {};
+  console.log = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.error = error;
+    console.log = log;
+  }
+}
 
 /** A plugin is an id, a label and a detect() - nothing else matters here. */
 function plugin(id, detect) {
@@ -71,6 +82,49 @@ test('a failure without onError is still survivable', async () => {
   assert.deepStrictEqual(found.map((f) => f.plugin.id), ['sound']);
 });
 
+test('an onError that throws does not take the run down either', async () => {
+  const seen = [];
+  const found = await registry.detectAll(
+    [
+      // `throw null` is what makes this reachable in practice: a reporter that
+      // reads `err.message` runs into a TypeError on it.
+      plugin('throwsNull', () => { throw null; }),
+      claims('sound', 0.7),
+      plugin('broken', () => { throw new Error('detect exploded'); }),
+    ],
+    {},
+    {
+      onError: (p, e) => {
+        seen.push(p.id);
+        throw new Error(`reporting ${e.message} failed`);
+      },
+    },
+  );
+
+  assert.deepStrictEqual(found.map((f) => f.plugin.id), ['sound']);
+  assert.deepStrictEqual(seen, ['throwsNull', 'broken'], 'every failure was still offered');
+});
+
+test('onError stays silent for a plugin that simply does not claim', async () => {
+  // "No candidate" and "detection failed" are different statements - the schema
+  // panel turns the second one into a warning for the user.
+  const seen = [];
+  const found = await registry.detectAll(
+    [
+      plugin('nothing', async () => null),
+      plugin('undefinedResult', async () => undefined),
+      claims('zero', 0),
+      claims('negative', -1),
+      claims('yes', 0.4),
+    ],
+    {},
+    { onError: (p) => seen.push(p.id) },
+  );
+
+  assert.deepStrictEqual(found.map((f) => f.plugin.id), ['yes']);
+  assert.deepStrictEqual(seen, [], 'not claiming is not a failure');
+});
+
 test('confidence of zero or less is not a candidate', async () => {
   const found = await registry.detectAll(
     [
@@ -90,15 +144,16 @@ test('evidence and the extra keys are carried over, missing ones as an empty arr
   const [withWatch, withoutWatch] = await registry.detectAll(
     [
       claims('watcher', 0.9, { watch: ['supabase/migrations'] }),
-      claims('quiet', 0.5),
+      claims('silent', 0.5),
     ],
     {},
-    { extraKeys: ['watch'] },
+    { extraArrayKeys: ['watch'] },
   );
 
   assert.deepStrictEqual(withWatch.watch, ['supabase/migrations']);
   assert.deepStrictEqual(withWatch.evidence, ['watcher said so']);
   assert.deepStrictEqual(withoutWatch.watch, [], 'a plugin without watch does not produce undefined');
+  assert.notStrictEqual(withWatch.watch, withoutWatch.watch, 'no entry shares its list with another');
 });
 
 test('keys that were not asked for do not reach the result', async () => {
@@ -117,7 +172,7 @@ test('pluginInfo is what the surface gets, and null for no winner', async () => 
   const [winner] = await registry.detectAll(
     [claims('supabase', 0.8, { watch: ['supabase'] })],
     {},
-    { extraKeys: ['watch'] },
+    { extraArrayKeys: ['watch'] },
   );
 
   assert.deepStrictEqual(registry.pluginInfo(winner), {
@@ -172,7 +227,10 @@ test('a failing agent plugin leaves the view empty instead of throwing', async (
   });
 
   try {
-    assert.strictEqual(await agents.getAgentView({ cwd: '/repo' }), null);
+    // The sensor logs the failure, so this one call is silenced.
+    await quiet(async () => {
+      assert.strictEqual(await agents.getAgentView({ cwd: '/repo' }), null);
+    });
   } finally {
     agents.PLUGINS.length = 0;
     agents.PLUGINS.push(...original);
@@ -203,6 +261,33 @@ test('the schema reader keeps the watch paths of the winning plugin', async () =
       confidence: 0.9,
       evidence: ['a config file'],
     });
+  } finally {
+    dbschema.PLUGINS.length = 0;
+    dbschema.PLUGINS.push(...original);
+    dbschema.clearCache();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a plugin that throws a non-Error still leaves the schema panel standing', async () => {
+  // The schema sensor builds its warning from `e.message`. On `throw null` that
+  // is a TypeError inside the reporter - and the panel, which exists to show
+  // exactly this failure, would be the thing that disappears.
+  const dbschema = require(path.join(MAIN, 'dbschema', 'index.js'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-registry-'));
+  const original = dbschema.PLUGINS.slice();
+  dbschema.PLUGINS.length = 0;
+  dbschema.PLUGINS.push({
+    id: 'throwsNull',
+    label: 'ThrowsNull',
+    detect() { throw null; },
+    read() { throw new Error('never reached'); },
+  });
+
+  try {
+    const view = await quiet(() => dbschema.getSchemaView(root, {}));
+    assert.strictEqual(view.ok, true, 'the view came back instead of rejecting');
+    assert.strictEqual(view.plugin, null);
   } finally {
     dbschema.PLUGINS.length = 0;
     dbschema.PLUGINS.push(...original);

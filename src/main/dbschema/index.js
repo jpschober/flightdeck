@@ -61,7 +61,7 @@ function cachePut(key, entry) {
 async function detectAll(provider, warnings) {
   return registry.detectAll(PLUGINS, provider, {
     // The plugin names the files its schema depends on; the cache stamps them.
-    extraKeys: ['watch'],
+    extraArrayKeys: ['watch'],
     onError: (plugin, e) => {
       log.warn('dbschema: detection failed', { plugin: plugin.id, root: provider.root, kind: provider.kind, err: e });
       if (warnings) warnings.push(t('db.detectFailed', { plugin: plugin.label, message: e.message }));
