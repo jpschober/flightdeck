@@ -18,6 +18,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 // The logger writes warnings to the console; the test runner owns it here.
+// Put back afterwards, otherwise a later failure loses its diagnosis.
+const realConsoleError = console.error;
+const realConsoleLog = console.log;
 console.error = () => {};
 console.log = () => {};
 
@@ -65,6 +68,8 @@ const dbschema = require(path.join(__dirname, '..', 'src', 'main', 'dbschema', '
 test.after(() => {
   child.execFile = realExecFile;
   Date.now = realNow;
+  console.error = realConsoleError;
+  console.log = realConsoleLog;
 });
 
 // ---------------------------------------------------------------------------
@@ -74,9 +79,10 @@ test.after(() => {
 const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-git-'));
 const parallel = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-git-'));
 const other = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-git-'));
+const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-git-'));
 
 test.after(() => {
-  for (const dir of [repo, parallel, other]) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of [repo, parallel, other, shared]) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function gitAnswers(root) {
@@ -143,12 +149,24 @@ test('a second working directory gets its own root, and both age out', async () 
   assert.strictEqual(aged.calls.length, 3, `after the lifetime it is asked again: ${aged.calls.join(', ')}`);
 });
 
+test('two sessions in the same working directory share one root lookup', async () => {
+  answers = gitAnswers(shared);
+  const both = await counted(() => Promise.all([
+    gitinfo.getGitInfo(shared),
+    gitinfo.getGitInfo(shared),
+  ]));
+  const toplevel = both.calls.filter((c) => c === 'git rev-parse --show-toplevel');
+  assert.strictEqual(toplevel.length, 1, `cold cache, one lookup: ${both.calls.join(', ')}`);
+  assert.deepStrictEqual(both.value.map((g) => g.root), [shared, shared]);
+});
+
 // ---------------------------------------------------------------------------
 // baselineOptions: everything but the HEAD lookup hangs on the commit
 // ---------------------------------------------------------------------------
 
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
+const HEAD_C = 'e'.repeat(40);
 const BRANCH_POINT = 'c'.repeat(40);
 const PR_POINT = 'd'.repeat(40);
 
@@ -235,6 +253,29 @@ test('a language switch drops the translated labels', async () => {
 test('without a commit there is no baseline and no further call', async () => {
   answers = { 'git rev-parse HEAD': '' };
   const empty = await counted(() => dbschema.baselineOptions('/fresh', PR));
-  assert.deepStrictEqual(empty.value, []);
+  assert.deepStrictEqual([...empty.value], []);
   assert.deepStrictEqual(empty.calls, ['git rev-parse HEAD']);
+});
+
+test('two panels on the same repository share one run over the merge bases', async () => {
+  answers = baselineAnswers(HEAD_C); // a commit nobody has asked about yet
+  const both = await counted(() => Promise.all([
+    dbschema.baselineOptions('/repo', PR),
+    dbschema.baselineOptions('/repo', PR),
+  ]));
+  const mergeBases = both.calls.filter((c) => c.startsWith('git merge-base'));
+  assert.strictEqual(mergeBases.length, 2, `one per baseline, not one per caller: ${both.calls.join(', ')}`);
+  assert.strictEqual(both.value[0], both.value[1], 'both callers get the same list');
+});
+
+test('the options cannot be changed by whoever receives them', async () => {
+  const options = await dbschema.baselineOptions('/repo', PR);
+  assert.ok(Object.isFrozen(options), 'the list is frozen');
+  assert.ok(Object.isFrozen(options[0]), 'the entries are frozen too');
+  assert.throws(() => options.push({ mode: 'x' }), TypeError);
+  assert.throws(() => { options[0].ref = 'nonsense'; }, TypeError);
+
+  // What the caller does get: reading, and copies of its own.
+  assert.strictEqual(options.find((o) => o.mode === 'head').ref, HEAD_C);
+  assert.strictEqual([...options].sort((a, b) => a.mode.localeCompare(b.mode)).length, options.length);
 });

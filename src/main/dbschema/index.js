@@ -180,6 +180,7 @@ async function defaultBranch(root) {
 // The lifetime on top of that covers the one change the key does not see: a
 // fetch that moves `origin/<base>` can move the merge base without HEAD moving.
 const baselineCache = new Map(); // root|head|pr -> { at, options }
+const baselineInFlight = new Map(); // same key -> Promise
 const BASELINE_MAX = 60;
 const BASELINE_TTL = 300_000;
 
@@ -189,24 +190,43 @@ const BASELINE_TTL = 300_000;
  * in total" (branch point) are different questions, and when reviewing a PR the
  * second one is the right one.
  *
- * The returned array is shared with the cache - callers read it, they do not
- * change it.
+ * The result is shared with the cache and therefore frozen: a caller that sorts
+ * or splices it in place would otherwise damage every later pass, silently.
  */
 async function baselineOptions(root, pr, force = false) {
   const headOut = await run('git', ['rev-parse', 'HEAD'], root);
   const head = headOut && headOut.trim() ? headOut.trim() : null;
-  if (!head) return []; // no commit, so no "before"
+  if (!head) return Object.freeze([]); // no commit, so no "before"
 
   const key = `${root}|${head}|${pr ? pr.number : ''}|${pr ? pr.baseRefName : ''}`;
   const hit = baselineCache.get(key);
   if (hit && !force && Date.now() - hit.at < BASELINE_TTL) return hit.options;
 
+  // Two panels on the same repository can reach the cold cache in the same
+  // moment; the second one waits for the first instead of running the same
+  // merge bases again. The HEAD lookup above has already happened for both -
+  // it is what produces the key. A forced refresh stays out of this and does
+  // its own work.
+  const running = baselineInFlight.get(key);
+  if (running && !force) return running;
+  if (force) return computeBaselines(root, pr, head, key);
+
+  const pending = computeBaselines(root, pr, head, key);
+  baselineInFlight.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    baselineInFlight.delete(key);
+  }
+}
+
+async function computeBaselines(root, pr, head, key) {
   const options = [];
   const seen = new Set();
   const push = (opt) => {
     if (!opt.ref || seen.has(opt.ref)) return;
     seen.add(opt.ref);
-    options.push(opt);
+    options.push(Object.freeze(opt));
   };
 
   // A branch point that sits on HEAD is not a baseline of its own: you are
@@ -250,8 +270,10 @@ async function baselineOptions(root, pr, force = false) {
     hint: t('baseline.head.hint'),
   });
 
-  putBounded(baselineCache, key, { at: Date.now(), options }, BASELINE_MAX);
-  return options;
+  // Handed out to every caller, so it is handed out unchangeable.
+  const frozen = Object.freeze(options);
+  putBounded(baselineCache, key, { at: Date.now(), options: frozen }, BASELINE_MAX);
+  return frozen;
 }
 
 // ---------------------------------------------------------------------------

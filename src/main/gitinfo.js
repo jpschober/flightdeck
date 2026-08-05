@@ -46,14 +46,30 @@ function parseStatus(porcelain) {
 // four-second refresh that is one process per working directory per minute
 // instead of fifteen.
 const rootCache = new Map(); // cwd -> { root, at }
+const rootInFlight = new Map(); // cwd -> Promise
 const ROOT_TTL = 60_000;
 const ROOT_CACHE_MAX = 64;
 
 async function gitRoot(cwd) {
   const hit = rootCache.get(cwd);
-  const now = Date.now();
-  if (hit && now - hit.at < ROOT_TTL) return hit.root;
+  if (hit && Date.now() - hit.at < ROOT_TTL) return hit.root;
 
+  // Several sessions can share a working directory, and on a cold cache they
+  // all arrive at the same tick. One process answers them all.
+  const running = rootInFlight.get(cwd);
+  if (running) return running;
+
+  const pending = lookupRoot(cwd);
+  rootInFlight.set(cwd, pending);
+  try {
+    return await pending;
+  } finally {
+    rootInFlight.delete(cwd);
+  }
+}
+
+async function lookupRoot(cwd) {
+  const now = Date.now();
   const out = await run('git', ['rev-parse', '--show-toplevel'], cwd);
   const root = out && out.trim() ? out.trim().replace(/\//g, path.sep) : null;
   // A failed or empty answer is not cached: it is a timeout or a directory
