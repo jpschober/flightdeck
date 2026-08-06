@@ -172,8 +172,10 @@ async function run(cmd, args, cwd, timeout = 8000) {
 //
 // The path is the last field of a record; how many space-separated fields come
 // before it follows from the record's first character (git-status(1), "Porcelain
-// Format Version 2"). `?` (untracked) and `!` (ignored) carry the path right
-// after their one-character type.
+// Format Version 2"). `?` (untracked) carries the path right after its
+// one-character type. `!` (ignored) does the same, but only ever appears with
+// `--ignored`, which nobody passes; it lands in the same place as a record type
+// git has yet to invent - dropped.
 const V2_FIELDS = { 1: 8, 2: 9, u: 10 };
 
 /** The rest of a record after `count` space-separated fields, or null. */
@@ -193,6 +195,10 @@ function afterFields(record, count) {
 // afterwards matches nothing. `-z` writes the path as it is on disk, and it
 // puts a rename's original path in a record of its own - the short format
 // separates the two paths with ` -> `, which a file name may contain itself.
+//
+// The format arrived in git 2.11 (2016). An older git rejects the option, and
+// `exec` turns that into the same `null` as any other failed call: the file
+// list stays empty, the rest of the panel keeps working.
 function parseStatus(porcelain) {
   const files = [];
   const records = porcelain.split('\0');
@@ -203,8 +209,8 @@ function parseStatus(porcelain) {
     if (kind === '#') continue; // branch headers, were they ever asked for
     let xy;
     let p;
-    if (kind === '?' || kind === '!') {
-      xy = kind + kind;
+    if (kind === '?') {
+      xy = '??';
       p = record.slice(2);
     } else {
       const fields = V2_FIELDS[kind];

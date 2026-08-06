@@ -19,6 +19,14 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { getGitInfo, parseStatus, run } = require('../src/main/gitinfo');
 
+// The temporary repository must not inherit whoever runs the tests. A global
+// `commit.gpgsign=true` makes the commit below fail, and that failure has
+// nothing to do with what is being tested. Set on the process, so the git
+// processes gitinfo.js starts are covered as well; what the repository needs is
+// written into its own config.
+process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+process.env.GIT_CONFIG_SYSTEM = '/dev/null';
+
 // The object hashes are not read; one stand-in does for all of them.
 const B = '0'.repeat(40);
 const rec = (...parts) => parts.join('\0') + '\0';
@@ -48,12 +56,11 @@ test('the staged half decides the code, an unchanged half is a dot', () => {
   assert.deepStrictEqual(files.map((f) => f.untracked), [false, false, false, false]);
 });
 
-test('untracked and ignored records carry the path right behind their type', () => {
-  const files = parseStatus(rec('? untracked ä.txt', '? dir ö/', '! build/'));
+test('an untracked record carries the path right behind its type', () => {
+  const files = parseStatus(rec('? untracked ä.txt', '? dir ö/'));
   assert.deepStrictEqual(files.map((f) => [f.status, f.path, f.untracked, f.dir]), [
     ['?', 'untracked ä.txt', true, false],
     ['?', 'dir ö/', true, true],
-    ['!', 'build/', false, true],
   ]);
 });
 
@@ -66,8 +73,10 @@ test('an unmerged record has three more fields before its path', () => {
 test('empty output and records nobody asked for come to nothing', () => {
   assert.deepStrictEqual(parseStatus(''), []);
   assert.deepStrictEqual(parseStatus('\0\0'), []);
-  const headers = parseStatus(rec('# branch.oid ' + B, '# branch.head main', entry('.M', 'a.txt')));
-  assert.deepStrictEqual(headers.map((f) => f.path), ['a.txt']);
+  // Branch headers and ignored entries need an option nobody passes; if one
+  // ever arrives, it is dropped rather than turned into a file.
+  const extra = parseStatus(rec('# branch.oid ' + B, '# branch.head main', '! build/', entry('.M', 'a.txt')));
+  assert.deepStrictEqual(extra.map((f) => f.path), ['a.txt']);
   // A truncated record is dropped rather than turned into a path.
   assert.deepStrictEqual(parseStatus(rec('1 .M N... 100644')), []);
 });
@@ -103,7 +112,7 @@ test('the delivered path is the file on disk and a pathspec git matches', async 
 
     // The preview in main.js hands this path to git as a literal pathspec. A
     // C-quoted name matches nothing there and the diff stays empty.
-    const diff = await run('git', ['--literal-pathspecs', 'diff', '--no-color', 'HEAD', '--', tracked], repo);
+    const diff = await run('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', 'HEAD', '--', tracked], repo);
     assert.match(diff, /^\+changed$/m, `no diff for ${tracked}`);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
