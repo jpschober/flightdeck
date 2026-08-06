@@ -228,7 +228,7 @@ test('the ack guard rejects everything that is not a non-negative integer', () =
   // The guard as it stands in ipc.js, checked against the values that would
   // inflate `unacked` and pause the session for good.
   const ipcSrc = fs.readFileSync(path.join(MAIN, 'ipc.js'), 'utf8');
-  const guard = ipcSrc.match(/ipcMain\.on\('session:ack'[\s\S]*?\n\}\);/);
+  const guard = ipcSrc.match(/ipcMain\.on\('session:ack'[\s\S]*?\n\s*\}\);/);
   assert.ok(guard, "the session:ack handler was not found");
   const check = vm.runInContext(
     `(function (chars) { return ${guard[0].match(/if \(s && !s\.exited && ([^)]*\)?[^)]*)\) /)[1]}; })`,

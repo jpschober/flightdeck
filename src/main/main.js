@@ -4,7 +4,7 @@ const { app, BrowserWindow, shell: electronShell } = require('electron');
 const path = require('path');
 const { stopWatchingProjects } = require('./claude-sessions');
 const { killAll, refreshAll, resetFlowControl } = require('./sessions');
-const { isExternalUrl } = require('./ipc');
+const { registerIpc, isExternalUrl } = require('./ipc');
 const { setWindow } = require('./window');
 const i18n = require('../i18n');
 const settings = require('./settings');
@@ -71,6 +71,10 @@ app.whenReady().then(() => {
   log.info('app: started', {
     version: app.getVersion(), electron: process.versions.electron, platform: process.platform, level: log.level(),
   });
+  // Before createWindow(): the preload asks for i18n:init synchronously while
+  // the document is still parsing, and the locale above has to be the one that
+  // handler reports.
+  registerIpc();
   createWindow();
 });
 
