@@ -104,9 +104,10 @@ When the shell starts, its prompt is extended (PowerShell via
 
 The main process parses these sequences out of the PTY stream and derives from
 them the directory, branch, changed files, PR (refresh 4 s, PR cache 45 s) and
-the busy/idle state. For the agent TUIs we watch (`claude`, `codex`, `aider`)
-one more rule applies: >2 s of silence while a command is running = "input
-expected" (blue dot), because these TUIs render continuously while working.
+the busy/idle state. For the agent TUIs one more rule applies: >2 s of silence
+while a command is running = "input expected" (blue dot), because these TUIs
+render continuously while working. Which command lines are agent TUIs comes
+from the agent plugins (`claude`, `codex`, `aider`), see below.
 
 ### Running agents
 
@@ -118,6 +119,8 @@ what they are working on.
 ```
 src/main/agents/index.js          Sensor: asks the plugins, picks the most confident one
 src/main/agents/plugins/claude.js Claude Code: detection + counting
+src/main/agents/plugins/codex.js  Codex: command pattern only
+src/main/agents/plugins/aider.js  Aider: command pattern only
 ```
 
 **Plugins.** As with the DB schema, the sensor knows nothing about the
@@ -127,6 +130,7 @@ directories. Detection *and* counting live in the plugin:
 ```js
 {
   id, label,
+  commandPattern,                                  // RegExp on the command line
   detect(ctx) -> { confidence, evidence[] } | null,
   read(ctx)   -> { agents: [...] },
 }
@@ -138,6 +142,14 @@ business — the Claude plugin recognises itself by the bound session, a plugin
 for a different agent CLI could go by the command. If a plugin claims
 responsibility, it also delivers the count. Adding another one means: create a
 file under `plugins/`, register it in `PLUGINS`, done.
+
+`commandPattern` answers a second question, and for the whole app: which CLIs
+are agents at all. `agents/index.js` exports `isAgentCommand(cmd)`, which asks
+every plugin's pattern; the attention heuristic in `main.js` goes through it,
+so a new plugin brings the recognition of its CLI along with the counting.
+The Codex and Aider plugins consist of that pattern alone — they keep the state
+detection for those CLIs, `detect()` returns `null` and they count nothing.
+What is watched and what is not is written down in `test/agent-commands.test.js`.
 
 **Claude plugin.** Claude Code stores every subagent of a session as its own
 pair under `~/.claude/projects/<project>/<session>/subagents/`:

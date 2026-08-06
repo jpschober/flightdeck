@@ -13,7 +13,7 @@ const pty = require('@lydell/node-pty');
 const { getGitInfo, getPrInfo, run } = require('./gitinfo');
 const { getUsage } = require('./usage');
 const { getSchemaView, clearCache: clearSchemaCache } = require('./dbschema');
-const { getAgentView } = require('./agents');
+const { getAgentView, isAgentCommand } = require('./agents');
 const i18n = require('../i18n');
 const { t } = i18n;
 const settings = require('./settings');
@@ -370,9 +370,9 @@ const OSC_EVENT_RE = new RegExp(
   [OSCCMD_RE, OSCSESS_RE, OSC133_RE, OSC_TITLE_RE, OSC9_RE]
     .map((r) => `(?:${r.source})`).join('|'), 'g');
 
-// Commands for which "quiet = waiting for input" holds (agentic TUIs:
-// working = continuously rendering a spinner/timer/streaming output)
-const WATCHED_CMD_RE = /(^|[\s\\/"'])(claude|codex|aider)([\s"'.]|$)/i;
+// "Quiet = waiting for input" holds for the agent CLIs (agentic TUIs: working =
+// continuously rendering a spinner/timer/streaming output). Which command lines
+// those are is the agent plugins' business - isAgentCommand() asks them.
 const ATTENTION_QUIET_MS = 2000;
 
 function normalizeOscPath(raw) {
@@ -431,7 +431,7 @@ function applyStateFromData(session, text, tailLen, rawData) {
       let cmd = '';
       try { cmd = Buffer.from(g.cmdB64, 'base64').toString('utf8'); } catch (e) { log.debug('osc7770: command line not decodable', { session: session.id, err: e }); }
       session.currentCmd = cmd;
-      session.cmdWatched = WATCHED_CMD_RE.test(cmd);
+      session.cmdWatched = isAgentCommand(cmd);
       if (session.cmdWatched) {
         beginAgentBinding(session, cmd);
         // Freshly started: the agent shows its interface and waits for the first

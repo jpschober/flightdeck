@@ -5,6 +5,7 @@
 // that I can count?") and the counting. The sensor only knows this interface:
 //
 //   id, label
+//   commandPattern  RegExp matching the command line that starts the agent
 //   detect(ctx) -> { confidence, evidence[] } | null
 //   read(ctx)   -> { agents: [...] }
 //
@@ -44,8 +45,19 @@ const label = 'Claude Code';
 // on a long build writes nothing in between either.
 const SILENCE_MS = 15 * 60 * 1000;
 
-// Detection without a bound session (see detect)
-const CLAUDE_CMD_RE = /(?:^|[\s/\\])claude(?:\s|$)/i;
+// The command line that starts this agent. It answers "is this CLI an agent?"
+// for the whole app - the attention heuristic in main.js asks the plugins
+// through agents/index.js, and detect() below uses the same pattern for a
+// terminal without a bound session.
+//
+// Word boundaries on both sides, so `claudia` and `myclaude` stay out; a path
+// (`/usr/local/bin/claude`), a launcher (`npx claude`) and a quoted or
+// suffixed form (`"claude"`, `claude.exe`) count as the command. Anything that
+// merely mentions the word is in as well: `echo claude` matches.
+//
+// Not a global pattern - `test()` on one of those carries lastIndex from call
+// to call and would skip every other match.
+const commandPattern = /(^|[\s\\/"'])claude([\s"'.]|$)/i;
 
 const META_RE = /^agent-(.+)\.meta\.json$/;
 const NOTIF_TASK_RE = /<task-id>([^<]+)<\/task-id>/;
@@ -230,7 +242,7 @@ function detect(ctx) {
   // (started without shell integration). Nothing can be counted then - but the
   // responsibility is settled, and a plugin that can do more here wins with a
   // higher value.
-  if (ctx.command && CLAUDE_CMD_RE.test(ctx.command)) {
+  if (ctx.command && commandPattern.test(ctx.command)) {
     return { confidence: 0.3, evidence: ['`claude` command, no session bound'] };
   }
   return null;
@@ -298,4 +310,4 @@ function read(ctx) {
   return { agents };
 }
 
-module.exports = { id, label, detect, read };
+module.exports = { id, label, commandPattern, detect, read };

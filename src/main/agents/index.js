@@ -7,6 +7,7 @@
 // knows the plugin interface:
 //
 //   id, label
+//   commandPattern  RegExp matching the command line that starts the agent
 //   detect(ctx) -> { confidence, evidence[] } | null
 //   read(ctx)   -> { agents: [...] }
 //
@@ -16,6 +17,11 @@
 // its own business - the Claude plugin recognises itself by the bound session,
 // a plugin for a different agent CLI could go by the command.
 //
+// `commandPattern` answers a second question, and for the whole app: which
+// CLIs are agents at all. main.js asks it through isAgentCommand() before it
+// applies the attention heuristic to a terminal, so a plugin brings the
+// recognition of its own CLI along with the counting.
+//
 // Adding another plugin means: create a file under plugins/, register it in
 // PLUGINS, done.
 
@@ -24,7 +30,21 @@ const registry = require('../plugin-registry');
 
 const PLUGINS = [
   require('./plugins/claude'),
+  // Recognition only, no counting - see the files.
+  require('./plugins/codex'),
+  require('./plugins/aider'),
 ];
+
+/**
+ * Is an agent CLI running here? The command line comes from the shell
+ * integration, and every plugin's `commandPattern` gets to say yes.
+ *
+ * @param {string} cmd  command line as reported for the terminal
+ */
+function isAgentCommand(cmd) {
+  if (!cmd) return false;
+  return PLUGINS.some((p) => p.commandPattern && p.commandPattern.test(cmd));
+}
 
 // Unlike the schema, the result is *not* cached here: "currently working" is a
 // statement about this very moment, and a cached one would be a lie right
@@ -83,4 +103,4 @@ async function getAgentView(ctx) {
   return view;
 }
 
-module.exports = { getAgentView, PLUGINS };
+module.exports = { getAgentView, isAgentCommand, PLUGINS };
