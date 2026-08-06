@@ -61,6 +61,10 @@ let noFile = false; // no Electron app around (a plain node run) - console only
 function logFile() {
   if (file || noFile) return file;
   let app;
+  // Outside Electron the require is not just useless: from Electron 42 on it
+  // fetches the ~100 MB binary if it is not there yet. A plain node run - the
+  // tests - would pay for that on every module that logs while loading.
+  if (!process.versions.electron) { noFile = true; return null; }
   try { ({ app } = require('electron')); } catch { noFile = true; return null; }
   if (!app || typeof app.getPath !== 'function') { noFile = true; return null; }
   try {
