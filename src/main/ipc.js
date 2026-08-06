@@ -187,8 +187,8 @@ function registerIpc() {
     if (s && !s.exited) {
       s.lastInputAt = Date.now();
       feedInputRecon(s, data);
-      // Fallback without shell integration: Enter = command started
-      if (!s.hasOsc133 && data.includes('\r')) setState(s, 'busy');
+      // Fallback while the integration has not reported yet: Enter = command started
+      if (!s.hasOsc133 && s.integrated && data.includes('\r')) setState(s, 'busy');
       s.proc.write(data);
     }
   });

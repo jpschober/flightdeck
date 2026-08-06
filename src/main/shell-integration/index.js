@@ -76,4 +76,6 @@ function getRc(name, script) {
   return rcPaths[name];
 }
 
-module.exports = { getRcDir, getRc, psEncodedCommand };
+// readScript is exported for test/shell-integration.test.js, which runs a real
+// bash against exactly the text a session gets.
+module.exports = { getRcDir, getRc, psEncodedCommand, readScript };

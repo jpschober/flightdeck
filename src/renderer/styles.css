@@ -240,6 +240,12 @@ button:active { transform: translateY(0.5px); }
 .si-status.exited {
   background: var(--text-faint);
 }
+/* No shell integration: the session reports no state, and the dot says so
+   instead of showing a guessed one. */
+.si-status.unknown {
+  background: transparent;
+  border: 1.5px solid var(--text-faint);
+}
 /* Calm, not pulsing: "waiting for you" is a state, not a process -
    an animation would read as if something were running right now. */
 .si-status.attention {

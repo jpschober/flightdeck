@@ -125,10 +125,20 @@ function applyStateFromData(session, text, tailLen, rawData) {
   if (saw) {
     session.hasOsc133 = true;
     clearTimeout(session.idleTimer);
-  } else if (!session.hasOsc133) {
-    // Fallback without shell integration (cmd, WSL): output = working,
+  } else if (!session.hasOsc133 && session.integrated) {
+    // Fallback while the integration has not reported yet: output = working,
     // 500 ms of silence = waiting for input. While a full-screen TUI is running
     // (alternate screen), the state stays put instead of flickering.
+    //
+    // Shells Flightdeck cannot instrument (cmd, WSL, nu, elvish, xonsh, ksh,
+    // tcsh, dash) keep the state 'unknown': a command that runs quietly for a
+    // while would be shown as "waiting for input" here, and a wrong state reads
+    // like a fact. If such a shell emits OSC 133 from the user's own
+    // configuration, the branch above takes over.
+    //
+    // cmd and WSL are included, although the heuristic was written for them:
+    // there too it is wrong exactly while a command runs quietly, which is when
+    // the display is the only thing you have to go by. Decided in #11, not open.
     setState(session, 'busy');
     clearTimeout(session.idleTimer);
     if (!session.altScreen) {

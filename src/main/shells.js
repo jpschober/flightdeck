@@ -95,14 +95,17 @@ function shellName(shell) {
 // ---------------------------------------------------------------------------
 // Starting a shell with the integration scripts in place
 // ---------------------------------------------------------------------------
+// `integrated` says whether the shell reports its state itself (OSC 133). The
+// others - cmd, WSL, nu, elvish, xonsh, ksh, tcsh, dash - are started as they
+// are, and their sessions show no state at all instead of a guessed one.
 function spawnArgsFor(shell) {
   switch (shell.id) {
     case 'powershell':
     case 'pwsh':
-      return { file: shell.file, args: ['-NoLogo', '-NoExit', '-EncodedCommand', psEncodedCommand()], env: {} };
+      return { file: shell.file, args: ['-NoLogo', '-NoExit', '-EncodedCommand', psEncodedCommand()], env: {}, integrated: true };
     case 'gitbash':
     case 'bash':
-      return { file: shell.file, args: ['--rcfile', getRc('bashrc.sh', 'bashrc.sh'), '-i'], env: {} };
+      return { file: shell.file, args: ['--rcfile', getRc('bashrc.sh', 'bashrc.sh'), '-i'], env: {}, integrated: true };
     case 'fish': {
       // -C takes a string that fish parses, and the userData path contains a
       // space on macOS, so the path is quoted. Inside single quotes fish treats
@@ -112,6 +115,7 @@ function spawnArgsFor(shell) {
         file: shell.file,
         args: ['-C', "source '" + rc + "'", '-i'],
         env: {},
+        integrated: true,
       };
     }
     case 'zsh': {
@@ -124,10 +128,11 @@ function spawnArgsFor(shell) {
           ZDOTDIR: getRcDir(),
           FLIGHTDECK_ZDOTDIR: process.env.ZDOTDIR || os.homedir(),
         },
+        integrated: true,
       };
     }
     default:
-      return { file: shell.file, args: ['-i'], env: {} };
+      return { file: shell.file, args: ['-i'], env: {}, integrated: false };
   }
 }
 

@@ -192,7 +192,7 @@ function gridPreview(session) {
 
 function createSession(shellId, opts = {}) {
   const shell = availableShells.find((s) => s.id === shellId) || availableShells[0];
-  const { file, args, env } = spawnArgsFor(shell);
+  const { file, args, env, integrated } = spawnArgsFor(shell);
   const cwd = (opts.cwd && fs.existsSync(opts.cwd)) ? opts.cwd : os.homedir();
 
   const proc = pty.spawn(file, args, {
@@ -232,7 +232,8 @@ function createSession(shellId, opts = {}) {
     exited: false,
     refreshing: false,
     refreshQueued: false,
-    state: 'idle',
+    state: integrated ? 'idle' : 'unknown',
+    integrated,
     hasOsc133: false,
     hasClaudeOsc: false,
     idleTimer: null,
@@ -276,7 +277,7 @@ function createSession(shellId, opts = {}) {
   }
 
   refreshSession(session, true);
-  return { id, shellId: shell.id, shellName: shellName(shell), cwd };
+  return { id, shellId: shell.id, shellName: shellName(shell), cwd, state: session.state };
 }
 
 function closeSession(id) {
