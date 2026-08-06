@@ -37,6 +37,7 @@ module.exports = {
   'session.state.attention': 'Se espera tu entrada – te toca',
   'session.state.exited': 'Terminada',
   'session.state.idle': 'Esperando entrada',
+  'session.state.unknown': 'Sin estado disponible: este intérprete no tiene integración',
   'session.agents': { one: '{count} agente trabajando', other: '{count} agentes trabajando' },
 
   // --- git panel ---

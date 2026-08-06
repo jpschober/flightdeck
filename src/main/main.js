@@ -110,26 +110,45 @@ function shellName(shell) {
 // ---------------------------------------------------------------------------
 // Shell integration: OSC 7 = current directory, OSC 133 = busy/idle state
 // (133;C = command started, 133;A/D = prompt visible, waiting for input)
+//
+// The encoded command runs after the profile, so `prompt` and
+// PSConsoleHostReadLine already carry whatever the user installed there
+// (oh-my-posh, starship, a custom key handler). Both are kept and called; the
+// installation guard keeps a second run from chaining our own function onto
+// itself, which would recurse without end.
 const PS_INIT = [
-  'function Global:prompt {',
-  '  $p = $ExecutionContext.SessionState.Path.CurrentLocation.ProviderPath',
-  '  $e = [char]27',
-  '  $b = [char]7',
-  "  Write-Host -NoNewline ($e + ']133;D' + $b + $e + ']133;A' + $b + $e + ']7;file://localhost/' + ($p -replace '\\\\','/') + $b)",
-  '  "PS $p> "',
-  '}',
-  'try {',
-  '  Import-Module PSReadLine -ErrorAction Stop',
-  '  function Global:PSConsoleHostReadLine {',
-  '    $l = [Microsoft.PowerShell.PSConsoleReadLine]::ReadLine($Host.Runspace, $ExecutionContext)',
-  '    if ($l) {',
-  '      $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($l))',
-  "      [Console]::Write([string][char]27 + ']7770;cmd;' + $b64 + [string][char]7)",
-  '    }',
-  "    [Console]::Write([string][char]27 + ']133;C' + [string][char]7)",
-  '    $l',
+  // Test-Path instead of reading the variable, and a captured command object
+  // instead of a property of a possibly empty result: a profile with
+  // Set-StrictMode raises an error on both of those.
+  'if (-not (Test-Path Variable:Global:__flightdeckInstalled)) {',
+  '  $Global:__flightdeckInstalled = $true',
+  '  $Global:__flightdeckPrevPrompt = $null',
+  '  $Global:__flightdeckPrevReadLine = $null',
+  '  $__flightdeckCmd = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue',
+  '  if ($__flightdeckCmd) { $Global:__flightdeckPrevPrompt = $__flightdeckCmd.ScriptBlock }',
+  '  function Global:prompt {',
+  '    $p = $ExecutionContext.SessionState.Path.CurrentLocation.ProviderPath',
+  '    $e = [char]27',
+  '    $b = [char]7',
+  "    Write-Host -NoNewline ($e + ']133;D' + $b + $e + ']133;A' + $b + $e + ']7;file://localhost/' + ($p -replace '\\\\','/') + $b)",
+  '    if ($Global:__flightdeckPrevPrompt) { & $Global:__flightdeckPrevPrompt } else { "PS $p> " }',
   '  }',
-  '} catch { }',
+  '  try {',
+  '    Import-Module PSReadLine -ErrorAction Stop',
+  '    $__flightdeckCmd = Get-Command PSConsoleHostReadLine -CommandType Function -ErrorAction SilentlyContinue',
+  '    if ($__flightdeckCmd) { $Global:__flightdeckPrevReadLine = $__flightdeckCmd.ScriptBlock }',
+  '    function Global:PSConsoleHostReadLine {',
+  '      if ($Global:__flightdeckPrevReadLine) { $l = & $Global:__flightdeckPrevReadLine }',
+  '      else { $l = [Microsoft.PowerShell.PSConsoleReadLine]::ReadLine($Host.Runspace, $ExecutionContext) }',
+  '      if ($l) {',
+  '        $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($l))',
+  "        [Console]::Write([string][char]27 + ']7770;cmd;' + $b64 + [string][char]7)",
+  '      }',
+  "      [Console]::Write([string][char]27 + ']133;C' + [string][char]7)",
+  '      $l',
+  '    }',
+  '  } catch { }',
+  '}',
 ].join('\n');
 const PS_ENCODED = Buffer.from(PS_INIT, 'utf16le').toString('base64');
 
@@ -169,13 +188,44 @@ claude() {
 }
 `;
 
+// /etc/bash.bashrc is not sourced here: bash reads its compiled-in system rc
+// before the file given with --rcfile (run_startup_files), so it is already
+// loaded when this runs, and sourcing it again would re-run bash-completion.
+//
+// The hooks are added, not assigned. PROMPT_COMMAND usually already holds
+// starship, direnv or the distribution's window-title hook - and since bash 5.1
+// it may be an array, which a string assignment would flatten to its first
+// element. The DEBUG trap is where bash-preexec and starship sit; the handler
+// found there stays in front of ours and keeps its own $? and $_, which is what
+// bash-preexec and starship read out of "$_".
+//
+// One handler form is not carried: a bare `return` in the trap string itself
+// (not inside a function it calls). Such a handler ends the sourcing of this
+// file at the first command after ~/.bashrc, and none of the hooks below are
+// installed - the same happens to any other rc-file integration, and it is
+// decided before the handlers are chained, so no order helps. At the
+// interactive prompt the same `return` is only an error message and the rest of
+// the trap string still runs, so the reporting is not affected there.
+//
+// __flightdeck_at_prompt is cleared by our PROMPT_COMMAND entry and set again by
+// the last one, so the DEBUG trap ignores whatever the other entries run and
+// reports only the command line you typed.
 const BASH_RC = `
 [ -f ~/.bashrc ] && source ~/.bashrc
 ${SH_CLAUDE_WRAPPER}
-__flightdeck_at_prompt=1
+# Disarmed until the first prompt: the rest of this file runs after the trap is
+# installed, and those lines are not commands you typed.
+__flightdeck_at_prompt=
 __flightdeck_prompt() {
-  __flightdeck_at_prompt=1
+  local __fd_status=$?
+  __flightdeck_at_prompt=
   printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' "$HOSTNAME" "$PWD"
+  return $__fd_status
+}
+__flightdeck_arm() {
+  local __fd_status=$?
+  __flightdeck_at_prompt=1
+  return $__fd_status
 }
 __flightdeck_preexec() {
   [ -n "$__flightdeck_at_prompt" ] || return 0
@@ -184,8 +234,36 @@ __flightdeck_preexec() {
   printf '\\033]7770;cmd;%s\\007' "$(printf %s "$BASH_COMMAND" | base64 2>/dev/null | tr -d '\\n')"
   printf '\\033]133;C\\007'
 }
-PROMPT_COMMAND=__flightdeck_prompt
-trap __flightdeck_preexec DEBUG
+__flightdeck_decl=$(declare -p PROMPT_COMMAND 2>/dev/null)
+__flightdeck_decl=\${__flightdeck_decl#declare -}
+__flightdeck_decl=\${__flightdeck_decl%% *}
+case "$__flightdeck_decl" in
+  *a*) PROMPT_COMMAND=(__flightdeck_prompt "\${PROMPT_COMMAND[@]}" __flightdeck_arm) ;;
+  # Separated by newlines, not by ';': a trailing comment in the existing value
+  # would otherwise swallow what follows it.
+  *) PROMPT_COMMAND="__flightdeck_prompt
+\$PROMPT_COMMAND
+__flightdeck_arm" ;;
+esac
+# An exported PROMPT_COMMAND carries our function names into every child bash,
+# where they do not exist and each prompt answers with "command not found". The
+# value stays, the export attribute goes.
+case "$__flightdeck_decl" in *x*) export -n PROMPT_COMMAND ;; esac
+unset __flightdeck_decl
+# \`trap -p\` prints a line that reinstalls the trap. Running it with the command
+# name replaced hands the handler over as one word, so quotes inside it survive.
+__flightdeck_take_trap() { __flightdeck_prev_debug=$2; }
+__flightdeck_prev_debug=
+__flightdeck_trap=$(trap -p DEBUG)
+[ -n "$__flightdeck_trap" ] && eval "\${__flightdeck_trap/#trap/__flightdeck_take_trap}"
+if [ -n "$__flightdeck_prev_debug" ]; then
+  trap "$__flightdeck_prev_debug
+__flightdeck_preexec" DEBUG
+else
+  trap __flightdeck_preexec DEBUG
+fi
+unset __flightdeck_trap __flightdeck_prev_debug
+unset -f __flightdeck_take_trap
 `;
 
 // Fish has no --rcfile, but -C runs commands before the first prompt. The
@@ -306,14 +384,17 @@ function getRc(name, content) {
   return rcPaths[name];
 }
 
+// `integrated` says whether the shell reports its state itself (OSC 133). The
+// others - cmd, WSL, nu, elvish, xonsh, ksh, tcsh, dash - are started as they
+// are, and their sessions show no state at all instead of a guessed one.
 function spawnArgsFor(shell) {
   switch (shell.id) {
     case 'powershell':
     case 'pwsh':
-      return { file: shell.file, args: ['-NoLogo', '-NoExit', '-EncodedCommand', PS_ENCODED], env: {} };
+      return { file: shell.file, args: ['-NoLogo', '-NoExit', '-EncodedCommand', PS_ENCODED], env: {}, integrated: true };
     case 'gitbash':
     case 'bash':
-      return { file: shell.file, args: ['--rcfile', getRc('bashrc.sh', BASH_RC), '-i'], env: {} };
+      return { file: shell.file, args: ['--rcfile', getRc('bashrc.sh', BASH_RC), '-i'], env: {}, integrated: true };
     case 'fish': {
       // -C takes a string that fish parses, and the userData path contains a
       // space on macOS, so the path is quoted. Inside single quotes fish treats
@@ -323,6 +404,7 @@ function spawnArgsFor(shell) {
         file: shell.file,
         args: ['-C', "source '" + rc + "'", '-i'],
         env: {},
+        integrated: true,
       };
     }
     case 'zsh': {
@@ -335,10 +417,11 @@ function spawnArgsFor(shell) {
           ZDOTDIR: getRcDir(),
           FLIGHTDECK_ZDOTDIR: process.env.ZDOTDIR || os.homedir(),
         },
+        integrated: true,
       };
     }
     default:
-      return { file: shell.file, args: ['-i'], env: {} };
+      return { file: shell.file, args: ['-i'], env: {}, integrated: false };
   }
 }
 
@@ -509,10 +592,20 @@ function applyStateFromData(session, text, tailLen, rawData) {
   if (saw) {
     session.hasOsc133 = true;
     clearTimeout(session.idleTimer);
-  } else if (!session.hasOsc133) {
-    // Fallback without shell integration (cmd, WSL): output = working,
+  } else if (!session.hasOsc133 && session.integrated) {
+    // Fallback while the integration has not reported yet: output = working,
     // 500 ms of silence = waiting for input. While a full-screen TUI is running
     // (alternate screen), the state stays put instead of flickering.
+    //
+    // Shells Flightdeck cannot instrument (cmd, WSL, nu, elvish, xonsh, ksh,
+    // tcsh, dash) keep the state 'unknown': a command that runs quietly for a
+    // while would be shown as "waiting for input" here, and a wrong state reads
+    // like a fact. If such a shell emits OSC 133 from the user's own
+    // configuration, the branch above takes over.
+    //
+    // cmd and WSL are included, although the heuristic was written for them:
+    // there too it is wrong exactly while a command runs quietly, which is when
+    // the display is the only thing you have to go by. Decided in #11, not open.
     setState(session, 'busy');
     clearTimeout(session.idleTimer);
     if (!session.altScreen) {
@@ -856,7 +949,7 @@ function resetFlowControl() {
 
 function createSession(shellId, opts = {}) {
   const shell = availableShells.find((s) => s.id === shellId) || availableShells[0];
-  const { file, args, env } = spawnArgsFor(shell);
+  const { file, args, env, integrated } = spawnArgsFor(shell);
   const cwd = (opts.cwd && fs.existsSync(opts.cwd)) ? opts.cwd : os.homedir();
 
   const proc = pty.spawn(file, args, {
@@ -896,7 +989,8 @@ function createSession(shellId, opts = {}) {
     exited: false,
     refreshing: false,
     refreshQueued: false,
-    state: 'idle',
+    state: integrated ? 'idle' : 'unknown',
+    integrated,
     hasOsc133: false,
     hasClaudeOsc: false,
     idleTimer: null,
@@ -940,7 +1034,7 @@ function createSession(shellId, opts = {}) {
   }
 
   refreshSession(session, true);
-  return { id, shellId: shell.id, shellName: shellName(shell), cwd };
+  return { id, shellId: shell.id, shellName: shellName(shell), cwd, state: session.state };
 }
 
 async function refreshSession(session, force = false) {
@@ -1357,8 +1451,8 @@ ipcMain.on('session:input', (e, id, data) => {
   if (s && !s.exited) {
     s.lastInputAt = Date.now();
     feedInputRecon(s, data);
-    // Fallback without shell integration: Enter = command started
-    if (!s.hasOsc133 && data.includes('\r')) setState(s, 'busy');
+    // Fallback while the integration has not reported yet: Enter = command started
+    if (!s.hasOsc133 && s.integrated && data.includes('\r')) setState(s, 'busy');
     s.proc.write(data);
   }
 });
