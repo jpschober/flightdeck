@@ -15,6 +15,7 @@ const { worktreeProvider, gitProvider } = require('./files');
 const { diff, describe, countChanges } = require('./diff');
 const ir = require('./ir');
 const log = require('../log');
+const registry = require('../plugin-registry');
 
 const PLUGINS = [
   require('./plugins/supabase'),
@@ -58,28 +59,14 @@ function cachePut(key, entry) {
  *                             schema" and "no plugin got as far as looking"
  */
 async function detectAll(provider, warnings) {
-  const found = [];
-  for (const plugin of PLUGINS) {
-    let d = null;
-    try {
-      d = await plugin.detect(provider);
-    } catch (e) {
-      // A broken plugin must not take the others down with it
+  return registry.detectAll(PLUGINS, provider, {
+    // The plugin names the files its schema depends on; the cache stamps them.
+    extraArrayKeys: ['watch'],
+    onError: (plugin, e) => {
       log.warn('dbschema: detection failed', { plugin: plugin.id, root: provider.root, kind: provider.kind, err: e });
       if (warnings) warnings.push(t('db.detectFailed', { plugin: plugin.label, message: e.message }));
-      d = null;
-    }
-    if (d && d.confidence > 0) {
-      found.push({
-        plugin,
-        confidence: d.confidence,
-        evidence: d.evidence || [],
-        watch: d.watch || [],
-      });
-    }
-  }
-  // The most confident plugin wins; on a tie, the order above decides.
-  return found.sort((a, b) => b.confidence - a.confidence);
+    },
+  });
 }
 
 /**
@@ -123,12 +110,7 @@ async function loadSchema(provider, key, force = false) {
     }
     schema.warnings.push(...warnings);
     result = {
-      plugin: {
-        id: winner.plugin.id,
-        label: winner.plugin.label,
-        confidence: winner.confidence,
-        evidence: winner.evidence,
-      },
+      plugin: registry.pluginInfo(winner),
       candidates: found.map((f) => ({ id: f.plugin.id, label: f.plugin.label })),
       schema,
     };
