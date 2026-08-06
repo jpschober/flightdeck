@@ -84,9 +84,9 @@ trap '__user_preexec '"'"'x'"'"'' DEBUG
 // TERM=dumb keeps the system-wide /etc/bash.bashrc from adding its own
 // window-title entry to PROMPT_COMMAND, so what the assertions see is the
 // user's configuration plus ours.
-function runBash(args, input) {
+function runBash(args, input, userRc) {
   const home = fs.mkdtempSync(path.join(tmp, 'home-'));
-  fs.writeFileSync(path.join(home, '.bashrc'), USER_RC);
+  fs.writeFileSync(path.join(home, '.bashrc'), userRc || USER_RC);
   return execFileSync(BASH, ['--rcfile', rc, '-i', ...args], {
     input: input || '',
     env: { PATH: process.env.PATH, HOME: home, TERM: 'dumb' },
@@ -94,6 +94,8 @@ function runBash(args, input) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 }
+
+const cmdOsc = (s) => `\x1b]7770;cmd;${Buffer.from(s).toString('base64')}\x07`;
 
 test('bash keeps the user\'s PROMPT_COMMAND and their DEBUG trap', { skip: !BASH }, () => {
   const out = runBash(['-c', 'declare -p PROMPT_COMMAND; trap -p DEBUG']);
@@ -139,6 +141,51 @@ test('at the prompt both hooks run, and only the typed command is reported',
     assert.ok(out.includes('[precmd:1]'),
       'the user\'s prompt hook did not run, or $? no longer reaches it');
     assert.ok(out.includes('\x1b]133;D\x07\x1b]133;A\x07'), 'the prompt was not reported');
+  });
+
+test('an exported PROMPT_COMMAND keeps its value and loses the export',
+  { skip: !BASH }, () => {
+    // Exported, our function names would reach every child bash, where they do
+    // not exist and each prompt answers with "command not found".
+    const userRc = `PS1='> '\nexport PROMPT_COMMAND='__user_precmd'\n__user_precmd() { :; }\n`;
+    const out = runBash(['-c', 'declare -p PROMPT_COMMAND; env | grep -c "^PROMPT_COMMAND=" || true'], '', userRc);
+    assert.match(out, /declare -- PROMPT_COMMAND=/, 'the export attribute is still on it');
+    assert.match(out, /__user_precmd/, 'the value was lost with the attribute');
+    assert.match(out, /^0$/m, 'PROMPT_COMMAND is still in the environment of child processes');
+  });
+
+// A `return` in the trap string is the one handler form the chaining does not
+// carry, and these two tests hold where the line runs. Inside a function the
+// handler calls, `return` is harmless - that is the form bash-preexec and
+// starship use, and the tests above cover it.
+test('a return that only strikes later leaves the reporting alone', { skip: !BASH }, () => {
+  // The condition is false while the file is sourced, true from the moment the
+  // variable is set. At the prompt `return` is nothing but an error message,
+  // and the rest of the trap string still runs.
+  const userRc = `PS1='> '
+trap '[ -n "$LATER" ] && return; :' DEBUG
+`;
+  const out = runBash([], 'echo one\nLATER=1\necho two\nexit 0\n', userRc);
+  assert.ok(out.includes(cmdOsc('echo one')), 'the command before the return was not reported');
+  assert.ok(out.includes(cmdOsc('echo two')), 'the command after the return was not reported');
+});
+
+test('a return in the trap string at startup leaves the session without hooks',
+  { skip: !BASH }, () => {
+    // Measured boundary, not a fixable case: the handler is already installed
+    // while our file is being sourced, and a `return` there ends the sourcing.
+    // Nothing of ours is installed then - not the reporting, not the directory,
+    // not the claude wrapper. Whoever changes this file should know that this
+    // is what it looks like.
+    const userRc = `PS1='> '
+trap 'return' DEBUG
+`;
+    const out = runBash([], 'echo one\nexit 0\n', userRc);
+    assert.ok(!out.includes(cmdOsc('echo one')), 'the reporting is back - the boundary has moved');
+    assert.ok(!out.includes('\x1b]133;'), 'a state marker arrived although the file was cut short');
+
+    const defined = runBash(['-c', 'declare -F __flightdeck_preexec || echo none'], '', userRc);
+    assert.match(defined, /none/, 'the file ran to the end after all - the comment above needs correcting');
   });
 
 // ---------------------------------------------------------------------------

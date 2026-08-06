@@ -195,8 +195,17 @@ claude() {
 // The hooks are added, not assigned. PROMPT_COMMAND usually already holds
 // starship, direnv or the distribution's window-title hook - and since bash 5.1
 // it may be an array, which a string assignment would flatten to its first
-// element. The DEBUG trap is where bash-preexec and starship sit; the existing
-// handler is put in front of ours and keeps its own $? and $_.
+// element. The DEBUG trap is where bash-preexec and starship sit; the handler
+// found there stays in front of ours and keeps its own $? and $_, which is what
+// bash-preexec and starship read out of "$_".
+//
+// One handler form is not carried: a bare `return` in the trap string itself
+// (not inside a function it calls). Such a handler ends the sourcing of this
+// file at the first command after ~/.bashrc, and none of the hooks below are
+// installed - the same happens to any other rc-file integration, and it is
+// decided before the handlers are chained, so no order helps. At the
+// interactive prompt the same `return` is only an error message and the rest of
+// the trap string still runs, so the reporting is not affected there.
 //
 // __flightdeck_at_prompt is cleared by our PROMPT_COMMAND entry and set again by
 // the last one, so the DEBUG trap ignores whatever the other entries run and
@@ -227,7 +236,8 @@ __flightdeck_preexec() {
 }
 __flightdeck_decl=$(declare -p PROMPT_COMMAND 2>/dev/null)
 __flightdeck_decl=\${__flightdeck_decl#declare -}
-case "\${__flightdeck_decl%% *}" in
+__flightdeck_decl=\${__flightdeck_decl%% *}
+case "$__flightdeck_decl" in
   *a*) PROMPT_COMMAND=(__flightdeck_prompt "\${PROMPT_COMMAND[@]}" __flightdeck_arm) ;;
   # Separated by newlines, not by ';': a trailing comment in the existing value
   # would otherwise swallow what follows it.
@@ -235,6 +245,10 @@ case "\${__flightdeck_decl%% *}" in
 \$PROMPT_COMMAND
 __flightdeck_arm" ;;
 esac
+# An exported PROMPT_COMMAND carries our function names into every child bash,
+# where they do not exist and each prompt answers with "command not found". The
+# value stays, the export attribute goes.
+case "$__flightdeck_decl" in *x*) export -n PROMPT_COMMAND ;; esac
 unset __flightdeck_decl
 # \`trap -p\` prints a line that reinstalls the trap. Running it with the command
 # name replaced hands the handler over as one word, so quotes inside it survive.
@@ -588,6 +602,10 @@ function applyStateFromData(session, text, tailLen, rawData) {
     // while would be shown as "waiting for input" here, and a wrong state reads
     // like a fact. If such a shell emits OSC 133 from the user's own
     // configuration, the branch above takes over.
+    //
+    // cmd and WSL are included, although the heuristic was written for them:
+    // there too it is wrong exactly while a command runs quietly, which is when
+    // the display is the only thing you have to go by. Decided in #11, not open.
     setState(session, 'busy');
     clearTimeout(session.idleTimer);
     if (!session.altScreen) {
