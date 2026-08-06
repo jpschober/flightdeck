@@ -5,11 +5,12 @@
 // in the standardised format, the comparison baseline and the diff. Here it is
 // only rendered.
 //
-// Deliberately as table cards and not as an ER diagram: what matters are
-// columns, types and constraints, and inside a diagram box those are either
-// absent or illegibly small. Above all, a diagram cannot sensibly be compared
-// row by row - which is exactly what the before/after view needs.
-// Relationships are shown as foreign keys in plain text, including the target.
+// The panel shows table cards, not a diagram: what matters here are columns,
+// types and constraints, and inside a diagram box those are either absent or
+// illegibly small. Above all, a diagram cannot sensibly be compared row by row -
+// which is exactly what the before/after view needs. Relationships are shown as
+// foreign keys in plain text, including the target; whoever wants to see the
+// shape of them opens the ER diagram (see dbgraph.js).
 // ---------------------------------------------------------------------------
 import { $, escapeHtml, setText, setTitle, syncChildren, setSlotSentence } from './dom.js';
 import { logWarn } from './log.js';
@@ -17,6 +18,8 @@ import { t, onLocaleChange } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
 import { onPanelTab } from './panel.js';
 import { makeOverlay, renderModeButtons } from './overlays.js';
+import { KIND_TAG, constraintText, diffLookup, tagsForColumn, tagsHtml } from './db-model.js';
+import { openDbGraph, refreshDbGraph } from './dbgraph.js';
 
 const dbHeadEl = $('#db-head');
 const dbSignalEl = $('#db-signal');
@@ -35,18 +38,6 @@ let dbTimer = null;
 const STATUS_MARK = { added: '+', removed: '−', changed: '~', same: '' };
 // The status word is looked up per render - a language switch has to reach it.
 const STATUS_WORD = (status) => (status === 'same' ? '' : t('db.status.' + status));
-
-// Short tags for the constraints that affect a column. The abbreviations stay
-// as they are - they are read as symbols, and a two-letter marker that changes
-// with the language would lose that. The tooltip carries the translation.
-const KIND_TAG = {
-  pk: { tag: 'PK', key: 'db.tag.pk' },
-  fk: { tag: 'FK', key: 'db.tag.fk' },
-  unique: { tag: 'UQ', key: 'db.tag.unique' },
-  check: { tag: 'CK', key: 'db.tag.check' },
-  index: { tag: 'IX', key: 'db.tag.index' },
-  exclude: { tag: 'EX', key: 'db.tag.exclude' },
-};
 
 function fmtDefault(v) {
   return v === null || v === undefined ? '' : String(v);
@@ -67,25 +58,6 @@ function colMeta(col) {
   return out;
 }
 
-function constraintText(c) {
-  const cols = (c.columns || []).join(', ');
-  if (c.kind === 'fk' && c.references) {
-    const r = c.references;
-    const target = `${r.schema}.${r.table}${r.columns.length ? `(${r.columns.join(', ')})` : ''}`;
-    const actions = [
-      c.onDelete ? `on delete ${c.onDelete}` : '',
-      c.onUpdate ? `on update ${c.onUpdate}` : '',
-    ].filter(Boolean).join(' ');
-    return `(${cols}) → ${target}${actions ? ' ' + actions : ''}`;
-  }
-  if (c.kind === 'check' || c.kind === 'exclude') return c.expression || '';
-  if (c.kind === 'index') {
-    return `${c.unique ? 'unique ' : ''}(${cols})${c.method ? ' using ' + c.method : ''}`
-      + `${c.expression ? ' where ' + c.expression : ''}`;
-  }
-  return `(${cols})`;
-}
-
 function policyText(p) {
   const bits = [p.command];
   if (!p.permissive) bits.push('restrictive');
@@ -93,22 +65,6 @@ function policyText(p) {
   if (p.using) bits.push('using ' + p.using);
   if (p.check) bits.push('check ' + p.check);
   return bits.join(' · ');
-}
-
-/** Which constraints affect this column? */
-function tagsForColumn(table, colName) {
-  const kinds = new Set();
-  for (const c of table.constraints || []) {
-    if ((c.columns || []).includes(colName)) kinds.add(c.kind);
-  }
-  return [...kinds]
-    .filter((k) => KIND_TAG[k])
-    .sort((a, b) => Object.keys(KIND_TAG).indexOf(a) - Object.keys(KIND_TAG).indexOf(b))
-    .map((k) => KIND_TAG[k]);
-}
-
-function tagsHtml(tags) {
-  return tags.map((tag) => `<span class="db-tag ${tag.tag.toLowerCase()}" title="${escapeHtml(t(tag.key))}">${tag.tag}</span>`).join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +75,7 @@ export async function loadDbSchema(force = false) {
   if (!s) {
     dbState.view = null;
     renderDbPanel();
+    refreshDbGraph(null);
     return;
   }
   if (dbState.loading && !force) return;
@@ -129,6 +86,11 @@ export async function loadDbSchema(force = false) {
     dbState.view = view;
     renderDbPanel();
     if (dbDiffOverlay.isOpen()) renderDbDiff();
+    // Keep the current viewport - a background tick must not throw away where
+    // one was looking. `force` covers the cases the schema cannot see: the
+    // refresh button, the baseline switch and the language switch all come
+    // through here and all have to redraw.
+    refreshDbGraph(view, force);
   } catch (e) {
     logWarn('dbschema: panel not loaded', { session: s.id, baseline: dbState.baseline, err: e });
   } finally {
@@ -212,6 +174,7 @@ const DB_HEAD_HTML = `
   <div class="db-baseline-row">
     <label class="db-base"><span class="db-base-label"></span><select id="db-baseline"></select></label>
     <span class="db-base-none muted"></span>
+    <button id="db-graph" class="db-graph-btn"></button>
   </div>`;
 
 function renderDbHead(view) {
@@ -220,6 +183,8 @@ function renderDbHead(view) {
     dbHeadEl.innerHTML = DB_HEAD_HTML;
     dbHeadEl.appendChild(buildDbWarnings());
     dbHeadEl.querySelector('#db-refresh').addEventListener('click', () => loadDbSchema(true));
+    dbHeadEl.querySelector('#db-graph')
+      .addEventListener('click', () => openDbGraph(dbState.view, dbState.filter));
     dbHeadEl.querySelector('#db-baseline').addEventListener('change', (e) => {
       dbState.baseline = e.target.value;
       loadDbSchema(true);
@@ -234,6 +199,9 @@ function renderDbHead(view) {
   const refreshEl = dbHeadEl.querySelector('#db-refresh');
   setTitle(refreshEl, t('db.refresh'));
   refreshEl.setAttribute('aria-label', t('db.refresh'));
+  const graphEl = dbHeadEl.querySelector('#db-graph');
+  setText(graphEl, t('db.graph'));
+  setTitle(graphEl, t('db.graph.title'));
 
   const hasBaselines = view.baselines.length > 0;
   dbHeadEl.querySelector('.db-base').classList.toggle('hidden', !hasBaselines);
@@ -321,22 +289,6 @@ function partsText(counts, nounKey) {
   if (!bits.length) return '';
   const total = counts.added + counts.removed + counts.changed;
   return `${t(nounKey, { count: total })}: ${bits.join(', ')}`;
-}
-
-/** Make the diff status per table/column/constraint look-up-able. */
-function diffLookup(view) {
-  const tables = new Map();
-  if (!view.diff) return tables;
-  for (const t of view.diff.tables) {
-    tables.set(t.id, {
-      status: t.status,
-      rlsChanged: t.rlsChanged,
-      columns: new Map(t.columns.map((c) => [c.name, c])),
-      constraints: new Map(t.constraints.map((c) => [c.name, c])),
-      policies: new Map(t.policies.map((p) => [p.name, p])),
-    });
-  }
-  return tables;
 }
 
 function renderDbTables(view) {

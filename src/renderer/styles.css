@@ -70,7 +70,6 @@ button:active { transform: translateY(0.5px); }
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
 }
 
 /* Pulse: sits behind the wordmark and buttons and catches no clicks */
@@ -1346,8 +1345,28 @@ button:active { transform: translateY(0.5px); }
 .db-files { font-size: 11px; color: var(--text-faint); }
 .db-top .icon-btn { margin-left: auto; }
 
-.db-baseline-row { margin-top: 7px; font-size: 11px; color: var(--text-faint); }
-.db-base { display: flex; align-items: center; gap: 6px; }
+.db-baseline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.db-base { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.db-graph-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.db-graph-btn:hover { background: var(--bg-active); color: var(--text); border-color: var(--accent); }
 .db-base select {
   flex: 1;
   min-width: 0;
@@ -1812,6 +1831,270 @@ button:active { transform: translateY(0.5px); }
   pointer-events: none;
   animation: pop-in 140ms var(--ease-out);
 }
+
+/* ------------------------------------------------------------------ */
+/* DB schema: ER diagram                                               */
+/* ------------------------------------------------------------------ */
+#dbgraph-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(6, 7, 10, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  animation: overlay-in 150ms var(--ease);
+}
+#dbgraph-window {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: min(1700px, 100%);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  animation: preview-in 220ms var(--ease-out);
+  overflow: hidden;
+}
+#dbgraph-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+#dbgraph-title { font-family: var(--mono); flex-shrink: 0; }
+#dbgraph-stats { font-size: 11px; color: var(--text-faint); flex-shrink: 0; }
+#dbgraph-search {
+  margin-left: auto;
+  width: 200px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 8px;
+}
+#dbgraph-search:focus { border-color: var(--accent); outline: none; }
+
+#dbgraph-scope, #dbgraph-detail, #dbgraph-tools {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
+}
+#dbgraph-scope button, #dbgraph-detail button, #dbgraph-tools button {
+  padding: 3px 9px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+#dbgraph-scope button:hover, #dbgraph-detail button:hover, #dbgraph-tools button:hover { color: var(--text); }
+#dbgraph-scope button.active, #dbgraph-detail button.active {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+  font-weight: 600;
+}
+#dbgraph-tools button { min-width: 24px; font-size: 12px; }
+#dbgraph-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+#dbgraph-close:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
+
+/* The viewport. Everything inside is moved by one transform - panning, zooming,
+   searching and focusing therefore never cost a new layout. */
+#dbgraph-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.045) 1px, transparent 0) 0 0 / 22px 22px,
+    var(--bg);
+}
+#dbgraph-canvas.panning { cursor: grabbing; }
+#dbgraph-canvas.is-empty { cursor: default; }
+#dbgraph-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+#dbgraph-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+#dbgraph-nodes { position: absolute; top: 0; left: 0; }
+#dbgraph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+/* Table box */
+.dbg-node {
+  position: absolute;
+  /* Sized to its content: the rows do not wrap, so a fixed width would let
+     column name and type run into each other. */
+  width: max-content;
+  min-width: 120px;
+  max-width: 460px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  transition: opacity var(--speed) var(--ease), border-color var(--speed) var(--ease);
+}
+/* Measured before it is placed: it must not flicker through at 0/0 */
+.dbg-node.measuring { visibility: hidden; left: 0; top: 0; }
+.dbg-node.added { border-color: rgba(78, 201, 122, 0.55); }
+.dbg-node.changed { border-color: rgba(217, 164, 65, 0.55); }
+.dbg-node.removed { border-color: rgba(224, 95, 106, 0.5); }
+.dbg-node.gone { opacity: 0.7; }
+.dbg-node.gone .dbg-name { text-decoration: line-through; }
+.dbg-node.ghost, .dbg-node.external { border-style: dashed; }
+.dbg-node.ghost { background: rgba(255, 255, 255, 0.02); }
+
+.dbg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+.dbg-node.added .dbg-head { background: rgba(78, 201, 122, 0.12); }
+.dbg-node.changed .dbg-head { background: rgba(217, 164, 65, 0.12); }
+.dbg-node.removed .dbg-head { background: rgba(224, 95, 106, 0.12); }
+.dbg-mark { font-weight: 700; font-size: 12px; }
+.dbg-mark.added { color: var(--green); }
+.dbg-mark.removed { color: var(--red); }
+.dbg-mark.changed { color: var(--yellow); }
+.dbg-name {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dbg-count { margin-left: auto; font-size: 10px; color: var(--text-faint); }
+.dbg-head .db-chip.external { margin-left: auto; }
+
+.dbg-cols { border-top: 1px solid var(--border); padding: 3px 9px 5px; }
+.dbg-col {
+  display: grid;
+  grid-template-columns: 9px minmax(40px, 1fr) auto auto;
+  gap: 0 6px;
+  align-items: baseline;
+  padding: 2px 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.dbg-col-mark { font-weight: 700; }
+.dbg-col-mark.added { color: var(--green); }
+.dbg-col-mark.removed { color: var(--red); }
+.dbg-col-mark.changed { color: var(--yellow); }
+.dbg-col-name { color: var(--text); }
+.dbg-col-type {
+  color: var(--accent);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dbg-col-tags { display: flex; gap: 2px; }
+.dbg-col.added { background: rgba(78, 201, 122, 0.09); }
+.dbg-col.changed { background: rgba(217, 164, 65, 0.1); }
+.dbg-col.removed { background: rgba(224, 95, 106, 0.09); opacity: 0.75; }
+.dbg-col.removed .dbg-col-name { text-decoration: line-through; }
+.dbg-more { font-size: 9px; color: var(--text-faint); padding-top: 2px; }
+
+/* Relations */
+.dbg-line {
+  fill: none;
+  stroke: #4a5164;
+  stroke-width: 1.4;
+}
+.dbg-foot {
+  fill: none;
+  stroke: #4a5164;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.dbg-opt { fill: var(--bg); stroke: #4a5164; stroke-width: 1.4; }
+.dbg-edge.added .dbg-line, .dbg-edge.added .dbg-foot, .dbg-edge.added .dbg-opt { stroke: var(--green); }
+.dbg-edge.added .dbg-line { stroke-width: 1.8; }
+.dbg-edge.changed .dbg-line, .dbg-edge.changed .dbg-foot, .dbg-edge.changed .dbg-opt { stroke: var(--yellow); }
+.dbg-edge.removed .dbg-line, .dbg-edge.removed .dbg-foot, .dbg-edge.removed .dbg-opt { stroke: var(--red); }
+.dbg-edge.removed .dbg-line { stroke-dasharray: 5 4; }
+
+/* Focus: a clicked table keeps its direct neighbours, everything else steps
+   back. Search does the same for what does not match. */
+#dbgraph-world.focused .dbg-node:not(.focus):not(.near),
+#dbgraph-world.searching .dbg-node:not(.hit) { opacity: 0.22; }
+#dbgraph-world.focused .dbg-edge:not(.near) { opacity: 0.15; }
+#dbgraph-world.searching .dbg-node.hit { border-color: var(--accent); }
+.dbg-node.focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+.dbg-edge.near .dbg-line { stroke-width: 2; }
+
+#dbgraph-legend {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: 60%;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(22, 24, 31, 0.85);
+  font-size: 10px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.dbg-key { display: flex; align-items: center; gap: 5px; }
+.dbg-key::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.dbg-key.note::before { display: none; }
+.dbg-key.added { color: var(--green); }
+.dbg-key.changed { color: var(--yellow); }
+.dbg-key.removed { color: var(--red); }
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 9px; height: 9px; }

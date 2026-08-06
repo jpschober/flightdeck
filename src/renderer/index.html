@@ -117,6 +117,33 @@
     </div>
   </div>
 
+  <!-- DB schema: relationships as an ER diagram -->
+  <div id="dbgraph-overlay" class="hidden">
+    <div id="dbgraph-window">
+      <div id="dbgraph-header">
+        <span id="dbgraph-title"></span>
+        <span id="dbgraph-stats"></span>
+        <input id="dbgraph-search" type="text" data-i18n-placeholder="dbgraph.search" placeholder="Highlight table or column…" />
+        <div id="dbgraph-scope" role="tablist" data-i18n-aria="dbgraph.scope" aria-label="Scope"></div>
+        <div id="dbgraph-detail" role="tablist" data-i18n-aria="dbgraph.detail" aria-label="Detail"></div>
+        <div id="dbgraph-tools">
+          <button data-act="out" data-i18n-title="dbgraph.zoom.out" data-i18n-aria="dbgraph.zoom.out" title="Zoom out" aria-label="Zoom out">−</button>
+          <button data-act="fit" data-i18n-title="dbgraph.zoom.fit" data-i18n-aria="dbgraph.zoom.fit" title="Fit to window" aria-label="Fit to window">⤢</button>
+          <button data-act="in" data-i18n-title="dbgraph.zoom.in" data-i18n-aria="dbgraph.zoom.in" title="Zoom in" aria-label="Zoom in">+</button>
+        </div>
+        <button id="dbgraph-close" data-i18n-title="dbgraph.close" data-i18n-aria="dbgraph.close.aria" title="Close (Esc)" aria-label="Close diagram">✕</button>
+      </div>
+      <div id="dbgraph-canvas">
+        <div id="dbgraph-world">
+          <svg id="dbgraph-edges" aria-hidden="true"></svg>
+          <div id="dbgraph-nodes"></div>
+        </div>
+        <div id="dbgraph-legend"></div>
+        <div id="dbgraph-empty" class="hidden"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Claude session browser -->
   <div id="sessions-overlay" class="hidden">
     <div id="sessions-window">
@@ -147,7 +174,8 @@
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
   <script src="../../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
-  <!-- The four scripts above are UMD bundles and stay classic scripts; they set
+  <script src="../../node_modules/@dagrejs/dagre/dist/dagre.min.js"></script>
+  <!-- The five scripts above are UMD bundles and stay classic scripts; they set
        the globals the modules below reach for. Classic scripts run first, so
        those globals exist by the time the module graph is evaluated. -->
   <script type="module" src="app.js"></script>
