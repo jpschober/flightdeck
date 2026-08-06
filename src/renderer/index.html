@@ -147,6 +147,9 @@
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
   <script src="../../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
-  <script src="app.js"></script>
+  <!-- The four scripts above are UMD bundles and stay classic scripts; they set
+       the globals the modules below reach for. Classic scripts run first, so
+       those globals exist by the time the module graph is evaluated. -->
+  <script type="module" src="app.js"></script>
 </body>
 </html>
