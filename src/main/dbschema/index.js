@@ -15,6 +15,7 @@ const { worktreeProvider, gitProvider } = require('./files');
 const { diff, describe, countChanges } = require('./diff');
 const ir = require('./ir');
 const log = require('../log');
+const registry = require('../plugin-registry');
 
 const PLUGINS = [
   require('./plugins/supabase'),
@@ -40,12 +41,18 @@ const NO_PLUGIN_TTL = 15_000;
 function clearCache() {
   cache.clear();
   defaultBranchCache.clear();
+  baselineCache.clear();
+}
+
+// Newest last, oldest evicted first.
+function putBounded(map, key, entry, max) {
+  map.delete(key);
+  map.set(key, entry);
+  while (map.size > max) map.delete(map.keys().next().value);
 }
 
 function cachePut(key, entry) {
-  cache.delete(key);
-  cache.set(key, entry);
-  while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+  putBounded(cache, key, entry, CACHE_MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -58,28 +65,14 @@ function cachePut(key, entry) {
  *                             schema" and "no plugin got as far as looking"
  */
 async function detectAll(provider, warnings) {
-  const found = [];
-  for (const plugin of PLUGINS) {
-    let d = null;
-    try {
-      d = await plugin.detect(provider);
-    } catch (e) {
-      // A broken plugin must not take the others down with it
+  return registry.detectAll(PLUGINS, provider, {
+    // The plugin names the files its schema depends on; the cache stamps them.
+    extraArrayKeys: ['watch'],
+    onError: (plugin, e) => {
       log.warn('dbschema: detection failed', { plugin: plugin.id, root: provider.root, kind: provider.kind, err: e });
       if (warnings) warnings.push(t('db.detectFailed', { plugin: plugin.label, message: e.message }));
-      d = null;
-    }
-    if (d && d.confidence > 0) {
-      found.push({
-        plugin,
-        confidence: d.confidence,
-        evidence: d.evidence || [],
-        watch: d.watch || [],
-      });
-    }
-  }
-  // The most confident plugin wins; on a tie, the order above decides.
-  return found.sort((a, b) => b.confidence - a.confidence);
+    },
+  });
 }
 
 /**
@@ -123,12 +116,7 @@ async function loadSchema(provider, key, force = false) {
     }
     schema.warnings.push(...warnings);
     result = {
-      plugin: {
-        id: winner.plugin.id,
-        label: winner.plugin.label,
-        confidence: winner.confidence,
-        evidence: winner.evidence,
-      },
+      plugin: registry.pluginInfo(winner),
       candidates: found.map((f) => ({ id: f.plugin.id, label: f.plugin.label })),
       schema,
     };
@@ -165,23 +153,62 @@ async function defaultBranch(root) {
   return ref;
 }
 
+// The options follow from the commit HEAD points at and from the PR the labels
+// name. `git rev-parse HEAD` reports the first of those and is asked every
+// time; it is also what the entry hangs on, so a commit, a checkout and a
+// different repository each produce a different key on their own, and the
+// panel never compares against a baseline that HEAD has already left.
+//
+// The lifetime on top of that covers the one change the key does not see: a
+// fetch that moves `origin/<base>` can move the merge base without HEAD moving.
+const baselineCache = new Map(); // root|head|pr -> { at, options }
+const baselineInFlight = new Map(); // same key -> Promise
+const BASELINE_MAX = 60;
+const BASELINE_TTL = 300_000;
+
 /**
  * The possible comparison baselines, best first. Offering more than one is not
  * a luxury: "what did I just change" (HEAD) and "what does this branch change
  * in total" (branch point) are different questions, and when reviewing a PR the
  * second one is the right one.
+ *
+ * The result is shared with the cache and therefore frozen: a caller that sorts
+ * or splices it in place would otherwise damage every later pass, silently.
  */
-async function baselineOptions(root, pr) {
+async function baselineOptions(root, pr, force = false) {
   const headOut = await run('git', ['rev-parse', 'HEAD'], root);
   const head = headOut && headOut.trim() ? headOut.trim() : null;
-  if (!head) return []; // no commit, so no "before"
+  if (!head) return Object.freeze([]); // no commit, so no "before"
 
+  const key = `${root}|${head}|${pr ? pr.number : ''}|${pr ? pr.baseRefName : ''}`;
+  const hit = baselineCache.get(key);
+  if (hit && !force && Date.now() - hit.at < BASELINE_TTL) return hit.options;
+
+  // Two panels on the same repository can reach the cold cache in the same
+  // moment; the second one waits for the first instead of running the same
+  // merge bases again. The HEAD lookup above has already happened for both -
+  // it is what produces the key. A forced refresh stays out of this and does
+  // its own work.
+  const running = baselineInFlight.get(key);
+  if (running && !force) return running;
+  if (force) return computeBaselines(root, pr, head, key);
+
+  const pending = computeBaselines(root, pr, head, key);
+  baselineInFlight.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    baselineInFlight.delete(key);
+  }
+}
+
+async function computeBaselines(root, pr, head, key) {
   const options = [];
   const seen = new Set();
   const push = (opt) => {
     if (!opt.ref || seen.has(opt.ref)) return;
     seen.add(opt.ref);
-    options.push(opt);
+    options.push(Object.freeze(opt));
   };
 
   // A branch point that sits on HEAD is not a baseline of its own: you are
@@ -225,7 +252,10 @@ async function baselineOptions(root, pr) {
     hint: t('baseline.head.hint'),
   });
 
-  return options;
+  // Handed out to every caller, so it is handed out unchangeable.
+  const frozen = Object.freeze(options);
+  putBounded(baselineCache, key, { at: Date.now(), options: frozen }, BASELINE_MAX);
+  return frozen;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +293,7 @@ async function getSchemaView(root, opts = {}) {
   if (!current.plugin) return view;
 
   // Without git there is no "before" - we still show the schema.
-  const baselines = await baselineOptions(root, opts.pr);
+  const baselines = await baselineOptions(root, opts.pr, Boolean(opts.force));
   view.baselines = baselines.map(({ mode, label, hint }) => ({ mode, label, hint }));
   if (!baselines.length) return view;
 
@@ -285,4 +315,6 @@ async function getSchemaView(root, opts = {}) {
   return view;
 }
 
-module.exports = { getSchemaView, clearCache, PLUGINS };
+// `baselineOptions` is exported so the test can count the git processes it
+// starts; the panel goes through `getSchemaView`.
+module.exports = { getSchemaView, baselineOptions, clearCache, PLUGINS };

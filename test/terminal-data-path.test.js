@@ -401,6 +401,10 @@ const oscSandbox = {
   // The dispatch checks the session ID against the form claude-sessions names
   // its transcripts by; main.js imports it from there.
   TRANSCRIPT_ID_RE: require('../src/main/claude-sessions').TRANSCRIPT_ID_RE,
+  // Which command lines count as an agent comes from the plugins; the real
+  // function goes into the sandbox so this test cannot pass against a stub that
+  // says yes to everything. What it matches is test/agent-commands.test.js.
+  isAgentCommand: require('../src/main/agents').isAgentCommand,
   win: { isDestroyed: () => false, webContents: { send: (ch, id, v) => calls.push(`${ch}:${v}`) } },
   beginAgentBinding: (s, cmd) => calls.push('bind:' + cmd),
   bindAgentSession: (s, id) => calls.push('session:' + id),

@@ -111,7 +111,21 @@ function remember(cwd, entry) {
   return entry;
 }
 
+const verdictInFlight = new Map(); // cwd -> Promise
+
+// Several sessions can share a working directory, and on a cold cache they all
+// arrive at the same tick. One probe answers them all - the same arrangement
+// the root lookup below makes, for the same reason.
 async function verdictFor(cwd) {
+  const running = verdictInFlight.get(cwd);
+  if (running) return running;
+  const pending = lookupVerdict(cwd);
+  verdictInFlight.set(cwd, pending);
+  try { return await pending; }
+  finally { verdictInFlight.delete(cwd); }
+}
+
+async function lookupVerdict(cwd) {
   const now = Date.now();
   const known = verdicts.get(cwd);
   if (known) {
@@ -173,6 +187,51 @@ function parseStatus(porcelain) {
   return files;
 }
 
+// --- repo root per working directory ---------------------------------------
+//
+// `rev-parse --show-toplevel` gives the same answer for a working directory
+// until the repository underneath it changes: a `git init` in a subdirectory,
+// a worktree that takes the directory's place, the directory disappearing. A
+// deleted directory is caught by the caller before it gets here; the other two
+// happen without announcing themselves, so the entry carries a lifetime. At the
+// four-second refresh that is one process per working directory per minute
+// instead of fifteen.
+const rootCache = new Map(); // cwd -> { root, at }
+const rootInFlight = new Map(); // cwd -> Promise
+const ROOT_TTL = 60_000;
+const ROOT_CACHE_MAX = 64;
+
+async function gitRoot(cwd) {
+  const hit = rootCache.get(cwd);
+  if (hit && Date.now() - hit.at < ROOT_TTL) return hit.root;
+
+  // Several sessions can share a working directory, and on a cold cache they
+  // all arrive at the same tick. One process answers them all.
+  const running = rootInFlight.get(cwd);
+  if (running) return running;
+
+  const pending = lookupRoot(cwd);
+  rootInFlight.set(cwd, pending);
+  try {
+    return await pending;
+  } finally {
+    rootInFlight.delete(cwd);
+  }
+}
+
+async function lookupRoot(cwd) {
+  const now = Date.now();
+  const out = await run('git', ['rev-parse', '--show-toplevel'], cwd);
+  const root = out && out.trim() ? out.trim().replace(/\//g, path.sep) : null;
+  // A failed or empty answer is not cached: it is a timeout or a directory
+  // outside a repository, and both are answered again next time.
+  if (!root) return null;
+  rootCache.delete(cwd);
+  rootCache.set(cwd, { root, at: now });
+  while (rootCache.size > ROOT_CACHE_MAX) rootCache.delete(rootCache.keys().next().value);
+  return root;
+}
+
 async function getGitInfo(cwd) {
   if (!cwd || !fs.existsSync(cwd)) return null;
   // The verdict answers both questions the first two calls used to ask: whether
@@ -184,12 +243,17 @@ async function getGitInfo(cwd) {
   if (verdict.risk) return { blocked: verdict.risk, branch: null, root: null, files: [] };
   const branch = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
   if (branch === null) return null;
-  const root = await run('git', ['rev-parse', '--show-toplevel'], cwd);
-  const status = await run('git', ['status', '--porcelain'], cwd);
+  // Root and status do not depend on each other, so they run together. The
+  // branch above stays the abort condition and therefore stays on its own.
+  const [root, status] = await Promise.all([
+    gitRoot(cwd),
+    run('git', ['status', '--porcelain'], cwd),
+  ]);
   return {
     blocked: null,
     branch: branch.trim(),
-    root: root ? root.trim().replace(/\//g, path.sep) : cwd,
+    // gitRoot() hands back an already normalised path or null.
+    root: root || cwd,
     files: status ? parseStatus(status) : [],
   };
 }

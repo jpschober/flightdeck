@@ -1795,12 +1795,30 @@ function renderLimit(title, limit, opts = {}) {
 // The worst status wins - the dot on the tab should show the tightest limit
 const SEVERITY = { unknown: 0, early: 0, ok: 1, warn: 2, over: 3 };
 
+// Every window the endpoint delivers counts, including the ones that used to be
+// left out of this (seven days Sonnet) and any that come later. A limit that
+// bites stops work, whichever window it sits in - a dot that stays green while
+// one of them is exhausted would be showing the wrong thing.
 function worstStatus(data) {
   let worst = 'unknown';
-  for (const l of [data.fiveHour, data.sevenDay, data.sevenDayOpus]) {
+  for (const l of data.limits || []) {
     if (l && SEVERITY[l.status] > SEVERITY[worst]) worst = l.status;
   }
   return worst;
+}
+
+// The endpoint names its windows itself; these three have a translation. A
+// window that is not among them is shown under its raw key - it is visible,
+// and the name says where it came from.
+const WINDOW_LABELS = {
+  five_hour: 'usage.window.5h',
+  seven_day: 'usage.window.7d',
+  seven_day_opus: 'usage.window.7dOpus',
+};
+
+function limitLabel(limit) {
+  const key = WINDOW_LABELS[limit.key];
+  return key ? t(key) : limit.key;
 }
 
 async function loadUsage(force = false) {
@@ -1817,11 +1835,9 @@ async function loadUsage(force = false) {
     return;
   }
 
-  const parts = [
-    renderLimit(t('usage.window.5h'), data.fiveHour),
-    renderLimit(t('usage.window.7d'), data.sevenDay),
-    renderLimit(t('usage.window.7dOpus'), data.sevenDayOpus),
-  ].filter(Boolean);
+  const parts = (data.limits || [])
+    .map((limit) => renderLimit(limitLabel(limit), limit))
+    .filter(Boolean);
 
   if (!parts.length) {
     usageContentEl.innerHTML = `<div class="muted">${escapeHtml(t('usage.noLimits'))}</div>`;

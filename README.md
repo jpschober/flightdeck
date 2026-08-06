@@ -30,6 +30,9 @@ clearance for takeoff.
   - **DB schema**: the project's tables, columns, types and constraints —
     plus a signal as soon as the current work or PR changes the schema
     (see below)
+  - **Usage**: the limits of your Claude subscription against the share of the
+    window that has already passed — this reads Claude Code's login and an
+    undocumented endpoint (see below)
 - Panels are resizable via the dividers.
 
 ## Getting started
@@ -51,6 +54,7 @@ src/main/main.js     Electron main: PTY sessions (node-pty), shell detection,
 src/main/gitinfo.js  git status/branch + PR info via gh (cached)
 src/main/agents/     Running agents: plugin registry ("sensor") + plugins
 src/main/dbschema/   DB schema: plugin registry ("sensor"), DDL reader, diff
+src/main/usage.js    limits of the Claude subscription (OAuth usage endpoint)
 src/main/settings.js persisted settings (interface language, OSC 52 clipboard)
 src/i18n/            interface languages: runtime, registry, one file per language
 src/preload.js       contextBridge API for the renderer
@@ -104,8 +108,12 @@ When the shell starts, its prompt is extended (PowerShell via
 
 The main process parses these sequences out of the PTY stream and derives from
 them the directory, branch, changed files, PR (refresh 4 s, PR cache 45 s) and
-the busy/idle state. A reported directory is taken over only once a check says
-it exists.
+the busy/idle state. For the agent TUIs one more rule applies: >2 s of silence
+while a command is running = "input expected" (blue dot), because these TUIs
+render continuously while working. Which command lines are agent TUIs comes
+from the agent plugins (`claude`, `codex`, `aider`), see below.
+
+A reported directory is taken over only once a check says it exists.
 
 Git then runs in a directory nobody clicked on, which is why it is not handed
 that directory's configuration: `core.fsmonitor` and `core.hooksPath` are
@@ -120,9 +128,7 @@ and names the key.
 in the app with the number of characters, control characters other than tab and
 newline are dropped and the payload is capped at 100 KB. The clipboard is still
 replaced without a prompt; the report is what makes it visible before the next
-paste. "Clipboard from terminal output" in the ⋯ menu switches the write off. For the agent TUIs we watch (`claude`, `codex`, `aider`)
-one more rule applies: >2 s of silence while a command is running = "input
-expected" (blue dot), because these TUIs render continuously while working.
+paste. "Clipboard from terminal output" in the ⋯ menu switches the write off.
 
 ### Running agents
 
@@ -134,6 +140,8 @@ what they are working on.
 ```
 src/main/agents/index.js          Sensor: asks the plugins, picks the most confident one
 src/main/agents/plugins/claude.js Claude Code: detection + counting
+src/main/agents/plugins/codex.js  Codex: command pattern only
+src/main/agents/plugins/aider.js  Aider: command pattern only
 ```
 
 **Plugins.** As with the DB schema, the sensor knows nothing about the
@@ -143,6 +151,7 @@ directories. Detection *and* counting live in the plugin:
 ```js
 {
   id, label,
+  commandPattern,                                  // RegExp on the command line
   detect(ctx) -> { confidence, evidence[] } | null,
   read(ctx)   -> { agents: [...] },
 }
@@ -154,6 +163,14 @@ business — the Claude plugin recognises itself by the bound session, a plugin
 for a different agent CLI could go by the command. If a plugin claims
 responsibility, it also delivers the count. Adding another one means: create a
 file under `plugins/`, register it in `PLUGINS`, done.
+
+`commandPattern` answers a second question, and for the whole app: which CLIs
+are agents at all. `agents/index.js` exports `isAgentCommand(cmd)`, which asks
+every plugin's pattern; the attention heuristic in `main.js` goes through it,
+so a new plugin brings the recognition of its CLI along with the counting.
+The Codex and Aider plugins consist of that pattern alone — they keep the state
+detection for those CLIs, `detect()` returns `null` and they count nothing.
+What is watched and what is not is written down in `test/agent-commands.test.js`.
 
 **Claude plugin.** Claude Code stores every subagent of a session as its own
 pair under `~/.claude/projects/<project>/<session>/subagents/`:
@@ -247,3 +264,28 @@ Relationships are shown as foreign keys in plain text, including target and
 
 A re-read only happens when the fingerprint of the involved files (mtime/size)
 changes — which makes the background poll every 10 s essentially free.
+
+### Usage limits
+
+The tab shows how much of each limit window of your Claude subscription is used
+up, against the share of the window that has already passed: after three of
+seven days, 42.9 % is the target, and above that the limit falls before the
+window ends. The mark in the bar sits at that target. The dot on the tab
+follows the tightest of all reported windows, so a limit about to fall is
+visible with the tab closed.
+
+The numbers come from `https://api.anthropic.com/api/oauth/usage`, the endpoint
+behind `/usage` in Claude Code. It is undocumented and can change or disappear
+without notice; the tab then shows an error instead of numbers. Which windows
+appear is up to the endpoint: a window it adds shows up without a change here,
+its length read out of the key name, sorted in by that length. Until it has a
+translation it carries its raw key from the endpoint as its title.
+
+Reaching the endpoint takes Claude Code's own login. Flightdeck reads the OAuth
+access token from `~/.claude/.credentials.json`, on macOS from the login
+keychain entry `Claude Code-credentials`, which macOS asks permission for the
+first time it is read. The token stays in the main process: it does not go over
+the bridge to the renderer, it appears in no error message and in no log line,
+and it is sent to the endpoint above and to no other address. Without a Claude
+Code login the tab says so and stays empty; nothing else in the app depends on
+it.
