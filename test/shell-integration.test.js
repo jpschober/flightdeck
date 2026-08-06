@@ -1,11 +1,12 @@
 'use strict';
-// The shell integration from src/main/main.js: it has to add its hooks to what
-// the user's configuration already installed instead of assigning over it.
+// The shell integration from src/main/shell-integration/: it has to add its
+// hooks to what the user's configuration already installed instead of assigning
+// over it.
 //
-// main.js requires Electron, so the block holding the rc texts is pulled out of
-// the source and evaluated on its own. The bash part is then run through a real
-// bash against a home directory whose .bashrc occupies PROMPT_COMMAND and the
-// DEBUG trap.
+// The scripts are files, and they are read here through readScript() - the same
+// function the app uses, so the `# flightdeck:include` line is resolved the way
+// a session gets it. What the assertions and the real bash below see is the text
+// that is written into the integration directory, not a copy of it.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -14,20 +15,22 @@ const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const { execFileSync } = require('child_process');
+const { readScript } = require('../src/main/shell-integration');
 
-const MAIN = path.join(__dirname, '..', 'src', 'main', 'main.js');
-const src = fs.readFileSync(MAIN, 'utf8');
+const MAIN = path.join(__dirname, '..', 'src', 'main');
 
-const from = src.indexOf('const PS_INIT = [');
-const to = src.indexOf('// The integration files live in their own directory');
-assert.ok(from > 0 && to > from, 'the shell integration block was not found in main.js');
+const BASH_RC = readScript('bashrc.sh');
+const PS_INIT = readScript('init.ps1');
+const ZSH_RC = readScript('zshrc.zsh');
 
-const sandbox = { Buffer };
-vm.createContext(sandbox);
-// `const` declarations stay inside the block, so the texts are handed out
-// through the sandbox object.
-vm.runInContext(`${src.slice(from, to)}\nthis.rcs = { BASH_RC, PS_INIT, ZSH_RC };`, sandbox);
-const { BASH_RC, PS_INIT, ZSH_RC } = sandbox.rcs;
+// The wrapper is a file of its own, and both rc scripts name it in an include
+// line. Reading a script that still carries the line would test nothing.
+test('the claude wrapper is included, not left as a marker', () => {
+  for (const [name, text] of [['bashrc.sh', BASH_RC], ['zshrc.zsh', ZSH_RC]]) {
+    assert.ok(!/# flightdeck:include/.test(text), `${name} still carries the include line`);
+    assert.ok(text.includes('__flightdeck_uuid()'), `${name} did not get the claude wrapper`);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // The texts themselves
@@ -56,8 +59,13 @@ test('powershell calls the prompt and the read line it found', () => {
   assert.ok(PS_INIT.includes('if ($Global:__flightdeckPrevReadLine) { $l = & $Global:__flightdeckPrevReadLine }'),
     'the existing PSConsoleHostReadLine is not called');
   // Without the guard a second run would chain our own function onto itself.
-  assert.ok(PS_INIT.startsWith('if (-not (Test-Path Variable:Global:__flightdeckInstalled)) {'),
-    'the installation guard is missing');
+  // The file carries a comment header, so the guard is the first line that runs
+  // rather than the first line of the text - and it has to wrap all of it.
+  const code = PS_INIT.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
+  assert.strictEqual(code[0], 'if (-not (Test-Path Variable:Global:__flightdeckInstalled)) {',
+    'the installation guard is missing, or something runs ahead of it');
+  assert.strictEqual(code[code.length - 1], '}',
+    'the guard no longer closes at the end - part of the script runs unguarded');
 });
 
 // ---------------------------------------------------------------------------
@@ -191,16 +199,20 @@ trap 'return' DEBUG
 // ---------------------------------------------------------------------------
 // Shells the integration does not reach
 // ---------------------------------------------------------------------------
-const oscFrom = src.indexOf('const OSC7_RE =');
-const oscTo = src.indexOf('// Agent binding: which Claude transcript belongs to this session?');
-assert.ok(oscFrom > 0 && oscTo > oscFrom, 'the OSC block was not found in main.js');
+const stateSrc = fs.readFileSync(path.join(MAIN, 'session-state.js'), 'utf8');
+const oscFrom = stateSrc.indexOf('const ATTENTION_QUIET_MS');
+const oscTo = stateSrc.indexOf('// Agent binding: which Claude transcript belongs to this session?');
+assert.ok(oscFrom > 0 && oscTo > oscFrom, 'the state block was not found in session-state.js');
+const osc = require('../src/main/osc');
 const stateCalls = [];
 const oscSandbox = {
   console, Buffer, setTimeout, clearTimeout, Date,
   log: { error: () => {}, warn: () => {}, info: () => {}, debug: () => {} },
+  OSC_ANY_RE: osc.OSC_ANY_RE,
+  OSC_EVENT_RE: osc.OSC_EVENT_RE,
   TRANSCRIPT_ID_RE: require('../src/main/claude-sessions').TRANSCRIPT_ID_RE,
   isAgentCommand: () => false,
-  win: { isDestroyed: () => false, webContents: { send: (ch, id, v) => stateCalls.push(v) } },
+  send: (ch, id, v) => stateCalls.push(v),
   beginAgentBinding: () => {},
   bindAgentSession: () => {},
   bindContinuedSession: () => {},
@@ -208,7 +220,7 @@ const oscSandbox = {
 };
 vm.createContext(oscSandbox);
 vm.runInContext(
-  `${src.slice(oscFrom, src.lastIndexOf('// ------', oscTo))}\nthis.applyStateFromData = applyStateFromData;`,
+  `${stateSrc.slice(oscFrom, stateSrc.lastIndexOf('// ------', oscTo))}\nthis.applyStateFromData = applyStateFromData;`,
   oscSandbox);
 
 function ptySession(integrated) {

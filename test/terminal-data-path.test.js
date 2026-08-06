@@ -1,10 +1,11 @@
 'use strict';
-// Batching, flow control and the grid preview tail from src/main/main.js.
+// Batching, flow control and the grid preview tail from src/main/sessions.js,
+// and the OSC dispatch from src/main/session-state.js.
 //
-// main.js requires Electron, so the functions under test are pulled out of the
-// source and run against stub sessions. They are pure given a session object:
-// they touch `win`, the PTY handle and the state parser only through names the
-// sandbox provides.
+// Both modules require Electron by way of what they load, so the functions
+// under test are pulled out of the source and run against stub sessions. They
+// are pure given a session object: they touch the renderer, the PTY handle and
+// the state parser only through names the sandbox provides.
 //
 // The tests share `sent`, `ptyLog` and the sandbox's session map and run in the
 // order they stand here.
@@ -15,17 +16,17 @@ const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
 
-const MAIN = path.join(__dirname, '..', 'src', 'main', 'main.js');
-const src = fs.readFileSync(MAIN, 'utf8');
+const MAIN = path.join(__dirname, '..', 'src', 'main');
+const src = fs.readFileSync(path.join(MAIN, 'sessions.js'), 'utf8');
 
 // ---------------------------------------------------------------------------
 // Load the block from `const FLUSH_MS` up to createSession() into a sandbox
 // ---------------------------------------------------------------------------
 const from = src.indexOf('const FLUSH_MS = 16;');
 const to = src.indexOf('function createSession(shellId, opts = {}) {');
-assert.ok(from > 0 && to > from, 'the batching block was not found in main.js');
+assert.ok(from > 0 && to > from, 'the batching block was not found in sessions.js');
 const block = src.slice(from, to);
-for (const fn of ['queueOutput', 'flushOutput', 'ackOutput', 'resetFlowControl']) {
+for (const fn of ['queueOutput', 'flushOutput', 'ackOutput', 'resetFlowControl', 'gridPreview']) {
   assert.ok(block.includes(`function ${fn}(`), `${fn} is not in the extracted block`);
 }
 
@@ -42,7 +43,8 @@ const log = { error: rec('error'), warn: rec('warn'), info: rec('info'), debug: 
 const sandbox = {
   setTimeout, clearTimeout, console, log,
   sessions: new Map(),
-  win: { isDestroyed: () => false, webContents: { send: (ch, id, data) => sent.push({ ch, id, data }) } },
+  alive: () => true,
+  send: (ch, id, data) => sent.push({ ch, id, data }),
   extractCwd: () => null,
   applyStateFromData: () => {},
   refreshSession: (s) => refreshed.push(s.id),
@@ -61,25 +63,15 @@ function statFor(p) {
 }
 vm.createContext(sandbox);
 vm.runInContext(`${block}
-this.api = { queueOutput, flushOutput, ackOutput, resetFlowControl };
+this.api = { queueOutput, flushOutput, ackOutput, resetFlowControl, gridPreview };
 this.LIMITS = { FLUSH_MS, FLUSH_CHARS, FLOW_HIGH_WATER_CHARS, FLOW_LOW_WATER_CHARS, GRID_BUFFER_CHARS, GRID_PREVIEW_CHARS };`, sandbox);
 const { queueOutput, flushOutput, ackOutput, resetFlowControl } = sandbox.api;
 const L = sandbox.LIMITS;
 
-// The session:buffer handler is an IPC callback; its body is lifted from the
-// source so the test cannot drift from it silently.
-const bufFrom = src.indexOf("ipcMain.handle('session:buffer'");
-const bufTo = src.indexOf('});', bufFrom);
-assert.ok(bufFrom > 0 && bufTo > bufFrom, 'the session:buffer handler was not found');
-const bufBody = src.slice(src.indexOf('{', src.indexOf('=>', bufFrom)) + 1, bufTo);
-assert.ok(!bufBody.includes('slice(-GRID_PREVIEW_CHARS)'),
-  'the handler cuts to an exact length again - that can split a surrogate pair or an escape sequence');
-const previewTail = vm.runInContext(
-  `(function (session) {
-     const sessions = new Map([[session.id, session]]);
-     const id = session.id;
-     ${bufBody}
-   })`, sandbox);
+// What the session:buffer handler returns.
+const previewTail = sandbox.api.gridPreview;
+assert.ok(!block.slice(block.indexOf('function gridPreview(')).includes('slice(-GRID_PREVIEW_CHARS)'),
+  'the tail is cut to an exact length again - that can split a surrogate pair or an escape sequence');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -152,8 +144,9 @@ test('flushing an empty queue does nothing', () => {
 });
 
 test('a destroyed window means no send and no backlog', () => {
-  const live = sandbox.win;
-  sandbox.win = { isDestroyed: () => true, webContents: { send: () => { throw new Error('must not send'); } } };
+  const live = sandbox.send;
+  sandbox.alive = () => false;
+  sandbox.send = () => { throw new Error('must not send'); };
   try {
     const s = mkSession();
     queueOutput(s, 'hello');
@@ -161,7 +154,8 @@ test('a destroyed window means no send and no backlog', () => {
     assert.strictEqual(s.unacked, 0);
     assert.strictEqual(s.outputBuffer.join(''), 'hello');
   } finally {
-    sandbox.win = live;
+    sandbox.alive = () => true;
+    sandbox.send = live;
   }
 });
 
@@ -231,9 +225,10 @@ test('an oversized acknowledgement does not drive the backlog negative', () => {
 });
 
 test('the ack guard rejects everything that is not a non-negative integer', () => {
-  // The guard as it stands in main.js, checked against the values that would
+  // The guard as it stands in ipc.js, checked against the values that would
   // inflate `unacked` and pause the session for good.
-  const guard = src.match(/ipcMain\.on\('session:ack'[\s\S]*?\n\}\);/);
+  const ipcSrc = fs.readFileSync(path.join(MAIN, 'ipc.js'), 'utf8');
+  const guard = ipcSrc.match(/ipcMain\.on\('session:ack'[\s\S]*?\n\s*\}\);/);
   assert.ok(guard, "the session:ack handler was not found");
   const check = vm.runInContext(
     `(function (chars) { return ${guard[0].match(/if \(s && !s\.exited && ([^)]*\)?[^)]*)\) /)[1]}; })`,
@@ -386,26 +381,35 @@ test('a newer report wins over an answer that arrives late', async () => {
 // ---------------------------------------------------------------------------
 // OSC dispatch: applyStateFromData in a second sandbox
 // ---------------------------------------------------------------------------
-const oscFrom = src.indexOf('const OSC7_RE =');
-const oscTo = src.indexOf('// Agent binding: which Claude transcript belongs to this session?');
-assert.ok(oscFrom > 0 && oscTo > oscFrom, 'the OSC block was not found in main.js');
-const oscBlock = src.slice(oscFrom, src.lastIndexOf('// ------', oscTo));
-assert.ok(oscBlock.includes('const OSC_EVENT_RE = new RegExp('),
+const oscModule = require('../src/main/osc');
+const oscSrc = fs.readFileSync(path.join(MAIN, 'osc.js'), 'utf8');
+assert.ok(oscSrc.includes('const OSC_EVENT_RE = new RegExp('),
   'the OSC sequences are scanned per type again - the effects are then grouped by type instead of ordered by position');
+
+const stateSrc = fs.readFileSync(path.join(MAIN, 'session-state.js'), 'utf8');
+const oscFrom = stateSrc.indexOf('const ATTENTION_QUIET_MS');
+const oscTo = stateSrc.indexOf('// Agent binding: which Claude transcript belongs to this session?');
+assert.ok(oscFrom > 0 && oscTo > oscFrom, 'the state block was not found in session-state.js');
+const oscBlock = stateSrc.slice(oscFrom, stateSrc.lastIndexOf('// ------', oscTo));
+assert.ok(oscBlock.includes('function applyStateFromData('), 'the dispatch is not in the extracted block');
 assert.ok(!/while \(\(m = OSC(133|CMD|SESS|_TITLE|9)_RE\.exec/.test(oscBlock),
   'a per-type scan loop is back in applyStateFromData');
 
 const calls = [];
 const oscSandbox = {
   console, Buffer, setTimeout, clearTimeout, Date, log,
+  // The expressions are the real ones; what the dispatch does with the matches
+  // is what this block is under test for.
+  OSC_ANY_RE: oscModule.OSC_ANY_RE,
+  OSC_EVENT_RE: oscModule.OSC_EVENT_RE,
   // The dispatch checks the session ID against the form claude-sessions names
-  // its transcripts by; main.js imports it from there.
+  // its transcripts by; session-state.js imports it from there.
   TRANSCRIPT_ID_RE: require('../src/main/claude-sessions').TRANSCRIPT_ID_RE,
   // Which command lines count as an agent comes from the plugins; the real
   // function goes into the sandbox so this test cannot pass against a stub that
   // says yes to everything. What it matches is test/agent-commands.test.js.
   isAgentCommand: require('../src/main/agents').isAgentCommand,
-  win: { isDestroyed: () => false, webContents: { send: (ch, id, v) => calls.push(`${ch}:${v}`) } },
+  send: (ch, id, v) => calls.push(`${ch}:${v}`),
   beginAgentBinding: (s, cmd) => calls.push('bind:' + cmd),
   bindAgentSession: (s, id) => calls.push('session:' + id),
   bindContinuedSession: () => calls.push('continue'),

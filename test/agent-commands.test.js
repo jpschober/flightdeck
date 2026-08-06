@@ -170,12 +170,16 @@ function stripComments(src) {
     .replace(/(^|[^\\:/])\/\/.*$/gm, '$1');
 }
 
-test('main.js names no agent CLI of its own', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
-  assert.ok(!src.includes('WATCHED_CMD_RE'), 'the hardcoded command pattern is back in main.js');
-  assert.ok(src.includes('isAgentCommand'), 'main.js no longer asks the plugins');
-  assert.ok(!/\b(codex|aider)\b/i.test(stripComments(src)),
-    'main.js names an agent CLI again - the answer belongs to the plugins');
+test('session-state.js names no agent CLI of its own', () => {
+  const dir = path.join(__dirname, '..', 'src', 'main');
+  const state = fs.readFileSync(path.join(dir, 'session-state.js'), 'utf8');
+  assert.ok(!state.includes('WATCHED_CMD_RE'), 'the hardcoded command pattern is back in session-state.js');
+  assert.ok(state.includes('isAgentCommand'), 'session-state.js no longer asks the plugins');
+  for (const file of ['session-state.js', 'sessions.js', 'main.js']) {
+    const src = fs.readFileSync(path.join(dir, file), 'utf8');
+    assert.ok(!/\b(codex|aider)\b/i.test(stripComments(src)),
+      `${file} names an agent CLI again - the answer belongs to the plugins`);
+  }
 });
 
 test('the comment stripping keeps code and drops every form of comment', () => {
