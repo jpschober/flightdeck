@@ -37,6 +37,7 @@ module.exports = {
   'session.state.attention': 'Saisie attendue – c’est à vous',
   'session.state.exited': 'Terminé',
   'session.state.idle': 'En attente de saisie',
+  'session.state.unknown': 'Aucun état disponible – ce shell n’a pas d’intégration',
   'session.agents': { one: '{count} agent au travail', other: '{count} agents au travail' },
 
   // --- git panel ---

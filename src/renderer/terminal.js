@@ -22,7 +22,7 @@ import { sessions, activeId, setActiveId } from './sessions.js';
 import { renderContextPanel } from './git-panel.js';
 import { renderHistory } from './history.js';
 import { loadTodosFor, renderTodos } from './notes.js';
-import { dbState, loadDbSchema, renderDbPanel } from './db-schema.js';
+import { dbState, loadDbSchema, renderDbPanel, clearDbTables } from './db-schema.js';
 import { gridOpen, closeGrid } from './grid.js';
 import { openMetaPopover } from './meta-popover.js';
 import { pulseForgetProgress } from './pulse.js';
@@ -201,7 +201,8 @@ export async function newSession(shellId, opts) {
     files: [],
     pr: null,
     exited: false,
-    state: 'idle',
+    // 'unknown' for shells without integration - see spawnArgsFor in main.js
+    state: meta.state || 'idle',
     gitRoot: null,
     gitBlocked: null,
     agentCwd: null,
@@ -242,10 +243,9 @@ export function setActive(id) {
   const active = id ? sessions.get(id) : null;
   renderHistory(active);
   loadTodosFor(active);
-  // Different project, different schema - the expanded state no longer fits
-  dbState.lastJson = '';
-  dbState.open.clear();
-  dbState.closed.clear();
+  // Different project, different schema - the cards of the old one and what
+  // was expanded on them no longer fit
+  clearDbTables();
   loadDbSchema();
 }
 
@@ -268,7 +268,6 @@ export async function closeSession(id) {
       renderHistory(null);
       renderTodos(null);
       dbState.view = null;
-      dbState.lastJson = '';
       renderDbPanel();
     }
   }
@@ -316,7 +315,8 @@ export function updateSessionItem(s) {
   const state = s.exited ? 'exited' : (s.state || 'idle');
   statusEl.className = 'si-status ' + state;
   statusEl.title = t('session.state.' + (
-    state === 'busy' || state === 'attention' || state === 'exited' ? state : 'idle'));
+    state === 'busy' || state === 'attention' || state === 'exited' || state === 'unknown'
+      ? state : 'idle'));
   el.querySelector('.si-title').textContent =
     s.title || `${basename(s.cwd) || s.shellName}`;
   const labelEl = el.querySelector('.si-label');

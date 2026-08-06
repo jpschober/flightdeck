@@ -16,6 +16,13 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { run } = require('../src/main/gitinfo');
 
+// The repository the last test builds must not inherit whoever runs the tests.
+// A global `commit.gpgsign=true` makes its commit fail, and that failure has
+// nothing to do with what is being tested. Set on the process, so the git
+// processes gitinfo.js starts are covered as well.
+process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+process.env.GIT_CONFIG_SYSTEM = '/dev/null';
+
 const MAX_PREVIEW = 512 * 1024;
 const SRC = path.join(__dirname, '..', 'src', 'main', 'main.js');
 

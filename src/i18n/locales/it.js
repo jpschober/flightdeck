@@ -37,6 +37,7 @@ module.exports = {
   'session.state.attention': 'Input richiesto – tocca a te',
   'session.state.exited': 'Terminata',
   'session.state.idle': 'In attesa di input',
+  'session.state.unknown': 'Nessuno stato disponibile: questa shell non ha integrazione',
   'session.agents': { one: '{count} agente al lavoro', other: '{count} agenti al lavoro' },
 
   // --- git panel ---

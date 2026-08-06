@@ -12,6 +12,14 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { run, getGitInfo, scanConfig } = require('../src/main/gitinfo');
 
+// The repositories below carry the configuration the tests put there and
+// nothing else. A global `commit.gpgsign=true` makes their commits fail, and
+// those commits stand outside the `try` that catches an absent git, so the file
+// would fail instead of skipping. Set on the process, so the git processes
+// gitinfo.js starts are covered as well.
+process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+process.env.GIT_CONFIG_SYSTEM = '/dev/null';
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-git-'));
 const repo = path.join(tmp, 'hostile');
 const marker = path.join(tmp, 'it-ran');

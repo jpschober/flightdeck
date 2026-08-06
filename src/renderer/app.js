@@ -11,7 +11,7 @@ import { buildShellMenu, buildMoreMenu, loadOsc52Setting, menuOpen, closeMenus }
 import { closeTopOverlay } from './overlays.js';
 import { renderContextPanel } from './git-panel.js';
 import { loadTodosFor } from './notes.js';
-import { dbState, loadDbSchema, startDbPolling } from './db-schema.js';
+import { loadDbSchema, startDbPolling, clearDbTables } from './db-schema.js';
 import { startUsagePolling } from './usage.js';
 import { panelZoomed, setPanelZoom, fitActive } from './panel.js';
 import { gridCards, gridOpen, closeGrid, toggleGrid } from './grid.js';
@@ -111,9 +111,7 @@ window.api.onInfo((info) => {
   if (rootChanged) {
     loadTodosFor(s); // different project -> load its notes
     if (info.id === activeId) {
-      dbState.lastJson = '';
-      dbState.open.clear();
-      dbState.closed.clear();
+      clearDbTables(); // different schema, different cards
       loadDbSchema();
     }
   }

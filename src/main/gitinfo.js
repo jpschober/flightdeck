@@ -168,17 +168,61 @@ async function run(cmd, args, cwd, timeout = 8000) {
   return exec(cmd, args, cwd, timeout);
 }
 
+// --- `git status --porcelain=v2 -z` ----------------------------------------
+//
+// The path is the last field of a record; how many space-separated fields come
+// before it follows from the record's first character (git-status(1), "Porcelain
+// Format Version 2"). `?` (untracked) carries the path right after its
+// one-character type. `!` (ignored) does the same, but only ever appears with
+// `--ignored`, which nobody passes; it lands in the same place as a record type
+// git has yet to invent - dropped.
+const V2_FIELDS = { 1: 8, 2: 9, u: 10 };
+
+/** The rest of a record after `count` space-separated fields, or null. */
+function afterFields(record, count) {
+  let at = 0;
+  for (let n = 0; n < count; n++) {
+    at = record.indexOf(' ', at) + 1;
+    if (at === 0) return null; // fewer fields than the format has
+  }
+  return record.slice(at);
+}
+
+// Version 2 with `-z`, because of what the short format does to a path. Git
+// writes anything non-ASCII there C-quoted (`"src/M\303\274ller.ts"`), and the
+// escapes would have to be undone here: a name that stays escaped is shown
+// wrong in the file list, and the `git diff -- <path>` the preview runs
+// afterwards matches nothing. `-z` writes the path as it is on disk, and it
+// puts a rename's original path in a record of its own - the short format
+// separates the two paths with ` -> `, which a file name may contain itself.
+//
+// The format arrived in git 2.11 (2016). An older git rejects the option, and
+// `exec` turns that into the same `null` as any other failed call: the file
+// list stays empty, the rest of the panel keeps working.
 function parseStatus(porcelain) {
   const files = [];
-  for (const rawLine of porcelain.split('\n')) {
-    const line = rawLine.replace(/\r$/, '');
-    if (!line.trim()) continue;
-    const xy = line.slice(0, 2);
-    let p = line.slice(3);
-    // Rename: "R  old -> new" -> only show the new path
-    const arrow = p.indexOf(' -> ');
-    if (arrow !== -1) p = p.slice(arrow + 4);
-    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+  const records = porcelain.split('\0');
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (!record) continue; // the trailing NUL, and nothing else
+    const kind = record[0];
+    if (kind === '#') continue; // branch headers, were they ever asked for
+    let xy;
+    let p;
+    if (kind === '?') {
+      xy = '??';
+      p = record.slice(2);
+    } else {
+      const fields = V2_FIELDS[kind];
+      if (!fields) continue;
+      // A rename or copy is followed by its original path. The list shows the
+      // new one, so that record is stepped over.
+      if (kind === '2') i++;
+      p = afterFields(record, fields);
+      if (p === null) continue;
+      // An unchanged half is a dot in this format, not a space.
+      xy = record.slice(2, 4).replace(/\./g, ' ');
+    }
     const code = xy === '??' ? '?' : (xy.trim()[0] || 'M');
     // git reports untracked directories with a trailing slash. Those are not
     // files - a preview of them is bound to fail.
@@ -247,7 +291,7 @@ async function getGitInfo(cwd) {
   // branch above stays the abort condition and therefore stays on its own.
   const [root, status] = await Promise.all([
     gitRoot(cwd),
-    run('git', ['status', '--porcelain'], cwd),
+    run('git', ['status', '--porcelain=v2', '-z'], cwd),
   ]);
   return {
     blocked: null,
@@ -396,4 +440,4 @@ function summarizeChecks(rollup) {
   };
 }
 
-module.exports = { getGitInfo, getPrInfo, run, scanConfig };
+module.exports = { getGitInfo, getPrInfo, parseStatus, run, scanConfig };
