@@ -9,8 +9,11 @@
     "test": "node --test test/*.test.js"
   },
   "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^43.3.0"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.1.0",
@@ -19,8 +22,5 @@
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0"
-  },
-  "allowScripts": {
-    "electron@33.4.11": true
   }
 }

@@ -3,14 +3,32 @@
 Warp-like terminal app for working with parallel AI agents. Many machines on the deck — you give the
 clearance.
 
+## Status
+
+Flightdeck is written for one workstation first: the shells, the agent CLIs and
+the project layouts its author works with. It runs elsewhere, and it is being
+generalised step by step — the parts that were tied to one setup now sit behind
+the plugin interfaces described below, and the rest moves the same way. Until
+then, expect defaults and detection that follow that one setup.
+
+> **Warning: vibe coded.** This code was written by AI agents from prompts and
+> has not been reviewed line by line. It starts shells, reads your
+> repositories, and reads Claude Code's files under `~/.claude`. Tests cover
+> the parts whose behaviour is hard to see (OSC parsing, git calls, path
+> checks, the plugin registry); everything else rests on daily use.
+
 ## Features
 
-- **Multiple shell sessions in parallel**: PowerShell, PowerShell 7, Git Bash,
-  CMD, WSL (Windows) or Bash/Zsh (Linux). New session via `+` (default shell)
-  or `▾` (shell picker), `Ctrl+T` / `Ctrl+Shift+W`.
+- **Multiple shell sessions in parallel**: on Windows PowerShell, PowerShell 7,
+  Git Bash, CMD and WSL; on Linux and macOS what `/etc/shells` and the usual
+  paths offer — Bash, Zsh, Fish, Nushell, Elvish, Xonsh, Ksh, Tcsh, Dash. New
+  session via `+` (default shell) or `▾` (shell picker), `Ctrl+T` /
+  `Ctrl+Shift+W`.
 - **Sidebar header**: `+` / `▾` start a session, everything rarer (grid
   overview, Claude session browser, interface language) sits in the `⋯` menu —
   a permanent button each turned the header into a row of competing icons.
+  Above the buttons a curve shows how much is running and how much of it runs
+  in parallel.
 - **Session list on the left** – every tab shows:
   - **Status**: 🟡 working · ⭕ waiting for a command · 🔵 agent (e.g. Claude
     Code) is waiting for *your* input — you see at a glance who needs you
@@ -19,9 +37,19 @@ clearance.
   - current directory (live via shell integration / OSC 7) and git branch
   - optional manual **label** (chip) and optional manual **title**
     → double-click/right-click the tab to open the edit popover
+- **Grid overview** (`Ctrl+G`): every session as a live tile, click to jump
+  into it.
+- **Claude session browser**: the past Claude Code sessions of all projects,
+  searchable by name, first prompt and directory — resume one or fork it into a
+  new terminal.
+- **Notification when it is your turn**: a session switching to "input
+  expected" sends a desktop notification, unless it is the active session in a
+  focused window; clicking it focuses the window and that session.
 - **Context panel on the right** with tabs (follows the active session):
-  - **Git**: the associated pull request (via the `gh` CLI) + changed files;
-    clicking a file opens the diff/file preview, `Esc` closes it
+  - **Git**: the associated pull request (via the `gh` CLI) with description,
+    checks, commits, comments and reviews, plus the changed files; clicking a
+    file opens the diff or the file itself (markdown also formatted), `Esc`
+    closes it. If the agent works in a worktree, the panel names it.
   - **History**: your input in this session — shell commands verbatim, prompts
     to agents reconstructed; click to copy, `↩` inserts into the terminal
   - **Notes**: short TODOs per project (repo root), persisted across restarts;
@@ -41,8 +69,41 @@ npm install
 npm start
 ```
 
-Requirements: `git` on the PATH; for PR display additionally the
+Requirements: Node.js 22.12 or newer (Electron 43 asks for it) and `git` on
+the PATH; for PR display additionally the
 [GitHub CLI](https://cli.github.com/) (`gh auth login`).
+
+## Plugins
+
+Two things in the panel depend on the technology in front of them: which agent
+CLI runs in a terminal, and how a project describes its database schema. Both
+go through plugins, so support for a further agent or a further schema source
+is one file plus one line in a list — the sensors, the IPC and the UI stay
+untouched. This is also the path along which the app is generalised: what used
+to be written for one setup is now the coverage of its plugins.
+
+Both registries detect the same way (`src/main/plugin-registry.js`): every
+plugin says whether it feels responsible and how sure it is, the most confident
+one wins, and a plugin that throws is skipped instead of taking the run down.
+
+| Area | Plugin | What it covers |
+| --- | --- | --- |
+| Agents | Claude Code | recognises itself by the bound session; counts running subagents and names their tasks |
+| Agents | Codex | command pattern only — keeps the busy/attention detection, counts nothing |
+| Agents | Aider | command pattern only |
+| DB schema | Supabase | detects `supabase/config.toml` or `supabase/migrations/`, reads the schema by replaying the Postgres migrations |
+
+An agent plugin brings two things: the pattern that says its CLI is an agent at
+all — that is what the "input expected" heuristic runs on — and, if it wants,
+the count of what runs underneath it. A schema plugin brings detection plus a
+reader that returns the standardised schema format; it reads through a file
+provider, so the same plugin also delivers the state of a git commit, which is
+what the before/after comparison compares against.
+
+Not there yet: Drizzle, Prisma and plain SQL migration folders as schema
+sources, and any database other than Postgres. Each of them fits the existing
+interface — see [Running agents](#running-agents) and [DB schema](#db-schema)
+for what a plugin has to implement.
 
 ## Architecture
 
@@ -61,10 +122,15 @@ src/main/todos.js    note persistence per repo root
 src/main/ipc.js      IPC handlers
 src/main/window.js   the renderer window, and sending to it
 src/main/gitinfo.js  git status/branch + PR info via gh (cached)
+src/main/plugin-registry.js
+                     detection shared by both plugin systems
 src/main/agents/     Running agents: plugin registry ("sensor") + plugins
 src/main/dbschema/   DB schema: plugin registry ("sensor"), DDL reader, diff
+src/main/claude-sessions.js
+                     past Claude Code sessions for the session browser
 src/main/usage.js    limits of the Claude subscription (OAuth usage endpoint)
 src/main/settings.js persisted settings (interface language, OSC 52 clipboard)
+src/main/log.js      logging
 src/i18n/            interface languages: runtime, registry, one file per language
 src/preload.js       contextBridge API for the renderer
 src/renderer/        UI: sidebar, xterm terminals, tab panel, preview
