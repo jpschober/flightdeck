@@ -46,6 +46,7 @@ module.exports = {
   'git.pr.by': 'de {author}',
   'git.pr.none': 'Ninguna pull request para {branch}',
   'git.noRepo': 'No es un repositorio git',
+  'git.blocked': 'Aquí no hay git: la configuración de este repositorio indica un programa en {key}. El directorio proviene de la salida del terminal, así que no se le pide a git nada que lo inicie.',
   'git.pr.description': 'Descripción',
   'git.pr.checks': 'Comprobaciones ({success}✓ {failure}✗ {pending}●)',
   'git.pr.commits': 'Commits ({count})',
@@ -120,6 +121,12 @@ module.exports = {
   'db.tag.policy': 'política',
   'db.col.generated': 'calculada',
   'db.policy.for': 'para {roles}',
+  'db.field.type': 'tipo',
+  'db.field.nullable': 'NULL permitido',
+  'db.field.default': 'valor predeterminado',
+  'db.field.identity': 'identidad',
+  'db.field.generated': 'calculada',
+  'db.field.comment': 'comentario',
 
   // --- DB schema: before/after ---
   'dbdiff.scope': 'Alcance',
@@ -248,4 +255,12 @@ module.exports = {
   'ddl.warn.addConstraint': 'ADD CONSTRAINT no interpretado: {text}',
   'ddl.warn.addColumn': 'ADD COLUMN no interpretado: {text}',
   'ddl.warn.skipped': 'Instrucción omitida ({message}): {text}',
+
+  // --- clipboard from terminal output (OSC 52) ---
+  'menu.osc52': 'Portapapeles desde la salida del terminal',
+  'osc52.written': {
+    one: 'La salida del terminal escribió {count} carácter en el portapapeles',
+    other: 'La salida del terminal escribió {count} caracteres en el portapapeles',
+  },
+  'osc52.off': 'La salida del terminal quiso escribir en el portapapeles – desactivado en el menú',
 };

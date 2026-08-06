@@ -2,12 +2,55 @@
 // Collects git and pull request information for a working directory.
 const { execFile } = require('child_process');
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const log = require('./log');
 
-function run(cmd, args, cwd, timeout = 8000) {
+// ---------------------------------------------------------------------------
+// Git in a directory nobody chose
+//
+// The working directory comes from the terminal output (OSC 7): the shell
+// changes into it, and four seconds later git runs there. Git reads that
+// directory's .git/config, and a config can name a program that git then
+// starts. A `git clone` does not carry such settings along - a project handed
+// around as an archive with its .git directory included does, and a `cd` into
+// it is then enough.
+//
+// Three mechanisms, because no single one covers the field:
+//
+//   -c on every call        core.fsmonitor, core.hooksPath. `git status` starts
+//                           the fsmonitor; an override on the command line
+//                           beats the config file.
+//   --no-ext-diff,          diff.external and the per-driver `command` and
+//   --no-textconv           `textconv` entries, which .gitattributes points at.
+//   (see main.js)           An empty `-c diff.external=` is no use: git then
+//                           tries to run the empty command instead of falling
+//                           back to its own diff.
+//   the check below         filter.<name>.clean/smudge/process. `git status`
+//                           runs the clean filter to find out whether a file
+//                           differs from the index, the driver names are free,
+//                           so there is nothing to override by name and no
+//                           switch that turns them off.
+//
+// So the config is read before git is started in a directory, and if it names a
+// program in one of those keys, git is not started there at all. The panel says
+// so - staying silent would look like "no repository".
+const GIT_NEUTRAL = ['-c', 'core.fsmonitor=', '-c', 'core.hooksPath=/dev/null'];
+
+// The keys the check refuses. `include`/`includeIf` are in here because an
+// included file can carry any of the others; following the include ourselves
+// would mean reproducing git's rules for conditional includes.
+const EXECUTING_KEYS = [
+  /^filter\..*\.(clean|smudge|process)$/,
+  /^include\.path$/,
+  /^includeif\..*\.path$/,
+];
+
+function exec(cmd, args, cwd, timeout = 8000) {
+  const argv = cmd === 'git' ? [...GIT_NEUTRAL, ...args] : args;
+  const env = cmd === 'git' ? { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } : process.env;
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    execFile(cmd, argv, { cwd, env, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       // `null` is the answer for "nothing there" as well as for "gh is not set
       // up" and "git timed out". The callers cannot tell those apart, so the
       // reason is recorded here.
@@ -15,6 +58,114 @@ function run(cmd, args, cwd, timeout = 8000) {
       else resolve(stdout.toString());
     });
   });
+}
+
+/**
+ * Reads a git config file and reports the first key that names a program.
+ * Understands what git's own parser understands of the syntax: section headers
+ * with and without a subsection, a key on the header's line, `key` without a
+ * value, and comments.
+ */
+function scanConfig(text) {
+  let section = '';
+  for (const rawLine of text.split('\n')) {
+    let line = rawLine.trim();
+    while (line) {
+      if (line.startsWith('#') || line.startsWith(';')) break;
+      const head = /^\[([^\]]*)\]/.exec(line);
+      if (head) {
+        // [filter "evil"] and [filter.evil] name the same thing
+        const inner = head[1].trim();
+        const quoted = /^(\S+)\s+"(.*)"$/.exec(inner);
+        section = quoted ? `${quoted[1].toLowerCase()}.${quoted[2]}` : inner.toLowerCase();
+        line = line.slice(head[0].length).trim();
+        continue;
+      }
+      const key = /^([A-Za-z][\w-]*)/.exec(line);
+      if (!key) break;
+      const full = `${section}.${key[1]}`.toLowerCase();
+      if (EXECUTING_KEYS.some((re) => re.test(full))) return full;
+      break; // one key per line; its value can hold anything, including ]
+    }
+  }
+  return null;
+}
+
+// The verdict per directory: whether a repository is there at all, and which
+// key keeps git out of it. A refresh pass starts several git commands in the
+// same directory, so the answer is kept - re-read when a config file's
+// timestamp moves, and at most held for the length of one pass otherwise.
+const verdicts = new Map(); // cwd -> { at, files: [{path, mtimeMs}], risk, repo }
+const VERDICT_FRESH_MS = 2000;
+const VERDICT_MAX = 100;
+
+async function stamp(file) {
+  try { return { path: file, mtimeMs: (await fsp.stat(file)).mtimeMs }; }
+  catch { return { path: file, mtimeMs: null }; } // absent counts as a state too
+}
+
+function remember(cwd, entry) {
+  verdicts.delete(cwd);
+  verdicts.set(cwd, entry);
+  while (verdicts.size > VERDICT_MAX) verdicts.delete(verdicts.keys().next().value);
+  return entry;
+}
+
+const verdictInFlight = new Map(); // cwd -> Promise
+
+// Several sessions can share a working directory, and on a cold cache they all
+// arrive at the same tick. One probe answers them all - the same arrangement
+// the root lookup below makes, for the same reason.
+async function verdictFor(cwd) {
+  const running = verdictInFlight.get(cwd);
+  if (running) return running;
+  const pending = lookupVerdict(cwd);
+  verdictInFlight.set(cwd, pending);
+  try { return await pending; }
+  finally { verdictInFlight.delete(cwd); }
+}
+
+async function lookupVerdict(cwd) {
+  const now = Date.now();
+  const known = verdicts.get(cwd);
+  if (known) {
+    if (now - known.at < VERDICT_FRESH_MS) return known;
+    // Without a config file there is nothing to compare against - a directory
+    // that `git init` has meanwhile turned into a repository would otherwise
+    // keep its old verdict for good.
+    if (known.files.length) {
+      const fresh = await Promise.all(known.files.map((f) => stamp(f.path)));
+      if (fresh.every((f, i) => f.mtimeMs === known.files[i].mtimeMs)) {
+        known.at = now;
+        return known;
+      }
+    }
+  }
+
+  // Where the config files are is git's own answer. `rev-parse` reads the
+  // config but runs nothing out of it - no index refresh, so no filter and no
+  // fsmonitor. Its failure is the answer to "is there a repository here".
+  const out = await exec('git', ['rev-parse', '--git-dir', '--git-common-dir'], cwd);
+  if (out === null) return remember(cwd, { at: now, files: [], risk: null, repo: false });
+
+  const [gitDir, commonDir] = out.trim().split('\n').map((p) => path.resolve(cwd, p.trim()));
+  const files = [path.join(commonDir || gitDir, 'config'), path.join(gitDir, 'config.worktree')];
+  let risk = null;
+  const stamps = [];
+  for (const file of files) {
+    stamps.push(await stamp(file));
+    if (risk) continue;
+    let text;
+    try { text = await fsp.readFile(file, 'utf8'); } catch { continue; }
+    risk = scanConfig(text);
+    if (risk) log.warn('git: no git in this directory, its configuration names a program', { cwd, key: risk, file });
+  }
+  return remember(cwd, { at: now, files: stamps, risk, repo: true });
+}
+
+async function run(cmd, args, cwd, timeout = 8000) {
+  if (cmd === 'git' && (await verdictFor(cwd)).risk) return null;
+  return exec(cmd, args, cwd, timeout);
 }
 
 function parseStatus(porcelain) {
@@ -83,6 +234,13 @@ async function lookupRoot(cwd) {
 
 async function getGitInfo(cwd) {
   if (!cwd || !fs.existsSync(cwd)) return null;
+  // The verdict answers both questions the first two calls used to ask: whether
+  // a repository is there, and whether git may be started in it. Refused and
+  // absent stay apart - otherwise a blocked directory reads as one without a
+  // repository.
+  const verdict = await verdictFor(cwd);
+  if (!verdict.repo) return null;
+  if (verdict.risk) return { blocked: verdict.risk, branch: null, root: null, files: [] };
   const branch = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
   if (branch === null) return null;
   // Root and status do not depend on each other, so they run together. The
@@ -92,7 +250,9 @@ async function getGitInfo(cwd) {
     run('git', ['status', '--porcelain'], cwd),
   ]);
   return {
+    blocked: null,
     branch: branch.trim(),
+    // gitRoot() hands back an already normalised path or null.
     root: root || cwd,
     files: status ? parseStatus(status) : [],
   };
@@ -236,4 +396,4 @@ function summarizeChecks(rollup) {
   };
 }
 
-module.exports = { getGitInfo, getPrInfo, run };
+module.exports = { getGitInfo, getPrInfo, run, scanConfig };

@@ -46,6 +46,7 @@ module.exports = {
   'git.pr.by': 'di {author}',
   'git.pr.none': 'Nessuna pull request per {branch}',
   'git.noRepo': 'Non è un repository git',
+  'git.blocked': 'Niente git qui: la configurazione di questo repository indica un programma in {key}. La directory viene dall’output del terminale, quindi a git non viene chiesto nulla che lo avvii.',
   'git.pr.description': 'Descrizione',
   'git.pr.checks': 'Controlli ({success}✓ {failure}✗ {pending}●)',
   'git.pr.commits': 'Commit ({count})',
@@ -120,6 +121,12 @@ module.exports = {
   'db.tag.policy': 'policy',
   'db.col.generated': 'calcolata',
   'db.policy.for': 'per {roles}',
+  'db.field.type': 'tipo',
+  'db.field.nullable': 'NULL consentito',
+  'db.field.default': 'valore predefinito',
+  'db.field.identity': 'identità',
+  'db.field.generated': 'calcolata',
+  'db.field.comment': 'commento',
 
   // --- DB schema: before/after ---
   'dbdiff.scope': 'Ambito',
@@ -248,4 +255,12 @@ module.exports = {
   'ddl.warn.addConstraint': 'ADD CONSTRAINT non interpretato: {text}',
   'ddl.warn.addColumn': 'ADD COLUMN non interpretato: {text}',
   'ddl.warn.skipped': 'Istruzione saltata ({message}): {text}',
+
+  // --- clipboard from terminal output (OSC 52) ---
+  'menu.osc52': 'Appunti dall’output del terminale',
+  'osc52.written': {
+    one: 'L’output del terminale ha scritto {count} carattere negli appunti',
+    other: 'L’output del terminale ha scritto {count} caratteri negli appunti',
+  },
+  'osc52.off': 'L’output del terminale voleva scrivere negli appunti – disattivato nel menu',
 };

@@ -46,6 +46,7 @@ module.exports = {
   'git.pr.by': 'von {author}',
   'git.pr.none': 'Kein Pull Request für {branch}',
   'git.noRepo': 'Kein Git-Repository',
+  'git.blocked': 'Hier kein Git: Die Konfiguration dieses Repositorys benennt in {key} ein Programm. Das Verzeichnis stammt aus der Terminal-Ausgabe, deshalb wird Git hier nichts gefragt, was es starten würde.',
   'git.pr.description': 'Beschreibung',
   'git.pr.checks': 'Checks ({success}✓ {failure}✗ {pending}●)',
   'git.pr.commits': 'Commits ({count})',
@@ -120,6 +121,12 @@ module.exports = {
   'db.tag.policy': 'Policy',
   'db.col.generated': 'berechnet',
   'db.policy.for': 'für {roles}',
+  'db.field.type': 'Typ',
+  'db.field.nullable': 'NULL erlaubt',
+  'db.field.default': 'Vorgabe',
+  'db.field.identity': 'Identity',
+  'db.field.generated': 'berechnet',
+  'db.field.comment': 'Kommentar',
 
   // --- DB schema: before/after ---
   'dbdiff.scope': 'Umfang',
@@ -248,4 +255,12 @@ module.exports = {
   'ddl.warn.addConstraint': 'ADD CONSTRAINT nicht gelesen: {text}',
   'ddl.warn.addColumn': 'ADD COLUMN nicht gelesen: {text}',
   'ddl.warn.skipped': 'Anweisung übersprungen ({message}): {text}',
+
+  // --- clipboard from terminal output (OSC 52) ---
+  'menu.osc52': 'Zwischenablage aus Terminal-Ausgabe',
+  'osc52.written': {
+    one: 'Terminal-Ausgabe hat {count} Zeichen in die Zwischenablage geschrieben',
+    other: 'Terminal-Ausgabe hat {count} Zeichen in die Zwischenablage geschrieben',
+  },
+  'osc52.off': 'Terminal-Ausgabe wollte die Zwischenablage schreiben – im Menü abgeschaltet',
 };

@@ -45,8 +45,20 @@ const sandbox = {
   win: { isDestroyed: () => false, webContents: { send: (ch, id, data) => sent.push({ ch, id, data }) } },
   extractCwd: () => null,
   applyStateFromData: () => {},
-  refreshSession: () => {},
+  refreshSession: (s) => refreshed.push(s.id),
+  // The reported directory is checked before it is taken over. The check runs
+  // through fs.promises, and the answers are handed out by the tests below.
+  fs: { promises: { stat: (p) => statFor(p) } },
 };
+const refreshed = [];
+let statPlan = new Map(); // path -> 'dir' | 'file' | 'error' | a promise to resolve by hand
+function statFor(p) {
+  const answer = statPlan.get(p);
+  if (answer && typeof answer.then === 'function') return answer;
+  if (answer === 'dir') return Promise.resolve({ isDirectory: () => true });
+  if (answer === 'file') return Promise.resolve({ isDirectory: () => false });
+  return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+}
 vm.createContext(sandbox);
 vm.runInContext(`${block}
 this.api = { queueOutput, flushOutput, ackOutput, resetFlowControl };
@@ -298,6 +310,80 @@ test('the ring buffer stays under its limit', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The reported working directory
+//
+// It comes out of the terminal output, so it is taken over only once it turns
+// out to be a directory - and the question is asked asynchronously: flushOutput
+// is the PTY data path, and a stat on a hung mount would stop the output of
+// every session.
+// ---------------------------------------------------------------------------
+function reportCwd(s, dir) {
+  sandbox.extractCwd = () => dir;
+  queueOutput(s, 'x');
+  flushOutput(s);
+  sandbox.extractCwd = () => null;
+}
+const settled = () => new Promise((r) => setTimeout(r, 0));
+
+test('a reported directory is taken over once the answer is in, not before', async () => {
+  refreshed.length = 0;
+  statPlan = new Map([['/new', 'dir']]);
+  const s = mkSession();
+  reportCwd(s, '/new');
+  assert.strictEqual(s.cwd, '/x', 'flushOutput waited for the answer');
+  assert.deepStrictEqual(refreshed, []);
+  await settled();
+  assert.strictEqual(s.cwd, '/new');
+  assert.deepStrictEqual(refreshed, [s.id]);
+});
+
+test('a path that is not a directory, and one that is not there, are not taken over', async () => {
+  refreshed.length = 0;
+  statPlan = new Map([['/afile', 'file']]);
+  const s = mkSession();
+  reportCwd(s, '/afile');
+  reportCwd(s, '/gone');
+  await settled();
+  assert.strictEqual(s.cwd, '/x');
+  assert.deepStrictEqual(refreshed, []);
+});
+
+test('while the answer is outstanding the output goes on', async () => {
+  sent.length = 0;
+  refreshed.length = 0;
+  let release;
+  statPlan = new Map([['/slow', new Promise((r) => { release = r; })]]);
+  const s = mkSession();
+  reportCwd(s, '/slow');
+  // The mount is hanging; the session keeps writing and keeps its directory.
+  queueOutput(s, 'still running');
+  flushOutput(s);
+  assert.strictEqual(s.cwd, '/x');
+  assert.ok(sent.some((x) => x.data === 'still running'), 'the output stopped at the stat');
+  release({ isDirectory: () => true });
+  await settled();
+  assert.strictEqual(s.cwd, '/slow', 'the answer arrived late and was still used');
+});
+
+test('a newer report wins over an answer that arrives late', async () => {
+  refreshed.length = 0;
+  let releaseSlow;
+  statPlan = new Map([
+    ['/slow', new Promise((r) => { releaseSlow = r; })],
+    ['/fast', 'dir'],
+  ]);
+  const s = mkSession();
+  reportCwd(s, '/slow');
+  reportCwd(s, '/fast');
+  await settled();
+  assert.strictEqual(s.cwd, '/fast');
+  releaseSlow({ isDirectory: () => true });
+  await settled();
+  assert.strictEqual(s.cwd, '/fast', 'the older answer overwrote the newer directory');
+  assert.deepStrictEqual(refreshed, [s.id], 'the discarded answer triggered a refresh');
+});
+
+// ---------------------------------------------------------------------------
 // OSC dispatch: applyStateFromData in a second sandbox
 // ---------------------------------------------------------------------------
 const oscFrom = src.indexOf('const OSC7_RE =');
@@ -312,6 +398,9 @@ assert.ok(!/while \(\(m = OSC(133|CMD|SESS|_TITLE|9)_RE\.exec/.test(oscBlock),
 const calls = [];
 const oscSandbox = {
   console, Buffer, setTimeout, clearTimeout, Date, log,
+  // The dispatch checks the session ID against the form claude-sessions names
+  // its transcripts by; main.js imports it from there.
+  TRANSCRIPT_ID_RE: require('../src/main/claude-sessions').TRANSCRIPT_ID_RE,
   // Which command lines count as an agent comes from the plugins; the real
   // function goes into the sandbox so this test cannot pass against a stub that
   // says yes to everything. What it matches is test/agent-commands.test.js.
@@ -349,13 +438,14 @@ test('a batch that ends one command and starts claude keeps the new one watched'
   s.currentCmd = 'npm test';
   // The exact sequence from the review: the previous command finishes, claude
   // starts, claude runs - all inside one 16 ms batch.
-  const text = osc.mark('D') + 'npm test output\n' + osc.cmd('claude') + osc.sess('abc') + osc.mark('C');
+  const id = '11111111-2222-3333-4444-555555555555';
+  const text = osc.mark('D') + 'npm test output\n' + osc.cmd('claude') + osc.sess(id) + osc.mark('C');
   applyStateFromData(s, text, 0, text);
 
   assert.strictEqual(s.currentCmd, 'claude', 'the D marker must not clear the command that comes after it');
   assert.strictEqual(s.cmdWatched, true, 'the freshly started agent stays watched');
   assert.strictEqual(s.state, 'busy');
-  assert.deepStrictEqual(calls, ['session:state:idle', 'bind:claude', 'history:claude', 'session:abc', 'session:state:busy']);
+  assert.deepStrictEqual(calls, ['session:state:idle', 'bind:claude', 'history:claude', `session:${id}`, 'session:state:busy']);
 });
 
 test('a batch ending in a prompt marker still clears the command', () => {
@@ -376,14 +466,35 @@ test('the session binding is applied after the command that resets it', () => {
   assert.deepStrictEqual(calls, ['bind:claude', 'history:claude', 'session:11111111-2222-3333-4444-555555555555']);
 });
 
+// The sequence comes out of the data stream, so anything writing to the
+// terminal can send one - and the ID becomes part of a file path.
+test('only a session UUID binds a transcript', () => {
+  for (const id of ['abc', '../../foo', '', '11111111-2222-3333-4444-55555555555', 'x'.repeat(36)]) {
+    calls.length = 0;
+    const s = stateSession();
+    const text = osc.sess(id);
+    applyStateFromData(s, text, 0, text);
+    assert.deepStrictEqual(calls, [], `"${id}" must not bind a session`);
+  }
+});
+
+test('the continue report is unaffected by the ID check', () => {
+  calls.length = 0;
+  const s = stateSession();
+  const text = '\x1b]7771;continue;\x07';
+  applyStateFromData(s, text, 0, text);
+  assert.deepStrictEqual(calls, ['continue']);
+});
+
 test('every sequence type is still recognised, each exactly once', () => {
   calls.length = 0;
   const s = stateSession();
   s.cmdWatched = true;
-  const text = osc.cmd('ls') + osc.sess('x') + osc.title('⠋ working') + osc.nine('4;3') + osc.mark('C');
+  const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const text = osc.cmd('ls') + osc.sess(id) + osc.title('⠋ working') + osc.nine('4;3') + osc.mark('C');
   applyStateFromData(s, text, 0, text);
   // 'ls' is not a watched command, so no agent binding starts for it.
-  assert.deepStrictEqual(calls, ['history:ls', 'session:x', 'session:state:busy']);
+  assert.deepStrictEqual(calls, ['history:ls', `session:${id}`, 'session:state:busy']);
   assert.strictEqual(s.hasClaudeOsc, true, 'the spinner title and the progress report both arrived');
   assert.strictEqual(s.cmdWatched, false);
 });

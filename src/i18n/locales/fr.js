@@ -46,6 +46,7 @@ module.exports = {
   'git.pr.by': 'par {author}',
   'git.pr.none': 'Aucune pull request pour {branch}',
   'git.noRepo': 'Pas un dépôt git',
+  'git.blocked': 'Pas de git ici : la configuration de ce dépôt nomme un programme dans {key}. Le répertoire vient de la sortie du terminal, donc rien n’est demandé à git qui le lancerait.',
   'git.pr.description': 'Description',
   'git.pr.checks': 'Vérifications ({success}✓ {failure}✗ {pending}●)',
   'git.pr.commits': 'Commits ({count})',
@@ -120,6 +121,12 @@ module.exports = {
   'db.tag.policy': 'politique',
   'db.col.generated': 'calculée',
   'db.policy.for': 'pour {roles}',
+  'db.field.type': 'type',
+  'db.field.nullable': 'NULL autorisé',
+  'db.field.default': 'valeur par défaut',
+  'db.field.identity': 'identité',
+  'db.field.generated': 'calculée',
+  'db.field.comment': 'commentaire',
 
   // --- DB schema: before/after ---
   'dbdiff.scope': 'Étendue',
@@ -248,4 +255,12 @@ module.exports = {
   'ddl.warn.addConstraint': 'ADD CONSTRAINT non analysé : {text}',
   'ddl.warn.addColumn': 'ADD COLUMN non analysé : {text}',
   'ddl.warn.skipped': 'Instruction ignorée ({message}) : {text}',
+
+  // --- clipboard from terminal output (OSC 52) ---
+  'menu.osc52': 'Presse-papiers depuis la sortie du terminal',
+  'osc52.written': {
+    one: 'La sortie du terminal a écrit {count} caractère dans le presse-papiers',
+    other: 'La sortie du terminal a écrit {count} caractères dans le presse-papiers',
+  },
+  'osc52.off': 'La sortie du terminal a voulu écrire dans le presse-papiers – désactivé dans le menu',
 };

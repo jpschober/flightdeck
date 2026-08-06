@@ -55,7 +55,7 @@ src/main/gitinfo.js  git status/branch + PR info via gh (cached)
 src/main/agents/     Running agents: plugin registry ("sensor") + plugins
 src/main/dbschema/   DB schema: plugin registry ("sensor"), DDL reader, diff
 src/main/usage.js    limits of the Claude subscription (OAuth usage endpoint)
-src/main/settings.js persisted settings (interface language)
+src/main/settings.js persisted settings (interface language, OSC 52 clipboard)
 src/i18n/            interface languages: runtime, registry, one file per language
 src/preload.js       contextBridge API for the renderer
 src/renderer/        UI: sidebar, xterm terminals, tab panel, preview
@@ -112,6 +112,23 @@ the busy/idle state. For the agent TUIs one more rule applies: >2 s of silence
 while a command is running = "input expected" (blue dot), because these TUIs
 render continuously while working. Which command lines are agent TUIs comes
 from the agent plugins (`claude`, `codex`, `aider`), see below.
+
+A reported directory is taken over only once a check says it exists.
+
+Git then runs in a directory nobody clicked on, which is why it is not handed
+that directory's configuration: `core.fsmonitor` and `core.hooksPath` are
+overridden per call, `--no-ext-diff --no-textconv` keeps the diff drivers out,
+and the system configuration stays out. Filter drivers (`filter.<name>.clean`
+and friends) cannot be overridden — their names are free — so before the first
+git call the repository configuration is read, and if it names a program in one
+of those keys, git is not started in that directory at all. The panel says so
+and names the key.
+
+`OSC 52` writes the clipboard — that is how Claude copies. Every write is shown
+in the app with the number of characters, control characters other than tab and
+newline are dropped and the payload is capped at 100 KB. The clipboard is still
+replaced without a prompt; the report is what makes it visible before the next
+paste. "Clipboard from terminal output" in the ⋯ menu switches the write off.
 
 ### Running agents
 

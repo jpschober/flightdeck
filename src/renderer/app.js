@@ -118,16 +118,28 @@ async function pasteInto(term) {
 // clipboard - that is exactly how Claude copies ("copied via OSC 52"). xterm.js
 // ships no handler for it, so the message was true but the clipboard stayed
 // empty.
+//
+// The request is granted, and every granted one is shown: the sender is any
+// output at all, a build script or a downloaded file included, and swapping the
+// clipboard for a command the user then pastes into a shell is the point of the
+// exercise. The report is what stands between the swap and the paste. Whoever
+// does not want the write at all switches it off in the menu.
 function handleOsc52(term) {
   term.parser.registerOscHandler(52, (data) => {
     const payload = data.slice(data.indexOf(';') + 1);
     // "?" queries the clipboard. Do not answer: otherwise any output in the
     // terminal could read out its content.
     if (!payload || payload === '?') return true;
+    let text = '';
     try {
       const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
-      window.api.clipboardWrite(new TextDecoder().decode(bytes));
-    } catch (e) { logDebug('osc52: payload is not valid base64', { err: e }); }
+      text = new TextDecoder().decode(bytes);
+    } catch (e) { logDebug('osc52: payload is not valid base64', { err: e }); return true; }
+    if (!text) return true;
+    window.api.clipboardWriteOsc52(text).then((res) => {
+      if (res.off) showToast(t('osc52.off'));
+      else if (res.written) showToast(t('osc52.written', { count: res.written }));
+    }).catch((e) => logDebug('osc52: clipboard not written', { err: e }));
     return true;
   });
 }
@@ -168,6 +180,87 @@ function basename(p) {
   if (!p) return '';
   const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/);
   return parts[parts.length - 1] || p;
+}
+
+// ---------------------------------------------------------------------------
+// Toast: one line for what happened without being asked for
+//
+// One message at a time, the next one replaces it. A stack would grow with
+// every clipboard write a loop in the terminal sends and cover the screen, and
+// only the last one says what is on the clipboard now. Nothing here takes the
+// focus - typing goes on in the terminal while the line stands.
+// ---------------------------------------------------------------------------
+const toastEl = $('#toast');
+const TOAST_MS = 4000;
+let toastTimer = null;
+
+function showToast(message) {
+  toastEl.textContent = message;
+  toastEl.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastEl.classList.add('hidden');
+    toastEl.textContent = '';
+  }, TOAST_MS);
+}
+
+// ---------------------------------------------------------------------------
+// Overlays and mode switches
+//
+// Preview, database comparison and the session browser differ in content only.
+// Each closes on a click on the backdrop, on its close button and on Escape,
+// and each hands the focus back to the terminal - the terminal is where typing
+// goes on, and a layer that leaves the focus behind swallows the next keystroke.
+// ---------------------------------------------------------------------------
+const overlays = []; // most recently opened first - that is the Escape order
+
+function focusActiveTerm() {
+  const s = activeId && sessions.get(activeId);
+  if (s) s.term.focus();
+}
+
+function makeOverlay(el, closeEl) {
+  const overlay = {
+    isOpen: () => !el.classList.contains('hidden'),
+    open() {
+      el.classList.remove('hidden');
+      const at = overlays.indexOf(overlay);
+      if (at > 0) overlays.unshift(...overlays.splice(at, 1));
+    },
+    close() {
+      el.classList.add('hidden');
+      focusActiveTerm();
+    },
+  };
+  el.addEventListener('click', (e) => { if (e.target === el) overlay.close(); });
+  if (closeEl) closeEl.addEventListener('click', () => overlay.close());
+  overlays.unshift(overlay);
+  return overlay;
+}
+
+/** Closes the topmost open overlay; reports whether there was one. */
+function closeTopOverlay() {
+  const top = overlays.find((o) => o.isOpen());
+  if (!top) return false;
+  top.close();
+  return true;
+}
+
+/**
+ * The row of mode buttons above preview and comparison. Fewer than two modes
+ * leave the row empty - there is nothing to switch between.
+ */
+function renderModeButtons(container, modes, current, onPick) {
+  container.innerHTML = '';
+  if (modes.length < 2) return;
+  for (const m of modes) {
+    const b = document.createElement('button');
+    b.textContent = m.label;
+    b.className = m.id === current ? 'active' : '';
+    b.setAttribute('role', 'tab');
+    b.addEventListener('click', () => { if (m.id !== current) onPick(m.id); });
+    container.appendChild(b);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +385,7 @@ async function retranslate() {
     loadDbSchema(true).catch((e) => logWarn('retranslate: db schema not reloaded', { err: e })),
     loadUsage(true).catch((e) => logWarn('retranslate: usage not reloaded', { err: e })),
   ]);
-  if (!previewOverlay.classList.contains('hidden') && previewState) {
+  if (previewOverlay.isOpen() && previewState) {
     renderPreviewModes(Boolean(previewState.cache.default
       && previewState.cache.default.kind === 'diff'));
     renderPreview();
@@ -323,6 +416,10 @@ async function buildShellMenu() {
   }
 }
 
+// Whether the terminal output may write the clipboard (OSC 52). The main
+// process owns the setting; this is the copy the menu draws itself from.
+let osc52On = true;
+
 // Everything that is not "start a new session" lives in one menu. Those are
 // the rare moves - a permanent button each turned the header into a row of
 // competing icons, and the shortcut belongs next to the entry anyway.
@@ -342,6 +439,12 @@ function buildMoreMenu() {
 
   entry('menu-item', '⊞', t('header.grid.aria'), `${t('key.ctrl')}+G`, toggleGrid);
   entry('menu-item', '⟲', t('header.sessions.aria'), '', openSessionBrowser);
+  // The state travels with the entry: the checkmark is what says whether the
+  // terminal output may write the clipboard.
+  entry(`menu-item${osc52On ? ' active' : ''}`, osc52On ? '✓' : '', t('menu.osc52'), '', async () => {
+    osc52On = await window.api.setOsc52Enabled(!osc52On);
+    buildMoreMenu();
+  });
 
   const sep = document.createElement('div');
   sep.className = 'menu-sep';
@@ -446,6 +549,7 @@ async function newSession(shellId, opts) {
     exited: false,
     state: 'idle',
     gitRoot: null,
+    gitBlocked: null,
     agentCwd: null,
     worktree: null,
     history: [],
@@ -645,6 +749,12 @@ function renderContextPanel() {
   } else if (s.branch) {
     prCardEl.innerHTML = `<div class="muted">${
       escapeHtml(t('git.pr.none', { branch: '\u0000' })).replace('\u0000', `<code>${escapeHtml(s.branch)}</code>`)}</div>`;
+    prExtraEl.innerHTML = '';
+  } else if (s.gitBlocked) {
+    // Not the same as "no repository": there is one here, and git is kept out
+    // of it on purpose - see gitinfo.js.
+    prCardEl.innerHTML = `<div class="git-blocked">${
+      escapeHtml(t('git.blocked', { key: '\u0000' })).replace('\u0000', `<code>${escapeHtml(s.gitBlocked)}</code>`)}</div>`;
     prExtraEl.innerHTML = '';
   } else {
     prCardEl.innerHTML = `<div class="muted">${escapeHtml(t('git.noRepo'))}</div>`;
@@ -933,7 +1043,6 @@ const dbSearchEl = $('#db-search');
 const badgeDbEl = $('#badge-dbschema');
 
 const dbState = {
-  sessionId: null,
   view: null,
   baseline: 'auto',
   filter: '',
@@ -965,6 +1074,11 @@ const KIND_TAG = {
 function fmtDefault(v) {
   return v === null || v === undefined ? '' : String(v);
 }
+
+// The diff names the changed column properties by their internal name (`type`,
+// `nullable`, ...). Looked up per render, like the status word: a language
+// switch has to reach it.
+const fieldLabel = (field) => t('db.field.' + field);
 
 /** The extra details of a column, in the order one reads them. */
 function colMeta(col) {
@@ -1042,9 +1156,8 @@ async function loadDbSchema(force = false) {
     if (json === dbState.lastJson) return;
     dbState.lastJson = json;
     dbState.view = view;
-    dbState.sessionId = s.id;
     renderDbPanel();
-    if (!dbDiffOverlay.classList.contains('hidden')) renderDbDiff();
+    if (dbDiffOverlay.isOpen()) renderDbDiff();
   } catch (e) {
     logWarn('dbschema: panel not loaded', { session: s.id, baseline: dbState.baseline, err: e });
   } finally {
@@ -1337,7 +1450,7 @@ function buildDbColumns(table, d) {
     const cd = d && d.columns.get(c.name);
     const st = cd ? cd.status : 'same';
     const why = cd && cd.fields && cd.fields.length
-      ? cd.fields.map((f) => `${f}: ${fmtDefault(cd.before[f])} → ${fmtDefault(cd.after[f])}`).join('\n')
+      ? cd.fields.map((f) => `${fieldLabel(f)}: ${fmtDefault(cd.before[f])} → ${fmtDefault(cd.after[f])}`).join('\n')
       : '';
     return `<div class="db-col ${st}"${why ? ` title="${escapeHtml(why)}"` : ''}>
       <span class="db-col-mark ${st}">${STATUS_MARK[st] || ''}</span>
@@ -1422,43 +1535,39 @@ dbSearchEl.addEventListener('input', () => {
 // row: the old one on the left, the new one on the right. Both cards of a pair
 // sit in the same grid row, so identical columns stand at the same height.
 // ---------------------------------------------------------------------------
-const dbDiffOverlay = $('#dbdiff-overlay');
+const dbDiffOverlay = makeOverlay($('#dbdiff-overlay'), $('#dbdiff-close'));
 const dbDiffBody = $('#dbdiff-body');
 const dbDiffModes = $('#dbdiff-modes');
 let dbDiffMode = 'changed'; // 'changed' | 'all'
 
+// The marker of a row in the before/after view: an addition appears on the
+// right, a removal on the left, a change on both sides.
+function diffMark(status, side) {
+  if (status === 'changed') return STATUS_MARK.changed;
+  if (status === 'added' && side === 'after') return STATUS_MARK.added;
+  if (status === 'removed' && side === 'before') return STATUS_MARK.removed;
+  return '';
+}
+
 function openDbDiff() {
-  dbDiffOverlay.classList.remove('hidden');
+  dbDiffOverlay.open();
   renderDbDiff();
 }
 
-function closeDbDiff() {
-  dbDiffOverlay.classList.add('hidden');
-  const s = activeId && sessions.get(activeId);
-  if (s) s.term.focus();
-}
-
 function renderDbDiffModes() {
-  dbDiffModes.innerHTML = '';
-  for (const m of [{ id: 'changed', key: 'dbdiff.mode.changed' }, { id: 'all', key: 'dbdiff.mode.all' }]) {
-    const b = document.createElement('button');
-    b.textContent = t(m.key);
-    b.className = m.id === dbDiffMode ? 'active' : '';
-    b.setAttribute('role', 'tab');
-    b.addEventListener('click', () => {
-      if (dbDiffMode === m.id) return;
-      dbDiffMode = m.id;
-      renderDbDiff();
-    });
-    dbDiffModes.appendChild(b);
-  }
+  renderModeButtons(
+    dbDiffModes,
+    [{ id: 'changed', label: t('dbdiff.mode.changed') }, { id: 'all', label: t('dbdiff.mode.all') }],
+    dbDiffMode,
+    (id) => { dbDiffMode = id; renderDbDiff(); },
+  );
 }
 
 function renderDbDiff() {
   const view = dbState.view;
   // Nothing left to compare (project switched, baseline gone): better to close
   // than to leave a stale state standing.
-  if (!view || !view.ok || !view.plugin || !view.diff) { closeDbDiff(); return; }
+  if (!view || !view.ok || !view.plugin || !view.diff) { dbDiffOverlay.close(); return; }
   renderDbDiffModes();
 
   $('#dbdiff-title').textContent = `${view.plugin.label} · ${view.project || ''}`;
@@ -1558,8 +1667,8 @@ function dbDiffTableCard(td, table, side) {
     const changedFields = st === 'changed' ? cd.fields : [];
     const meta = colMeta(c).join(' · ');
     return `<div class="dbd-row ${st}"${changedFields.length
-      ? ` title="${escapeHtml(changedFields.join(', '))}"` : ''}>
-      <span class="dbd-mark">${st === 'added' ? (side === 'after' ? '+' : '') : st === 'removed' ? (side === 'before' ? '−' : '') : st === 'changed' ? '~' : ''}</span>
+      ? ` title="${escapeHtml(changedFields.map(fieldLabel).join(', '))}"` : ''}>
+      <span class="dbd-mark">${diffMark(st, side)}</span>
       <span class="dbd-col-name">${escapeHtml(c.name)}</span>
       <span class="dbd-col-type${changedFields.includes('type') ? ' hot' : ''}">${escapeHtml(c.type)}</span>
       <span class="dbd-col-tags">${tagsHtml(tagsForColumn(table, c.name))}</span>
@@ -1571,7 +1680,7 @@ function dbDiffTableCard(td, table, side) {
     const c = side === 'before' ? cd.before : cd.after;
     if (!c) return `<div class="dbd-row absent"><span class="dbd-mark"></span><span class="dbd-cell muted">—</span></div>`;
     return `<div class="dbd-row ${cd.status}">
-      <span class="dbd-mark">${cd.status === 'added' ? (side === 'after' ? '+' : '') : cd.status === 'removed' ? (side === 'before' ? '−' : '') : cd.status === 'changed' ? '~' : ''}</span>
+      <span class="dbd-mark">${diffMark(cd.status, side)}</span>
       <span class="db-tag ${c.kind}" title="${escapeHtml(KIND_TAG[c.kind] ? t(KIND_TAG[c.kind].key) : c.kind)}">${(KIND_TAG[c.kind] || {}).tag || c.kind}</span>
       <span class="dbd-con-name">${escapeHtml(c.name)}</span>
       <span class="dbd-con-text">${escapeHtml(constraintText(c))}</span>
@@ -1582,7 +1691,7 @@ function dbDiffTableCard(td, table, side) {
     const p = side === 'before' ? pd.before : pd.after;
     if (!p) return `<div class="dbd-row absent"><span class="dbd-mark"></span><span class="dbd-cell muted">—</span></div>`;
     return `<div class="dbd-row ${pd.status}">
-      <span class="dbd-mark">${pd.status === 'added' ? (side === 'after' ? '+' : '') : pd.status === 'removed' ? (side === 'before' ? '−' : '') : pd.status === 'changed' ? '~' : ''}</span>
+      <span class="dbd-mark">${diffMark(pd.status, side)}</span>
       <span class="db-tag pol">POL</span>
       <span class="dbd-con-name">${escapeHtml(p.name)}</span>
       <span class="dbd-con-text">${escapeHtml(policyText(p))}</span>
@@ -1601,9 +1710,6 @@ function dbDiffTableCard(td, table, side) {
     ${polRows.length ? `<div class="dbd-sub">${escapeHtml(t('db.section.policies'))}</div><div class="dbd-rows">${polRows.join('')}</div>` : ''}`;
   return el;
 }
-
-$('#dbdiff-close').addEventListener('click', closeDbDiff);
-dbDiffOverlay.addEventListener('click', (e) => { if (e.target === dbDiffOverlay) closeDbDiff(); });
 
 // ---------------------------------------------------------------------------
 // Usage limits of the subscription: actual usage, plus the proportionally
@@ -1842,7 +1948,7 @@ function updateBadges(s) {
 // ---------------------------------------------------------------------------
 // File preview
 // ---------------------------------------------------------------------------
-const previewOverlay = $('#preview-overlay');
+const previewOverlay = makeOverlay($('#preview-overlay'), $('#preview-close'));
 const previewTitle = $('#preview-title');
 const previewContent = $('#preview-content');
 
@@ -1902,28 +2008,18 @@ function renderPreviewModes(hasDiff) {
   modes.push({ id: 'raw', label: t(hasDiff ? 'preview.mode.file' : 'preview.mode.source') });
   if (MD_EXT.test(previewState.filePath)) modes.push({ id: 'md', label: t('preview.mode.formatted') });
 
-  previewModesEl.innerHTML = '';
-  if (modes.length < 2) return; // nothing to switch between
-  for (const m of modes) {
-    const b = document.createElement('button');
-    b.textContent = m.label;
-    b.className = m.id === previewState.mode ? 'active' : '';
-    b.setAttribute('role', 'tab');
-    b.addEventListener('click', () => {
-      if (previewState.mode === m.id) return;
-      previewState.mode = m.id;
-      renderPreviewModes(hasDiff);
-      renderPreview();
-    });
-    previewModesEl.appendChild(b);
-  }
+  renderModeButtons(previewModesEl, modes, previewState.mode, (id) => {
+    previewState.mode = id;
+    renderPreviewModes(hasDiff);
+    renderPreview();
+  });
 }
 
 async function openPreview(sessionId, filePath, source) {
   previewTitle.textContent = t('preview.loading', { path: filePath });
   previewContent.innerHTML = '';
   previewModesEl.innerHTML = '';
-  previewOverlay.classList.remove('hidden');
+  previewOverlay.open();
 
   previewState = { sessionId, filePath, source, mode: 'diff', cache: {} };
   const st = previewState;
@@ -1938,14 +2034,6 @@ async function openPreview(sessionId, filePath, source) {
   renderPreviewModes(hasDiff);
   await renderPreview();
 }
-
-function closePreview() {
-  previewOverlay.classList.add('hidden');
-  const s = activeId && sessions.get(activeId);
-  if (s) s.term.focus();
-}
-$('#preview-close').addEventListener('click', closePreview);
-previewOverlay.addEventListener('click', (e) => { if (e.target === previewOverlay) closePreview(); });
 
 // ---------------------------------------------------------------------------
 // Meta popover: edit title & label
@@ -2079,8 +2167,7 @@ function closeGrid() {
   gridViewEl.classList.add('hidden');
   for (const { term } of gridCards.values()) term.dispose();
   gridCards.clear();
-  const s = activeId && sessions.get(activeId);
-  if (s) s.term.focus();
+  focusActiveTerm();
 }
 
 function toggleGrid() { gridOpen ? closeGrid() : openGrid(); }
@@ -2088,24 +2175,18 @@ function toggleGrid() { gridOpen ? closeGrid() : openGrid(); }
 // ---------------------------------------------------------------------------
 // Claude session browser: search, resume and fork old sessions
 // ---------------------------------------------------------------------------
-const sessionsOverlay = $('#sessions-overlay');
+const sessionsOverlay = makeOverlay($('#sessions-overlay'), $('#sessions-close'));
 const sessionsListEl = $('#sessions-list');
 const sessionsSearchEl = $('#sessions-search');
 let claudeSessions = [];
 
 async function openSessionBrowser() {
-  sessionsOverlay.classList.remove('hidden');
+  sessionsOverlay.open();
   sessionsListEl.innerHTML = `<div class="muted">${escapeHtml(t('browser.loading'))}</div>`;
   sessionsSearchEl.value = '';
   sessionsSearchEl.focus();
   claudeSessions = await window.api.listClaudeSessions();
   renderClaudeSessions();
-}
-
-function closeSessionBrowser() {
-  sessionsOverlay.classList.add('hidden');
-  const s = activeId && sessions.get(activeId);
-  if (s) s.term.focus();
 }
 
 function renderClaudeSessions() {
@@ -2151,7 +2232,7 @@ function renderClaudeSessions() {
       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
     });
     const start = (fork) => {
-      closeSessionBrowser();
+      sessionsOverlay.close();
       newSession(shells[0] && shells[0].id, {
         cwd: cs.cwd,
         resume: { id: cs.id, fork },
@@ -2164,9 +2245,7 @@ function renderClaudeSessions() {
   sessionsListEl.appendChild(frag);
 }
 
-$('#sessions-close').addEventListener('click', closeSessionBrowser);
 sessionsSearchEl.addEventListener('input', renderClaudeSessions);
-sessionsOverlay.addEventListener('click', (e) => { if (e.target === sessionsOverlay) closeSessionBrowser(); });
 
 // ---------------------------------------------------------------------------
 // Desktop notifications: when an agent needs attention
@@ -2240,6 +2319,7 @@ window.api.onInfo((info) => {
     cwd: info.cwd,
     branch: info.branch,
     gitRoot: info.gitRoot,
+    gitBlocked: info.gitBlocked,
     agentCwd: info.agentCwd,
     worktree: info.worktree,
     agents: info.agents,
@@ -2592,9 +2672,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape') {
     if (menuOpen()) closeMenus();
-    else if (!previewOverlay.classList.contains('hidden')) closePreview();
-    else if (!dbDiffOverlay.classList.contains('hidden')) closeDbDiff();
-    else if (!sessionsOverlay.classList.contains('hidden')) closeSessionBrowser();
+    else if (closeTopOverlay()) { /* the layer opened last has taken the key */ }
     else if (panelZoomed) setPanelZoom(false);
     else if (gridOpen) closeGrid();
   }
@@ -2605,6 +2683,12 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 (async function init() {
   applyStaticI18n();
+  // Before the menu is built: the entry shows the state, and a checkmark that
+  // has to be corrected a moment later is worse than a menu that appears late.
+  // A failure here must not stop the startup - the setting decides in the main
+  // process either way, this is only what the menu draws.
+  try { osc52On = await window.api.osc52Enabled(); }
+  catch (e) { logWarn('osc52: setting not read, the menu shows the default', { err: e }); }
   buildMoreMenu();
   sizePulse();
   pulseWake();

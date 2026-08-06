@@ -22,6 +22,13 @@ contextBridge.exposeInMainWorld('api', {
   openExternal: (url) => ipcRenderer.send('open-external', url),
   clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
+
+  // The clipboard write that the terminal output asks for (OSC 52) has its own
+  // way in: the main process decides whether it happens at all and reports what
+  // it wrote, so the renderer can show it.
+  clipboardWriteOsc52: (text) => ipcRenderer.invoke('clipboard:write-osc52', text),
+  osc52Enabled: () => ipcRenderer.invoke('osc52:enabled'),
+  setOsc52Enabled: (on) => ipcRenderer.invoke('osc52:set-enabled', on),
   getHistory: (id) => ipcRenderer.invoke('history:get', id),
   getDbSchema: (id, opts) => ipcRenderer.invoke('dbschema:get', id, opts || {}),
   getTodos: (id) => ipcRenderer.invoke('todos:get', id),
