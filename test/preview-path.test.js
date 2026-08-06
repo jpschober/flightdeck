@@ -1,12 +1,13 @@
 'use strict';
 // Path containment for the file preview.
 //
-// The functions under test live in src/main/main.js, which requires electron
-// and starts timers, shells and IPC handlers the moment it is loaded. The
-// preview block is therefore read out of the source and instantiated here with
-// the same dependencies it gets in the app - `run` is the real one, so the git
-// calls are real git calls. The tests run against the shipped code, not a copy
-// of it; if the block moves, the extraction below fails loudly.
+// The functions under test live in src/main/preview.js. Its body is read out
+// of the source and instantiated here with the same dependencies it gets in
+// the app - `run` is the real one, so the git calls are real git calls. Loading
+// it this way is what lets the containment rules be checked against Windows
+// paths as well: `path` is a parameter here, the module's own require in the
+// app. The tests run against the shipped code, not a copy of it; if the block
+// moves, the extraction below fails loudly.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -17,7 +18,7 @@ const { execFileSync } = require('node:child_process');
 const { run } = require('../src/main/gitinfo');
 
 const MAX_PREVIEW = 512 * 1024;
-const SRC = path.join(__dirname, '..', 'src', 'main', 'main.js');
+const SRC = path.join(__dirname, '..', 'src', 'main', 'preview.js');
 
 // The stub returns the key itself, so the assertions do not depend on wording.
 const t = (key, params) => (params ? `${key}:${params.message}` : key);
@@ -32,10 +33,10 @@ function rec(level) { return (message, data) => logged.push({ level, message, da
 function loadPreview(pathModule = path) {
   const src = fs.readFileSync(SRC, 'utf8');
   const start = src.indexOf('const MAX_PREVIEW');
-  const ipc = src.indexOf('\n// IPC\n');
-  assert.ok(start !== -1, 'MAX_PREVIEW not found in main.js');
-  assert.ok(ipc > start, 'the IPC section no longer follows the preview block');
-  const block = src.slice(start, src.lastIndexOf('// -----', ipc));
+  const end = src.indexOf('\nmodule.exports');
+  assert.ok(start !== -1, 'MAX_PREVIEW not found in preview.js');
+  assert.ok(end > start, 'preview.js no longer ends in its exports');
+  const block = src.slice(start, end);
   for (const name of ['isInside', 'resolveInRoot', 'readForPreview', 'previewFile']) {
     assert.ok(block.includes(`function ${name}`), `${name} is not in the extracted block`);
   }

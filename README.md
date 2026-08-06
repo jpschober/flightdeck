@@ -48,9 +48,19 @@ Requirements: `git` on the PATH; for PR display additionally the
 ## Architecture
 
 ```
-src/main/main.js     Electron main: PTY sessions (node-pty), shell detection,
-                     OSC parsing (cwd, busy/idle, commands), history,
-                     note persistence, IPC
+src/main/main.js     Electron main: the window and the wiring
+src/main/sessions.js PTY sessions (node-pty), output batching, refresh pass
+src/main/shells.js   shell detection and how each shell is started
+src/main/shell-integration/
+                     the scripts the shells run (bash/zsh/fish/PowerShell),
+                     read from here and written to userData per session
+src/main/osc.js      OSC parsing: cwd, busy/idle, commands
+src/main/session-state.js
+                     busy/idle heuristic, agent binding, input history
+src/main/preview.js  file preview: diff or content, bounded and inside the root
+src/main/todos.js    note persistence per repo root
+src/main/ipc.js      IPC handlers
+src/main/window.js   the renderer window, and sending to it
 src/main/gitinfo.js  git status/branch + PR info via gh (cached)
 src/main/agents/     Running agents: plugin registry ("sensor") + plugins
 src/main/dbschema/   DB schema: plugin registry ("sensor"), DDL reader, diff
@@ -99,8 +109,12 @@ Adding a language means: copy `locales/en.js`, translate it, register it in
 
 ### Shell integration
 
-When the shell starts, its prompt is extended (PowerShell via
-`-EncodedCommand`, Bash via an rc file) and emits:
+The scripts live in `src/main/shell-integration/` as the shell files they are.
+Starting a session copies them into a directory under `userData` — zsh is
+pointed at it via `ZDOTDIR`, the others load a single file from it — and the
+shell then runs from there. PowerShell gets its script as `-EncodedCommand`.
+
+The prompt is extended and emits:
 
 - `OSC 7` — current directory (file:// URL), as in Warp/WezTerm/VS Code
 - `OSC 133` — `C` = command started, `A`/`D` = prompt is back
@@ -166,7 +180,7 @@ file under `plugins/`, register it in `PLUGINS`, done.
 
 `commandPattern` answers a second question, and for the whole app: which CLIs
 are agents at all. `agents/index.js` exports `isAgentCommand(cmd)`, which asks
-every plugin's pattern; the attention heuristic in `main.js` goes through it,
+every plugin's pattern; the attention heuristic in `session-state.js` goes through it,
 so a new plugin brings the recognition of its CLI along with the counting.
 The Codex and Aider plugins consist of that pattern alone — they keep the state
 detection for those CLIs, `detect()` returns `null` and they count nothing.

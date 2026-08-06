@@ -1,8 +1,8 @@
 'use strict';
 // The clipboard write that the terminal output asks for (OSC 52), from
-// src/main/main.js.
+// src/main/ipc.js.
 //
-// main.js requires Electron, so the block around the handler is pulled out of
+// ipc.js requires Electron, so the block around the handler is pulled out of
 // the source and run against stubs: the setting, the clipboard and the logger
 // are the only things it touches besides its argument.
 
@@ -12,12 +12,12 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const MAIN = path.join(__dirname, '..', 'src', 'main', 'main.js');
-const src = fs.readFileSync(MAIN, 'utf8');
+const IPC = path.join(__dirname, '..', 'src', 'main', 'ipc.js');
+const src = fs.readFileSync(IPC, 'utf8');
 
 const from = src.indexOf('const OSC52_MAX_CHARS');
 const to = src.indexOf("ipcMain.handle('osc52:enabled'", from);
-assert.ok(from > 0 && to > from, 'the OSC 52 block was not found in main.js');
+assert.ok(from > 0 && to > from, 'the OSC 52 block was not found in ipc.js');
 const block = src.slice(from, to);
 
 const written = [];
