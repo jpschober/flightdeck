@@ -547,7 +547,8 @@ async function newSession(shellId, opts) {
     files: [],
     pr: null,
     exited: false,
-    state: 'idle',
+    // 'unknown' for shells without integration - see spawnArgsFor in main.js
+    state: meta.state || 'idle',
     gitRoot: null,
     gitBlocked: null,
     agentCwd: null,
@@ -662,7 +663,8 @@ function updateSessionItem(s) {
   const state = s.exited ? 'exited' : (s.state || 'idle');
   statusEl.className = 'si-status ' + state;
   statusEl.title = t('session.state.' + (
-    state === 'busy' || state === 'attention' || state === 'exited' ? state : 'idle'));
+    state === 'busy' || state === 'attention' || state === 'exited' || state === 'unknown'
+      ? state : 'idle'));
   el.querySelector('.si-title').textContent =
     s.title || `${basename(s.cwd) || s.shellName}`;
   const labelEl = el.querySelector('.si-label');

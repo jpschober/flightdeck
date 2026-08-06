@@ -113,6 +113,16 @@ while a command is running = "input expected" (blue dot), because these TUIs
 render continuously while working. Which command lines are agent TUIs comes
 from the agent plugins (`claude`, `codex`, `aider`), see below.
 
+The hooks are added to what your configuration installed: `PROMPT_COMMAND` and
+the `DEBUG` trap in Bash keep their previous contents (starship, direnv,
+bash-preexec), zsh goes through `add-zsh-hook`, fish through its events, and
+PowerShell calls the `prompt` and `PSConsoleHostReadLine` it found.
+
+Bash, Zsh, Fish, Git Bash and PowerShell get this integration. The other shells
+that Flightdeck offers - CMD, WSL, Nushell, Elvish, Xonsh, Ksh, Tcsh, Dash -
+are started as they are, and their sessions show no status (empty dot,
+"No status available") instead of one guessed from output and silence.
+
 A reported directory is taken over only once a check says it exists.
 
 Git then runs in a directory nobody clicked on, which is why it is not handed

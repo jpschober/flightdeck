@@ -1,0 +1,205 @@
+'use strict';
+// The shell integration from src/main/main.js: it has to add its hooks to what
+// the user's configuration already installed instead of assigning over it.
+//
+// main.js requires Electron, so the block holding the rc texts is pulled out of
+// the source and evaluated on its own. The bash part is then run through a real
+// bash against a home directory whose .bashrc occupies PROMPT_COMMAND and the
+// DEBUG trap.
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const vm = require('vm');
+const { execFileSync } = require('child_process');
+
+const MAIN = path.join(__dirname, '..', 'src', 'main', 'main.js');
+const src = fs.readFileSync(MAIN, 'utf8');
+
+const from = src.indexOf('const PS_INIT = [');
+const to = src.indexOf('// The integration files live in their own directory');
+assert.ok(from > 0 && to > from, 'the shell integration block was not found in main.js');
+
+const sandbox = { Buffer };
+vm.createContext(sandbox);
+// `const` declarations stay inside the block, so the texts are handed out
+// through the sandbox object.
+vm.runInContext(`${src.slice(from, to)}\nthis.rcs = { BASH_RC, PS_INIT, ZSH_RC };`, sandbox);
+const { BASH_RC, PS_INIT, ZSH_RC } = sandbox.rcs;
+
+// ---------------------------------------------------------------------------
+// The texts themselves
+// ---------------------------------------------------------------------------
+test('bash does not assign PROMPT_COMMAND or the DEBUG trap', () => {
+  assert.ok(!/PROMPT_COMMAND=__flightdeck_prompt\s*$/m.test(BASH_RC),
+    'PROMPT_COMMAND is assigned, which drops starship, direnv and the title hook');
+  assert.ok(!/^trap __flightdeck_preexec DEBUG\s*$/m.test(BASH_RC),
+    'the DEBUG trap is assigned, which drops bash-preexec and starship');
+  assert.ok(BASH_RC.includes('PROMPT_COMMAND=(__flightdeck_prompt "${PROMPT_COMMAND[@]}"'),
+    'the array form of PROMPT_COMMAND (bash 5.1) is not preserved');
+});
+
+test('zsh keeps using add-zsh-hook', () => {
+  assert.ok(ZSH_RC.includes('add-zsh-hook precmd __flightdeck_prompt'));
+  assert.ok(ZSH_RC.includes('add-zsh-hook preexec __flightdeck_preexec'));
+});
+
+test('powershell calls the prompt and the read line it found', () => {
+  assert.ok(PS_INIT.includes('Get-Command prompt -CommandType Function'),
+    'the existing prompt is not looked up');
+  assert.ok(PS_INIT.includes('if ($Global:__flightdeckPrevPrompt) { & $Global:__flightdeckPrevPrompt }'),
+    'the existing prompt is not called');
+  assert.ok(PS_INIT.includes('Get-Command PSConsoleHostReadLine -CommandType Function'),
+    'the existing PSConsoleHostReadLine is not looked up');
+  assert.ok(PS_INIT.includes('if ($Global:__flightdeckPrevReadLine) { $l = & $Global:__flightdeckPrevReadLine }'),
+    'the existing PSConsoleHostReadLine is not called');
+  // Without the guard a second run would chain our own function onto itself.
+  assert.ok(PS_INIT.startsWith('if (-not (Test-Path Variable:Global:__flightdeckInstalled)) {'),
+    'the installation guard is missing');
+});
+
+// ---------------------------------------------------------------------------
+// The bash part in a real bash
+// ---------------------------------------------------------------------------
+const BASH = ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash'].find((p) => {
+  try { return fs.statSync(p).isFile(); } catch (e) { return false; }
+});
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-shell-'));
+const rc = path.join(tmp, 'bashrc.sh');
+fs.writeFileSync(rc, BASH_RC);
+
+// The user's configuration: a prompt hook, a preexec hook whose handler carries
+// single quotes (that is how `trap -p` has to quote it), and a marker for the
+// order the hooks run in.
+const USER_RC = `PS1='> '
+__user_precmd() { printf '[precmd:%s]' "$?"; }
+__user_preexec() { printf '[preexec:%s]' "$BASH_COMMAND"; }
+PROMPT_COMMAND='__user_precmd'
+trap '__user_preexec '"'"'x'"'"'' DEBUG
+`;
+
+// TERM=dumb keeps the system-wide /etc/bash.bashrc from adding its own
+// window-title entry to PROMPT_COMMAND, so what the assertions see is the
+// user's configuration plus ours.
+function runBash(args, input) {
+  const home = fs.mkdtempSync(path.join(tmp, 'home-'));
+  fs.writeFileSync(path.join(home, '.bashrc'), USER_RC);
+  return execFileSync(BASH, ['--rcfile', rc, '-i', ...args], {
+    input: input || '',
+    env: { PATH: process.env.PATH, HOME: home, TERM: 'dumb' },
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+}
+
+test('bash keeps the user\'s PROMPT_COMMAND and their DEBUG trap', { skip: !BASH }, () => {
+  const out = runBash(['-c', 'declare -p PROMPT_COMMAND; trap -p DEBUG']);
+
+  // declare -p quotes the newlines it holds: PROMPT_COMMAND=$'a\nb\nc'
+  assert.match(out, /PROMPT_COMMAND=\$'__flightdeck_prompt\\n__user_precmd\\n__flightdeck_arm'/);
+  // The handler is chained in front of ours, with its quoting intact.
+  assert.match(out, /trap -- '__user_preexec '\\''x'\\''\n__flightdeck_preexec' DEBUG/);
+});
+
+test('bash extends an array PROMPT_COMMAND instead of flattening it', { skip: !BASH }, () => {
+  // Since bash 5.1 PROMPT_COMMAND may be an array; a string assignment would
+  // leave nothing but its first element.
+  const out = runBash(['-c', 'declare -p PROMPT_COMMAND'], '');
+  const version = Number(execFileSync(BASH, ['-c', 'echo "${BASH_VERSINFO[0]}${BASH_VERSINFO[1]}"'], { encoding: 'utf8' }).trim());
+  if (version < 51) return;
+
+  const home = fs.mkdtempSync(path.join(tmp, 'home-array-'));
+  fs.writeFileSync(path.join(home, '.bashrc'), USER_RC + 'PROMPT_COMMAND=(__user_precmd __user_second)\n');
+  const arr = execFileSync(BASH, ['--rcfile', rc, '-i', '-c', 'declare -p PROMPT_COMMAND'], {
+    env: { PATH: process.env.PATH, HOME: home, TERM: 'dumb' },
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  assert.match(arr, /declare -a PROMPT_COMMAND=/);
+  assert.match(arr, /\[0\]="__flightdeck_prompt" \[1\]="__user_precmd" \[2\]="__user_second" \[3\]="__flightdeck_arm"/);
+  assert.ok(out.includes('__user_precmd'), 'the scalar case lost the user entry');
+});
+
+test('at the prompt both hooks run, and only the typed command is reported',
+  { skip: !BASH }, () => {
+    // `exit 0`, because the exit status of the shell is that of `false` otherwise
+    const out = runBash([], 'false\nexit 0\n');
+
+    // The command line as OSC 7770 (base64 "false") plus 133;C for "started"
+    assert.ok(out.includes('\x1b]7770;cmd;ZmFsc2U=\x07\x1b]133;C\x07'),
+      'the typed command was not reported');
+    // The entries of PROMPT_COMMAND are not commands you typed
+    assert.ok(!out.includes('X191c2VyX3ByZWNtZA=='), '__user_precmd was reported as a command');
+    // The user's preexec ran for the same command
+    assert.ok(out.includes('[preexec:false]'), 'the user\'s DEBUG handler did not run');
+    // Their precmd ran too, and saw the exit status of `false`
+    assert.ok(out.includes('[precmd:1]'),
+      'the user\'s prompt hook did not run, or $? no longer reaches it');
+    assert.ok(out.includes('\x1b]133;D\x07\x1b]133;A\x07'), 'the prompt was not reported');
+  });
+
+// ---------------------------------------------------------------------------
+// Shells the integration does not reach
+// ---------------------------------------------------------------------------
+const oscFrom = src.indexOf('const OSC7_RE =');
+const oscTo = src.indexOf('// Agent binding: which Claude transcript belongs to this session?');
+assert.ok(oscFrom > 0 && oscTo > oscFrom, 'the OSC block was not found in main.js');
+const stateCalls = [];
+const oscSandbox = {
+  console, Buffer, setTimeout, clearTimeout, Date,
+  log: { error: () => {}, warn: () => {}, info: () => {}, debug: () => {} },
+  TRANSCRIPT_ID_RE: require('../src/main/claude-sessions').TRANSCRIPT_ID_RE,
+  isAgentCommand: () => false,
+  win: { isDestroyed: () => false, webContents: { send: (ch, id, v) => stateCalls.push(v) } },
+  beginAgentBinding: () => {},
+  bindAgentSession: () => {},
+  bindContinuedSession: () => {},
+  addHistory: () => {},
+};
+vm.createContext(oscSandbox);
+vm.runInContext(
+  `${src.slice(oscFrom, src.lastIndexOf('// ------', oscTo))}\nthis.applyStateFromData = applyStateFromData;`,
+  oscSandbox);
+
+function ptySession(integrated) {
+  return {
+    id: 'x', state: integrated ? 'idle' : 'unknown', integrated, exited: false,
+    hasOsc133: false, hasClaudeOsc: false, cmdWatched: false, currentCmd: null,
+    agentPrompted: false, altScreen: false, pendingCommand: null,
+    idleTimer: null, attnTimer: null, lastInputAt: 0, proc: { write: () => {} },
+  };
+}
+
+function feed(s, text) {
+  oscSandbox.applyStateFromData(s, text, 0, text);
+  clearTimeout(s.idleTimer);
+}
+
+test('a shell without integration is not talked into a state by its output', () => {
+  stateCalls.length = 0;
+  const s = ptySession(false);
+  feed(s, 'compiling, this takes a while\n');
+  assert.strictEqual(s.state, 'unknown');
+  assert.deepStrictEqual(stateCalls, [], 'a state was sent although none is known');
+});
+
+test('with integration, output before the first marker counts as busy', () => {
+  stateCalls.length = 0;
+  const s = ptySession(true);
+  feed(s, 'compiling, this takes a while\n');
+  assert.strictEqual(s.state, 'busy');
+  assert.deepStrictEqual(stateCalls, ['busy']);
+});
+
+test('OSC 133 out of the user\'s own configuration counts in either case', () => {
+  stateCalls.length = 0;
+  const s = ptySession(false);
+  feed(s, '\x1b]133;C\x07');
+  assert.strictEqual(s.state, 'busy');
+  assert.strictEqual(s.hasOsc133, true);
+});
+
+test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
