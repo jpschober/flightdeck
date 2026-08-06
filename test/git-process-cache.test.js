@@ -108,12 +108,16 @@ test.after(() => {
 const VERDICT = 'git rev-parse --git-dir --git-common-dir';
 const VERDICT_ANSWER = '.git\n.git\n';
 
+// The object hashes in a status record are not read; one stand-in does for all
+// of them. What the format looks like is test/git-status-parse.test.js's business.
+const BLOB = '0'.repeat(40);
+
 function gitAnswers(root) {
   return {
     [VERDICT]: VERDICT_ANSWER,
     'git rev-parse --abbrev-ref HEAD': 'feature/x\n',
     'git rev-parse --show-toplevel': `${root}\n`,
-    'git status --porcelain': ' M src/main/gitinfo.js\n?? note.txt\n',
+    'git status --porcelain=v2 -z': `1 .M N... 100644 100644 100644 ${BLOB} ${BLOB} src/main/gitinfo.js\0? note.txt\0`,
   };
 }
 
