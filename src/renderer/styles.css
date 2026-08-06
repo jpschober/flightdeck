@@ -70,7 +70,6 @@ button:active { transform: translateY(0.5px); }
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
 }
 
 /* Pulse: sits behind the wordmark and buttons and catches no clicks */
