@@ -290,11 +290,35 @@ row. Relationships are shown as foreign keys in plain text, including target and
 **ER diagram.** "Diagram" opens the other question — what hangs off what — as a
 graph (`src/renderer/dbgraph.js`). It knows the diff: new tables are green,
 removed ones struck through in red, changed ones amber, and new foreign keys are
-drawn in colour. "Changes + neighbours" reduces the picture to what moved plus
-one hop of context, which is what makes it usable on a schema with eighty
-tables. Two levels of detail (table names only, or with columns), search
-highlights matches, a click on a box dims everything that is not its direct
-neighbourhood, and the mouse wheel zooms.
+drawn in colour. Two levels of detail (table names only, or with columns),
+search highlights matches, a click on a box dims everything that is not its
+direct neighbourhood, and the mouse wheel zooms.
+
+"Changes + neighbours" keeps what moved plus one hop of context. Both ends of a
+changed foreign key count as moved as well, so a table that is created or
+dropped makes every table it references count as moved. How much is left
+therefore depends on the migration. Measured against a generated schema of 80
+tables and 202 foreign keys, five of which most other tables reference:
+
+| migration | tables shown |
+| --- | --- |
+| columns added to three tables | 7 of 80 |
+| two tables added, one dropped, two altered, all in one area | 62 of 82 |
+| four added, two dropped, three altered, one of them a referenced hub | 79 of 84 |
+
+The scope reduces sharply for column changes. Once a migration creates or drops
+a table in a schema where most tables hang off a few central ones, one hop
+reaches most of the schema and little is filtered out.
+
+At that size the whole schema is not readable in one view either: with table
+names only it fits the window at about 22 % zoom, with columns it runs past the
+15 % zoom floor and has to be panned. Search and click focus are the way through
+a schema of that size.
+
+Opening the whole schema at that size takes around 270 ms, the reduced picture
+around 25 ms. Once the picture stands, search, focus, zoom and panning stay
+under 25 ms — they move a transform and toggle classes, nothing is laid out
+again.
 
 Relations use crow's foot notation, read out of the schema itself: many on the
 referencing side unless its foreign key is unique, and a circle where the

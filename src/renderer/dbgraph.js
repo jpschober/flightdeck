@@ -6,11 +6,15 @@
 // hangs off what" - two different questions, so this is a separate view and not
 // a replacement for the table cards.
 //
-// What makes it worth having next to any generic ERD tool: it knows the diff.
-// New tables, removed ones and new foreign keys are coloured, and the "changes"
-// scope reduces the picture to what moved plus its direct neighbours. On a
-// schema with eighty tables that is the difference between a poster and a
-// review tool.
+// It knows the diff, which is what a generic ERD tool cannot do here: new
+// tables, removed ones and new foreign keys are coloured, and the "changes"
+// scope reduces the picture to what moved plus its direct neighbours.
+//
+// How far that scope reduces depends on the migration. Both ends of a changed
+// foreign key count as moved, so a created or dropped table drags in everything
+// it references. Measured on 80 tables with 202 foreign keys: a migration that
+// only adds columns leaves 7 tables standing, one that creates or drops a table
+// leaves 62 to 79. See the README for the numbers.
 //
 // Layout comes from dagre (48 KB, pure layout, no rendering of its own), the
 // nodes are ordinary DOM - that way they inherit theme, fonts and the tag
