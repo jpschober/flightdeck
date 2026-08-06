@@ -1,8 +1,7 @@
 # Flightdeck ✈️
 
-Warp-like terminal app for working with parallel AI agents
-(Electron + xterm.js + node-pty). Many machines on the deck — you give the
-clearance for takeoff.
+Warp-like terminal app for working with parallel AI agents. Many machines on the deck — you give the
+clearance.
 
 ## Status
 
