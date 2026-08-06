@@ -87,8 +87,10 @@ export async function loadDbSchema(force = false) {
     renderDbPanel();
     if (dbDiffOverlay.isOpen()) renderDbDiff();
     // Keep the current viewport - a background tick must not throw away where
-    // one was looking.
-    refreshDbGraph(view);
+    // one was looking. `force` covers the cases the schema cannot see: the
+    // refresh button, the baseline switch and the language switch all come
+    // through here and all have to redraw.
+    refreshDbGraph(view, force);
   } catch (e) {
     logWarn('dbschema: panel not loaded', { session: s.id, baseline: dbState.baseline, err: e });
   } finally {

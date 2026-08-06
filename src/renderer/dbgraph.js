@@ -67,7 +67,68 @@ const state = {
   // and focusing can work without touching the layout again.
   placed: new Map(),
   edges: [],
+  // What the picture on screen was drawn from - see pictureKey().
+  key: null,
 };
+
+// -------------------------------------------------------------------------
+// What the picture is drawn from
+//
+// The schema is re-read every ten seconds whether or not a file moved, and a
+// re-layout of eighty tables blocks the main thread for about a third of a
+// second. So the state the picture was drawn from is kept as one string and the
+// redraw is skipped while it stays the same.
+//
+// It has to carry everything a box or a line reads, not just the table list:
+// column types and their nullability (the latter decides the circle on a
+// relation), every constraint including `unique` and the reference target (they
+// decide the crow's foot), and the diff status of table, column and constraint
+// (they decide the colours). One field too many costs a redraw that changes
+// nothing; one field too few leaves a wrong picture standing.
+//
+// Scope, detail level, search and zoom are deliberately not in here. They change
+// the picture without the schema moving, and each of them already redraws.
+// -------------------------------------------------------------------------
+function tableKey(t) {
+  const cols = t.columns.map((c) => `${c.name}${c.type}${c.nullable ? 1 : 0}`).join('');
+  const cons = (t.constraints || []).map((c) => {
+    const r = c.references;
+    return [
+      c.kind, c.name, (c.columns || []).join('+'), c.unique ? 1 : 0,
+      r ? `${r.schema}.${r.table}(${(r.columns || []).join('+')})` : '',
+      c.onDelete || '', c.onUpdate || '', c.expression || '', c.method || '',
+    ].join('');
+  }).join('');
+  return `${t.id}${t.external ? 1 : 0}${t.rls && t.rls.enabled ? 1 : 0}${cols}${cons}`;
+}
+
+function pictureKey(view) {
+  if (!view || !view.ok || !view.plugin) return '';
+  const parts = [
+    view.plugin.label,
+    view.project || '',
+    // The baseline pins the "before" state: same commit, same comparison. Its
+    // mode decides whether the scope tabs are there at all.
+    view.baseline ? `${view.baseline.mode}${view.baseline.ref}` : '',
+    view.diff && view.diff.changed ? '1' : '0',
+  ];
+  for (const t of view.schema.tables) parts.push(tableKey(t));
+  if (view.diff) {
+    const baseTables = new Map((view.base ? view.base.tables : []).map((x) => [x.id, x]));
+    for (const td of view.diff.tables) {
+      parts.push([
+        td.id, td.status, td.rlsChanged ? 1 : 0,
+        td.columns.map((c) => `${c.name}=${c.status}`).join('+'),
+        td.constraints.map((c) => `${c.name}=${c.status}`).join('+'),
+      ].join(''));
+      // A removed table is drawn out of the baseline, so its shape counts too.
+      if (td.status === 'removed' && baseTables.has(td.id)) {
+        parts.push(tableKey(baseTables.get(td.id)));
+      }
+    }
+  }
+  return parts.join('');
+}
 
 // -------------------------------------------------------------------------
 // Model: from the IR plus the diff to nodes and edges
@@ -649,16 +710,32 @@ export function openDbGraph(view, filter) {
   searchEl.value = state.filter;
   state.focus = null;
   render(true);
+  state.key = pictureKey(view);
   searchEl.focus();
 }
 
 /**
  * New data or a new language. Draws without fitting, so a background tick does
- * not throw away where one was looking.
+ * not throw away where one was looking - and does not draw at all while nothing
+ * the picture shows has moved.
+ *
+ * @param {boolean} force  redraw even at an identical schema. Set for the
+ *                         refresh button, the baseline switch and the language
+ *                         switch: the first two are asked for, and the third
+ *                         changes text the schema knows nothing about.
  */
-export function refreshDbGraph(view) {
+export function refreshDbGraph(view, force = false) {
   state.view = view;
-  if (overlay.isOpen()) render(false);
+  if (!overlay.isOpen()) {
+    // Closed, so nothing is standing that could go stale; the next open draws
+    // from scratch anyway.
+    state.key = null;
+    return;
+  }
+  const key = pictureKey(view);
+  if (!force && key === state.key) return;
+  state.key = key;
+  render(false);
 }
 
 // -------------------------------------------------------------------------
