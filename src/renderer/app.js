@@ -934,9 +934,19 @@ function buildPrDetails() {
   return d;
 }
 
+// What a section body was last built from. Keyed by the element, so the entry
+// goes when the section goes - and the body is only rebuilt when its content
+// has actually changed. A PR whose checks turn green sends an info tick every
+// few seconds; without this, a selection in the description would not survive
+// one of them.
+const prDetailsHtml = new WeakMap();
+
 function updatePrDetails(el, item) {
   setText(el.querySelector('summary'), item.title);
-  el.querySelector('.pr-details-body').innerHTML = item.html;
+  const body = el.querySelector('.pr-details-body');
+  if (prDetailsHtml.get(body) === item.html) return;
+  prDetailsHtml.set(body, item.html);
+  body.innerHTML = item.html;
 }
 
 function renderFileList(s) {
@@ -1668,6 +1678,10 @@ function updateDbTableCard(box, item) {
   // Two things open one by themselves: a status that has just moved away from
   // "same", and a search that has just found it - that is what one is looking
   // for. Both only on the step, so a table closed by hand stays closed.
+  //
+  // Nothing here closes a card again. What is expanded stays expanded, no
+  // matter what expanded it: a table the search opened is still open when the
+  // search ends, and it is the same table one was just looking at.
   const wasStatus = box.dataset.status;
   box.dataset.status = status;
   if (status !== 'same' && status !== wasStatus) box.open = true;
