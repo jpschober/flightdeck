@@ -85,7 +85,9 @@ const moreMenu = $('#more-menu');
 const terminalsEl = $('#terminals');
 const emptyStateEl = $('#empty-state');
 const prCardEl = $('#pr-card');
+const prExtraEl = $('#pr-extra');
 const fileListEl = $('#file-list');
+const wtBannerEl = $('#wt-banner');
 
 // First match wins. Without the Linux/macOS fonts the list fell back to the
 // generic `monospace` - together with lineHeight 1.25 that produced the
@@ -180,6 +182,75 @@ function basename(p) {
   if (!p) return '';
   const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/);
   return parts[parts.length - 1] || p;
+}
+
+// ---------------------------------------------------------------------------
+// Lists that are updated instead of rebuilt
+//
+// What the user has done to a panel hangs off its elements: which <details>
+// is open, where the list is scrolled, what is selected. An element that is
+// thrown away and built again takes all of that with it, so the panels find
+// their elements again by id and set the fields that changed - the way
+// buildSessionItem/updateSessionItem do it for the sidebar.
+// ---------------------------------------------------------------------------
+
+/** Set text only when it differs - an equal write drops a selection inside it. */
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+function setTitle(el, text) {
+  if (el.title !== text) el.title = text;
+}
+
+/**
+ * Bring the children of `container` into the order and the content of `items`.
+ * `build` creates an empty element for an item, `update` fills it. An item's
+ * `id` has to be unique inside the container and to name the kind of element
+ * as well, so a heading is never reused as a row.
+ */
+function syncChildren(container, items, build, update) {
+  const known = new Map();
+  for (const el of container.children) {
+    if (el.dataset.id && !known.has(el.dataset.id)) known.set(el.dataset.id, el);
+  }
+  const keep = new Set();
+  let at = container.firstElementChild;
+  for (const item of items) {
+    let el = known.get(item.id);
+    if (!el || keep.has(el)) {
+      el = build(item);
+      el.dataset.id = item.id;
+    }
+    keep.add(el);
+    update(el, item);
+    // Everything before `at` is already in place, so the element belongs
+    // exactly there - either it is already standing there or it moves there.
+    if (el === at) at = at.nextElementSibling;
+    else container.insertBefore(el, at);
+  }
+  for (const el of [...container.children]) if (!keep.has(el)) el.remove();
+}
+
+/**
+ * A sentence from the dictionary with marked slots in it: the text carries
+ * \u0000 and \u0001 where a `tag` element with the matching value goes. Text
+ * and value are set separately, so nothing from outside becomes markup.
+ */
+function setSlotSentence(el, text, tag, values) {
+  const parts = text.split(/[\u0000\u0001]/);
+  if (el.children.length !== parts.length * 2 - 1) {
+    el.replaceChildren();
+    for (let i = 0; i < parts.length; i++) {
+      if (i) el.appendChild(document.createElement(tag));
+      el.appendChild(document.createElement('span'));
+    }
+  }
+  let slot = 0;
+  let part = 0;
+  for (const child of el.children) {
+    setText(child, child.tagName === tag.toUpperCase() ? (values[slot++] || '') : parts[part++]);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -378,9 +449,8 @@ async function retranslate() {
   renderHistory(active);
   renderTodos(active);
   // The main process builds the schema warnings and baseline labels itself and
-  // has just dropped its cache - so this has to go out again, not come from
-  // the renderer's own copy.
-  dbState.lastJson = '';
+  // has just dropped its cache - so both are fetched again rather than taken
+  // from the copy the renderer is holding.
   await Promise.all([
     loadDbSchema(true).catch((e) => logWarn('retranslate: db schema not reloaded', { err: e })),
     loadUsage(true).catch((e) => logWarn('retranslate: usage not reloaded', { err: e })),
@@ -589,10 +659,9 @@ function setActive(id) {
   const active = id ? sessions.get(id) : null;
   renderHistory(active);
   loadTodosFor(active);
-  // Different project, different schema - the expanded state no longer fits
-  dbState.lastJson = '';
-  dbState.open.clear();
-  dbState.closed.clear();
+  // Different project, different schema - the cards of the old one and what
+  // was expanded on them no longer fit
+  dbTablesEl.replaceChildren();
   loadDbSchema();
 }
 
@@ -615,7 +684,6 @@ async function closeSession(id) {
       renderHistory(null);
       renderTodos(null);
       dbState.view = null;
-      dbState.lastJson = '';
       renderDbPanel();
     }
   }
@@ -699,202 +767,270 @@ function updateAgentChip(el, agents) {
 // ---------------------------------------------------------------------------
 function renderContextPanel() {
   const s = activeId ? sessions.get(activeId) : null;
-  const wtBannerEl = $('#wt-banner');
-  if (!s) {
-    prCardEl.innerHTML = `<div class="muted">${escapeHtml(t('common.noSession'))}</div>`;
-    $('#pr-extra').innerHTML = '';
-    fileListEl.innerHTML = '';
-    wtBannerEl.classList.add('hidden');
-    updateBadges(null);
+  renderWorktreeBanner(s);
+  renderPrCard(s);
+  renderPrExtra(s ? s.pr : null);
+  renderFileList(s);
+  updateBadges(s);
+}
+
+// Branch and files then come from the agent's directory, not from the shell's
+// - without a notice that would be impossible to follow.
+function renderWorktreeBanner(s) {
+  const worktree = s ? s.worktree : null;
+  wtBannerEl.classList.toggle('hidden', !worktree);
+  if (!worktree) return;
+  if (!wtBannerEl.firstElementChild) {
+    wtBannerEl.innerHTML = `
+      <span class="wt-icon">⑂</span>
+      <span class="wt-text"><span class="wt-notice"></span> <code></code></span>
+      <span class="wt-sub"></span>`;
+  }
+  setText(wtBannerEl.querySelector('.wt-notice'), t('git.worktree.notice'));
+  setText(wtBannerEl.querySelector('.wt-text code'), worktree);
+  const subEl = wtBannerEl.querySelector('.wt-sub');
+  setText(subEl, t('git.worktree.shell', { path: s.cwd }));
+  setTitle(subEl, s.agentCwd || '');
+}
+
+// The card has five shapes: a pull request, a branch without one, a repository
+// git is kept out of (not the same as "no repository": there is one here, and
+// it is on purpose - see gitinfo.js), no repository at all, and no session.
+// The shape decides the skeleton - it is built when the shape changes, and
+// from then on only the fields are set.
+const PR_CARD_HTML = `
+  <div class="pr-title" role="link"></div>
+  <div class="pr-meta">
+    <span class="pr-state"></span>
+    <span class="pr-author"></span>
+    <div class="pr-checks">
+      <span class="check-chip failure"></span>
+      <span class="check-chip pending"></span>
+      <span class="check-chip success"></span>
+    </div>
+  </div>
+  <div class="pr-branches"></div>
+  <div class="pr-stats"><span class="add"></span> <span class="del"></span></div>`;
+
+const CHECK_MARK = { failure: '✗', pending: '●', success: '✓' };
+
+function renderPrCard(s) {
+  const pr = s ? s.pr : null;
+  const shape = !s ? 'nosession'
+    : pr ? 'pr'
+      : s.branch ? 'branch'
+        : s.gitBlocked ? 'blocked' : 'norepo';
+
+  if (prCardEl.dataset.shape !== shape) {
+    prCardEl.dataset.shape = shape;
+    if (shape === 'pr') {
+      prCardEl.innerHTML = PR_CARD_HTML;
+      const titleEl = prCardEl.querySelector('.pr-title');
+      makeKeyActivatable(titleEl);
+      // The PR of the session that is showing now, not the one that was
+      // showing when the card was built.
+      titleEl.addEventListener('click', () => {
+        const cur = activeId && sessions.get(activeId);
+        if (cur && cur.pr) window.api.openExternal(cur.pr.url);
+      });
+    } else {
+      prCardEl.innerHTML = `<div class="${shape === 'blocked' ? 'git-blocked' : 'muted'}"></div>`;
+    }
+  }
+
+  const lineEl = prCardEl.firstElementChild;
+  if (shape === 'nosession') { setText(lineEl, t('common.noSession')); return; }
+  if (shape === 'norepo') { setText(lineEl, t('git.noRepo')); return; }
+  if (shape === 'branch') {
+    setSlotSentence(lineEl, t('git.pr.none', { branch: '\u0000' }), 'code', [s.branch]);
+    return;
+  }
+  if (shape === 'blocked') {
+    setSlotSentence(lineEl, t('git.blocked', { key: '\u0000' }), 'code', [s.gitBlocked]);
     return;
   }
 
-  // --- Worktree notice ---
-  // Branch and files then come from the agent's directory, not from the
-  // shell's - without a notice that would be impossible to follow.
-  wtBannerEl.classList.toggle('hidden', !s.worktree);
-  if (s.worktree) {
-    wtBannerEl.innerHTML = `
-      <span class="wt-icon">⑂</span>
-      <span class="wt-text">${escapeHtml(t('git.worktree.notice'))}
-        <code>${escapeHtml(s.worktree)}</code></span>
-      <span class="wt-sub" title="${escapeHtml(s.agentCwd || '')}">${escapeHtml(t('git.worktree.shell', { path: s.cwd }))}</span>`;
+  const titleEl = prCardEl.querySelector('.pr-title');
+  setText(titleEl, `#${pr.number} ${pr.title}`);
+  setTitle(titleEl, t('git.pr.open'));
+
+  const stateEl = prCardEl.querySelector('.pr-state');
+  stateEl.className = 'pr-state ' + (pr.isDraft ? 'draft' : pr.state.toLowerCase());
+  setText(stateEl, pr.isDraft ? 'Draft' : pr.state);
+
+  const authorEl = prCardEl.querySelector('.pr-author');
+  authorEl.classList.toggle('hidden', !pr.author);
+  setText(authorEl, pr.author ? t('git.pr.by', { author: pr.author }) : '');
+
+  const checks = pr.checks && pr.checks.total ? pr.checks : null;
+  prCardEl.querySelector('.pr-checks').classList.toggle('hidden', !checks);
+  for (const kind of Object.keys(CHECK_MARK)) {
+    const chipEl = prCardEl.querySelector('.check-chip.' + kind);
+    const count = checks ? checks[kind] : 0;
+    chipEl.classList.toggle('hidden', !count);
+    setText(chipEl, count ? `${CHECK_MARK[kind]} ${count}` : '');
   }
 
-  // --- PR card ---
-  const prExtraEl = $('#pr-extra');
-  if (s.pr) {
-    const pr = s.pr;
-    const stateClass = pr.isDraft ? 'draft' : pr.state.toLowerCase();
-    const stateText = pr.isDraft ? 'Draft' : pr.state;
-    const checks = pr.checks && pr.checks.total
-      ? `<div class="pr-checks">
-           ${pr.checks.failure ? `<span class="check-chip failure">✗ ${pr.checks.failure}</span>` : ''}
-           ${pr.checks.pending ? `<span class="check-chip pending">● ${pr.checks.pending}</span>` : ''}
-           ${pr.checks.success ? `<span class="check-chip success">✓ ${pr.checks.success}</span>` : ''}
-         </div>`
-      : '';
-    prCardEl.innerHTML = `
-      <div class="pr-title" title="${escapeHtml(t('git.pr.open'))}">#${pr.number} ${escapeHtml(pr.title)}</div>
-      <div class="pr-meta">
-        <span class="pr-state ${stateClass}">${escapeHtml(stateText)}</span>
-        ${pr.author ? `<span>${escapeHtml(t('git.pr.by', { author: pr.author }))}</span>` : ''}
-        ${checks}
-      </div>
-      <div class="pr-branches">${escapeHtml(pr.headRefName)} → ${escapeHtml(pr.baseRefName)}</div>
-      <div class="pr-stats"><span class="add">+${pr.additions ?? 0}</span> <span class="del">−${pr.deletions ?? 0}</span></div>`;
-    const prTitleEl = prCardEl.querySelector('.pr-title');
-    prTitleEl.setAttribute('role', 'link');
-    makeKeyActivatable(prTitleEl);
-    prTitleEl.addEventListener('click', () => window.api.openExternal(pr.url));
-    renderPrExtra(prExtraEl, pr);
-  } else if (s.branch) {
-    prCardEl.innerHTML = `<div class="muted">${
-      escapeHtml(t('git.pr.none', { branch: '\u0000' })).replace('\u0000', `<code>${escapeHtml(s.branch)}</code>`)}</div>`;
-    prExtraEl.innerHTML = '';
-  } else if (s.gitBlocked) {
-    // Not the same as "no repository": there is one here, and git is kept out
-    // of it on purpose - see gitinfo.js.
-    prCardEl.innerHTML = `<div class="git-blocked">${
-      escapeHtml(t('git.blocked', { key: '\u0000' })).replace('\u0000', `<code>${escapeHtml(s.gitBlocked)}</code>`)}</div>`;
-    prExtraEl.innerHTML = '';
-  } else {
-    prCardEl.innerHTML = `<div class="muted">${escapeHtml(t('git.noRepo'))}</div>`;
-    prExtraEl.innerHTML = '';
+  setText(prCardEl.querySelector('.pr-branches'), `${pr.headRefName} → ${pr.baseRefName}`);
+  setText(prCardEl.querySelector('.pr-stats .add'), `+${pr.additions ?? 0}`);
+  setText(prCardEl.querySelector('.pr-stats .del'), `−${pr.deletions ?? 0}`);
+}
+
+// PR extra sections (description, checks, commits, feedback). Which of them is
+// open is the user's doing and stays in the DOM, so the sections are found
+// again by their id and only their content is replaced.
+function renderPrExtra(pr) {
+  const items = [];
+
+  if (pr && pr.body && pr.body.trim()) {
+    items.push({ id: 'body', title: t('git.pr.description'), html: `<div class="md">${mdToHtml(pr.body)}</div>` });
   }
 
-  // --- File lists ---
-  fileListEl.innerHTML = '';
-  const frag = document.createDocumentFragment();
+  if (pr && pr.checks && pr.checks.total) {
+    items.push({
+      id: 'checks',
+      title: t('git.pr.checks', {
+        success: pr.checks.success, failure: pr.checks.failure, pending: pr.checks.pending,
+      }),
+      html: pr.checks.items.map((c) =>
+        `<div class="check-row"><span class="check-dot ${c.status}"></span>${escapeHtml(c.name)}</div>`).join(''),
+    });
+  }
+
+  if (pr && pr.commits && pr.commits.length) {
+    items.push({
+      id: 'commits',
+      title: t('git.pr.commits', { count: pr.commits.length }),
+      html: pr.commits.slice().reverse().map((c) =>
+        `<div class="commit-row"><code class="commit-sha">${escapeHtml(c.sha)}</code>${escapeHtml(c.message)}</div>`).join(''),
+    });
+  }
+
+  const feedback = pr ? [
+    ...(pr.reviews || []).map((r) => ({ ...r, kind: 'review', at: r.submittedAt })),
+    ...(pr.comments || []).map((c) => ({ ...c, kind: 'comment', at: c.createdAt })),
+  ].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)) : [];
+  if (feedback.length) {
+    items.push({
+      id: 'feedback',
+      title: t('git.pr.feedback', { count: feedback.length }),
+      html: feedback.map((f) => `
+        <div class="fb-row">
+          <div class="fb-head">
+            <strong>${escapeHtml(f.author || '?')}</strong>
+            ${f.kind === 'review' ? `<span class="fb-state ${escapeHtml((f.state || '').toLowerCase())}">${escapeHtml(f.state || '')}</span>` : ''}
+            <span class="fb-date">${f.at ? new Date(f.at).toLocaleString(locale, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+          </div>
+          ${f.body ? `<div class="md">${mdToHtml(f.body)}</div>` : ''}
+        </div>`).join(''),
+    });
+  }
+
+  syncChildren(prExtraEl, items, buildPrDetails, updatePrDetails);
+}
+
+function buildPrDetails() {
+  const d = document.createElement('details');
+  d.className = 'pr-details';
+  d.innerHTML = '<summary></summary><div class="pr-details-body"></div>';
+  return d;
+}
+
+// What a section body was last built from. Keyed by the element, so the entry
+// goes when the section goes - and the body is only rebuilt when its content
+// has actually changed. A PR whose checks turn green sends an info tick every
+// few seconds; without this, a selection in the description would not survive
+// one of them.
+const prDetailsHtml = new WeakMap();
+
+function updatePrDetails(el, item) {
+  setText(el.querySelector('summary'), item.title);
+  const body = el.querySelector('.pr-details-body');
+  if (prDetailsHtml.get(body) === item.html) return;
+  prDetailsHtml.set(body, item.html);
+  body.innerHTML = item.html;
+}
+
+function renderFileList(s) {
+  syncChildren(fileListEl, fileItems(s), buildFileItem, updateFileItem);
+}
+
+/**
+ * Headings and rows of the file list in the order they are shown. The id names
+ * the group as well, so the same path can stand in the committed and in the
+ * changed group without the two sharing an element.
+ */
+function fileItems(s) {
+  const items = [];
+  if (!s) return items;
 
   // As soon as a PR exists, its file list is the authoritative one - the local
   // memory would only duplicate it.
-  const hasPr = Boolean(s.pr && s.pr.files && s.pr.files.length);
-
-  if (hasPr) {
-    const t2 = document.createElement('div');
-    t2.className = 'file-group-title';
-    t2.textContent = t('git.files.inPr', { count: s.pr.files.length });
-    frag.appendChild(t2);
-    for (const f of s.pr.files) {
-      frag.appendChild(buildFileItem(s, f, 'pr'));
-    }
+  if (s.pr && s.pr.files && s.pr.files.length) {
+    items.push({ id: 'title:pr', title: t('git.files.inPr', { count: s.pr.files.length }) });
+    for (const f of s.pr.files) items.push({ id: `pr:${f.path}`, file: f, source: 'pr' });
   } else if (s.files.length) {
     const open = s.files.filter((f) => !f.committed);
     const done = s.files.filter((f) => f.committed);
     if (open.length) {
-      const t2 = document.createElement('div');
-      t2.className = 'file-group-title';
-      t2.textContent = t('git.files.worktree');
-      frag.appendChild(t2);
-      for (const f of open) frag.appendChild(buildFileItem(s, f, 'wt'));
+      items.push({ id: 'title:worktree', title: t('git.files.worktree') });
+      for (const f of open) items.push({ id: `wt:${f.path}`, file: f, source: 'wt' });
     }
     if (done.length) {
-      const t2 = document.createElement('div');
-      t2.className = 'file-group-title';
-      t2.textContent = t('git.files.committed', { count: done.length });
-      frag.appendChild(t2);
-      for (const f of done) frag.appendChild(buildFileItem(s, f, 'wt'));
+      items.push({ id: 'title:committed', title: t('git.files.committed', { count: done.length }) });
+      for (const f of done) items.push({ id: `committed:${f.path}`, file: f, source: 'wt' });
     }
   }
 
-  if (!frag.childNodes.length) {
-    const d = document.createElement('div');
-    d.className = 'muted';
-    d.textContent = s.branch ? t('git.files.none') : '—';
-    frag.appendChild(d);
-  }
-  fileListEl.appendChild(frag);
-  updateBadges(s);
+  if (!items.length) items.push({ id: 'empty', title: s.branch ? t('git.files.none') : '—', muted: true });
+  return items;
 }
 
-// PR extra sections (description, commits, comments) - the expanded state
-// survives the periodic re-renders
-const prOpenSections = new Set();
-
-function buildDetails(key, title, innerHtml) {
-  const d = document.createElement('details');
-  d.className = 'pr-details';
-  d.dataset.key = key;
-  if (prOpenSections.has(key)) d.open = true;
-  d.innerHTML = `<summary>${escapeHtml(title)}</summary><div class="pr-details-body">${innerHtml}</div>`;
-  d.addEventListener('toggle', () => {
-    if (d.open) prOpenSections.add(key);
-    else prOpenSections.delete(key);
+function buildFileItem(item) {
+  const el = document.createElement('div');
+  if (!item.file) {
+    el.className = item.muted ? 'muted' : 'file-group-title';
+    return el;
+  }
+  el.className = 'file-item';
+  el.innerHTML = `
+    <span class="file-status"></span>
+    <span class="file-path"></span>
+    <span class="file-diffstat"><span class="add"></span> <span class="del"></span></span>`;
+  makeKeyActivatable(el);
+  // Directories (git reports them untracked with a trailing slash) are not
+  // clickable - a file preview of them is bound to fail.
+  el.addEventListener('click', () => {
+    if (!el.classList.contains('is-dir')) openPreview(activeId, item.file.path, item.source);
   });
-  return d;
+  return el;
 }
 
-function renderPrExtra(container, pr) {
-  container.innerHTML = '';
-  const frag = document.createDocumentFragment();
+function updateFileItem(el, item) {
+  const f = item.file;
+  if (!f) { setText(el, item.title); return; }
 
-  if (pr.body && pr.body.trim()) {
-    frag.appendChild(buildDetails('body', t('git.pr.description'), `<div class="md">${mdToHtml(pr.body)}</div>`));
-  }
-
-  if (pr.checks && pr.checks.total) {
-    const rows = pr.checks.items.map((c) =>
-      `<div class="check-row"><span class="check-dot ${c.status}"></span>${escapeHtml(c.name)}</div>`).join('');
-    frag.appendChild(buildDetails('checks', t('git.pr.checks', {
-      success: pr.checks.success, failure: pr.checks.failure, pending: pr.checks.pending,
-    }), rows));
-  }
-
-  if (pr.commits && pr.commits.length) {
-    const rows = pr.commits.slice().reverse().map((c) =>
-      `<div class="commit-row"><code class="commit-sha">${escapeHtml(c.sha)}</code>${escapeHtml(c.message)}</div>`).join('');
-    frag.appendChild(buildDetails('commits', t('git.pr.commits', { count: pr.commits.length }), rows));
-  }
-
-  const feedback = [
-    ...(pr.reviews || []).map((r) => ({ ...r, kind: 'review', at: r.submittedAt })),
-    ...(pr.comments || []).map((c) => ({ ...c, kind: 'comment', at: c.createdAt })),
-  ].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
-  if (feedback.length) {
-    const rows = feedback.map((f) => `
-      <div class="fb-row">
-        <div class="fb-head">
-          <strong>${escapeHtml(f.author || '?')}</strong>
-          ${f.kind === 'review' ? `<span class="fb-state ${escapeHtml((f.state || '').toLowerCase())}">${escapeHtml(f.state || '')}</span>` : ''}
-          <span class="fb-date">${f.at ? new Date(f.at).toLocaleString(locale, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
-        </div>
-        ${f.body ? `<div class="md">${mdToHtml(f.body)}</div>` : ''}
-      </div>`).join('');
-    frag.appendChild(buildDetails('feedback', t('git.pr.feedback', { count: feedback.length }), rows));
-  }
-
-  container.appendChild(frag);
-}
-
-function buildFileItem(s, f, source) {
-  const filePath = f.path;
   const isDir = Boolean(f.dir);
-  const status = source === 'pr' ? 'M'
+  const status = item.source === 'pr' ? 'M'
     : f.committed ? 'C'
       : f.untracked ? 'U' : f.status;
 
-  const el = document.createElement('div');
-  el.className = 'file-item'
-    + (f.committed ? ' committed' : '')
-    + (isDir ? ' is-dir' : '');
-  el.title = isDir ? t('git.files.dir', { path: filePath }) : filePath;
+  el.classList.toggle('committed', Boolean(f.committed));
+  el.classList.toggle('is-dir', isDir);
+  el.tabIndex = isDir ? -1 : 0;
+  setTitle(el, isDir ? t('git.files.dir', { path: f.path }) : f.path);
 
-  const stat = (f.additions !== undefined || f.deletions !== undefined)
-    ? `<span class="file-diffstat"><span class="add">+${f.additions ?? 0}</span> <span class="del">−${f.deletions ?? 0}</span></span>`
-    : '';
-  el.innerHTML = `
-    <span class="file-status ${escapeHtml(status)}">${escapeHtml(status)}</span>
-    <span class="file-path">&lrm;${escapeHtml(filePath)}&lrm;</span>
-    ${stat}`;
+  const statusEl = el.querySelector('.file-status');
+  statusEl.className = `file-status ${status}`;
+  setText(statusEl, status);
+  // Between the marks the path reads from the left even though the box lays it
+  // out from the right (see .file-path in the stylesheet).
+  setText(el.querySelector('.file-path'), `\u200e${f.path}\u200e`);
 
-  // Directories (git reports them untracked with a trailing slash) are not
-  // clickable - a file preview of them is bound to fail.
-  if (!isDir) {
-    makeKeyActivatable(el);
-    el.addEventListener('click', () => openPreview(s.id, filePath, source));
-  }
-  return el;
+  const statEl = el.querySelector('.file-diffstat');
+  statEl.classList.toggle('hidden', f.additions === undefined && f.deletions === undefined);
+  setText(statEl.querySelector('.add'), `+${f.additions ?? 0}`);
+  setText(statEl.querySelector('.del'), `−${f.deletions ?? 0}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,11 +1184,6 @@ const dbState = {
   view: null,
   baseline: 'auto',
   filter: '',
-  // Expanded or deliberately collapsed - both have to survive the rebuild,
-  // otherwise a table closed by hand pops open again on the next tick.
-  open: new Set(),
-  closed: new Set(),
-  lastJson: '',
   loading: false,
 };
 let dbTimer = null;
@@ -1143,7 +1274,6 @@ async function loadDbSchema(force = false) {
   const s = activeId && sessions.get(activeId);
   if (!s) {
     dbState.view = null;
-    dbState.lastJson = '';
     renderDbPanel();
     return;
   }
@@ -1152,11 +1282,6 @@ async function loadDbSchema(force = false) {
   try {
     const view = await window.api.getDbSchema(s.id, { baseline: dbState.baseline, force });
     if (s.id !== activeId) return; // switched away in the meantime
-    // Unchanged? Then do not rebuild - otherwise the scroll position jumps on
-    // every tick of the background poll.
-    const json = JSON.stringify(view);
-    if (json === dbState.lastJson) return;
-    dbState.lastJson = json;
     dbState.view = view;
     renderDbPanel();
     if (dbDiffOverlay.isOpen()) renderDbDiff();
@@ -1188,115 +1313,144 @@ function startDbPolling() {
 // ---------------------------------------------------------------------------
 function renderDbPanel() {
   const view = dbState.view;
-
-  if (!view || !view.ok) {
-    dbHeadEl.innerHTML = '';
-    dbSignalEl.innerHTML = '';
-    dbSearchEl.classList.add('hidden');
-    dbTablesEl.innerHTML = `<div class="muted">${escapeHtml(view && view.error
-      ? view.error : t('common.noSession'))}</div>`;
-    setDbBadge(0);
-    return;
-  }
-
-  if (!view.plugin) {
-    dbHeadEl.innerHTML = '';
-    dbSignalEl.innerHTML = '';
-    dbSearchEl.classList.add('hidden');
-    dbTablesEl.innerHTML = `
-      <div class="muted">${escapeHtml(t('db.none'))}</div>
-      <div class="db-hint">${escapeHtml(t('db.none.hint', { project: '\u0000', path: '\u0001' }))
-        .replace('\u0000', `<code>${escapeHtml(view.project || view.root || '')}</code>`)
-        .replace('\u0001', '<code>supabase/migrations</code>')}</div>`;
-    // "Nothing detected" and "a plugin broke on the way there" look the same
-    // in the panel otherwise. The warnings tell them apart.
-    dbTablesEl.insertAdjacentHTML('beforeend', warningsHtml(view.schema));
-    setDbBadge(0);
-    return;
-  }
-
-  renderDbHead(view);
-  renderDbSignal(view);
-  dbSearchEl.classList.remove('hidden');
+  const ok = Boolean(view && view.ok && view.plugin);
+  renderDbHead(ok ? view : null);
+  renderDbSignal(ok ? view : null);
+  dbSearchEl.classList.toggle('hidden', !ok);
   renderDbTables(view);
-  setDbBadge(view.changeCount || 0);
+  setDbBadge(ok ? (view.changeCount || 0) : 0);
 }
 
 // What the reader could not make sense of - an unparsable migration, a file it
 // could not read, a plugin that threw. The schema on display is incomplete by
 // exactly this list, which is why it stands next to it and not only in the log.
-function warningsHtml(schema) {
-  const warnings = (schema && schema.warnings) || [];
-  if (!warnings.length) return '';
-  return `
-    <details class="db-warn">
-      <summary>${escapeHtml(t('db.warnings', { count: warnings.length }))}</summary>
-      <ul>${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
-    </details>`;
+function buildDbWarnings() {
+  const el = document.createElement('details');
+  el.className = 'db-warn';
+  el.innerHTML = '<summary></summary><ul></ul>';
+  return el;
 }
 
+function updateDbWarnings(el, schema) {
+  const warnings = (schema && schema.warnings) || [];
+  el.classList.toggle('hidden', !warnings.length);
+  setText(el.querySelector('summary'), t('db.warnings', { count: warnings.length }));
+  syncChildren(
+    el.querySelector('ul'),
+    warnings.map((w, i) => ({ id: String(i), text: w })),
+    () => document.createElement('li'),
+    (li, item) => setText(li, item.text),
+  );
+}
+
+const DB_HEAD_HTML = `
+  <div class="db-top">
+    <span class="db-plugin"></span>
+    <span class="db-files"></span>
+    <button id="db-refresh" class="icon-btn">↻</button>
+  </div>
+  <div class="db-baseline-row">
+    <label class="db-base"><span class="db-base-label"></span><select id="db-baseline"></select></label>
+    <span class="db-base-none muted"></span>
+  </div>`;
+
 function renderDbHead(view) {
-  const files = view.schema.files.length;
-  const baseSel = view.baselines.length
-    ? `<label class="db-base">${escapeHtml(t('db.baseline'))}
-         <select id="db-baseline">
-           ${view.baselines.map((b) => `<option value="${escapeHtml(b.mode)}"${
-             view.baseline && view.baseline.mode === b.mode ? ' selected' : ''
-           } title="${escapeHtml(b.hint || '')}">${escapeHtml(b.label)}</option>`).join('')}
-         </select>
-       </label>`
-    : `<span class="muted">${escapeHtml(t('db.baseline.none'))}</span>`;
-
-  dbHeadEl.innerHTML = `
-    <div class="db-top">
-      <span class="db-plugin" title="${escapeHtml((view.plugin.evidence || []).join('\n'))}">${escapeHtml(view.plugin.label)}</span>
-      <span class="db-files">${escapeHtml(t('db.tables', { count: view.schema.tables.length }))} · ${escapeHtml(t('db.files', { count: files }))}</span>
-      <button id="db-refresh" class="icon-btn" title="${escapeHtml(t('db.refresh'))}" aria-label="${escapeHtml(t('db.refresh'))}">↻</button>
-    </div>
-    <div class="db-baseline-row">${baseSel}</div>
-    ${warningsHtml(view.schema)}`;
-
-  dbHeadEl.querySelector('#db-refresh').addEventListener('click', () => loadDbSchema(true));
-  const sel = dbHeadEl.querySelector('#db-baseline');
-  if (sel) {
-    sel.addEventListener('change', () => {
-      dbState.baseline = sel.value;
-      dbState.lastJson = '';
+  if (!view) { dbHeadEl.replaceChildren(); return; }
+  if (!dbHeadEl.firstElementChild) {
+    dbHeadEl.innerHTML = DB_HEAD_HTML;
+    dbHeadEl.appendChild(buildDbWarnings());
+    dbHeadEl.querySelector('#db-refresh').addEventListener('click', () => loadDbSchema(true));
+    dbHeadEl.querySelector('#db-baseline').addEventListener('change', (e) => {
+      dbState.baseline = e.target.value;
       loadDbSchema(true);
     });
   }
+
+  const pluginEl = dbHeadEl.querySelector('.db-plugin');
+  setText(pluginEl, view.plugin.label);
+  setTitle(pluginEl, (view.plugin.evidence || []).join('\n'));
+  setText(dbHeadEl.querySelector('.db-files'),
+    `${t('db.tables', { count: view.schema.tables.length })} · ${t('db.files', { count: view.schema.files.length })}`);
+  const refreshEl = dbHeadEl.querySelector('#db-refresh');
+  setTitle(refreshEl, t('db.refresh'));
+  refreshEl.setAttribute('aria-label', t('db.refresh'));
+
+  const hasBaselines = view.baselines.length > 0;
+  dbHeadEl.querySelector('.db-base').classList.toggle('hidden', !hasBaselines);
+  setText(dbHeadEl.querySelector('.db-base-label'), t('db.baseline'));
+  const noneEl = dbHeadEl.querySelector('.db-base-none');
+  noneEl.classList.toggle('hidden', hasBaselines);
+  setText(noneEl, hasBaselines ? '' : t('db.baseline.none'));
+
+  const sel = dbHeadEl.querySelector('#db-baseline');
+  syncChildren(
+    sel,
+    view.baselines.map((b) => ({ id: b.mode, baseline: b })),
+    () => document.createElement('option'),
+    (el, item) => {
+      el.value = item.baseline.mode;
+      setText(el, item.baseline.label);
+      setTitle(el, item.baseline.hint || '');
+    },
+  );
+  // While the list is open the choice being made there wins - the pass that
+  // runs in between must not put the previous one back.
+  if (document.activeElement !== sel) sel.value = (view.baseline && view.baseline.mode) || '';
+
+  updateDbWarnings(dbHeadEl.querySelector('.db-warn'), view.schema);
 }
 
-function renderDbSignal(view) {
-  const d = view.diff;
-  if (!d) {
-    dbSignalEl.innerHTML = '';
-    return;
-  }
-  if (!d.changed) {
-    dbSignalEl.innerHTML = `<div class="db-signal ok">
-      <span class="db-signal-icon">✓</span>
-      <span>${escapeHtml(t('db.unchanged', { baseline: '\u0000' }))
-        .replace('\u0000', `<strong>${escapeHtml(view.baseline.label)}</strong>`)}</span>
-    </div>`;
-    return;
-  }
-  const s = d.summary;
-  const detail = [
-    partsText(s.columns, 'db.parts.columns'),
-    partsText(s.constraints, 'db.parts.constraints'),
-    partsText(s.policies, 'db.parts.policies'),
-  ].filter(Boolean).join(' · ');
+const DB_SIGNAL_OK_HTML = `
+  <div class="db-signal ok">
+    <span class="db-signal-icon">✓</span>
+    <span class="db-signal-note"></span>
+  </div>`;
 
-  dbSignalEl.innerHTML = `<div class="db-signal alert">
+const DB_SIGNAL_ALERT_HTML = `
+  <div class="db-signal alert">
     <span class="db-signal-icon">⚠</span>
     <div class="db-signal-text">
-      <strong>${escapeHtml(t('db.changed'))}</strong> ${escapeHtml(t('db.comparedTo', { baseline: view.baseline.label }))}
-      <div class="db-signal-sub">${escapeHtml(view.changeText)}${detail ? '<br>' + detail : ''}</div>
+      <strong class="db-changed"></strong> <span class="db-compared"></span>
+      <div class="db-signal-sub">
+        <span class="db-change-text"></span>
+        <div class="db-detail"></div>
+      </div>
     </div>
-    <button id="db-open-diff" title="${escapeHtml(t('db.compare.title'))}">${escapeHtml(t('db.compare'))}</button>
+    <button id="db-open-diff"></button>
   </div>`;
-  dbSignalEl.querySelector('#db-open-diff').addEventListener('click', openDbDiff);
+
+function renderDbSignal(view) {
+  const d = view && view.diff;
+  const shape = !d ? 'none' : d.changed ? 'alert' : 'ok';
+  if (dbSignalEl.dataset.shape !== shape) {
+    dbSignalEl.dataset.shape = shape;
+    dbSignalEl.innerHTML = shape === 'ok' ? DB_SIGNAL_OK_HTML
+      : shape === 'alert' ? DB_SIGNAL_ALERT_HTML : '';
+    if (shape === 'alert') dbSignalEl.querySelector('#db-open-diff').addEventListener('click', openDbDiff);
+  }
+  if (shape === 'none') return;
+  if (shape === 'ok') {
+    setSlotSentence(dbSignalEl.querySelector('.db-signal-note'),
+      t('db.unchanged', { baseline: '\u0000' }), 'strong', [view.baseline.label]);
+    return;
+  }
+
+  const sum = d.summary;
+  const detail = [
+    partsText(sum.columns, 'db.parts.columns'),
+    partsText(sum.constraints, 'db.parts.constraints'),
+    partsText(sum.policies, 'db.parts.policies'),
+  ].filter(Boolean).join(' · ');
+
+  setText(dbSignalEl.querySelector('.db-changed'), t('db.changed'));
+  setText(dbSignalEl.querySelector('.db-compared'), t('db.comparedTo', { baseline: view.baseline.label }));
+  setText(dbSignalEl.querySelector('.db-change-text'), view.changeText);
+  const detailEl = dbSignalEl.querySelector('.db-detail');
+  detailEl.classList.toggle('hidden', !detail);
+  setText(detailEl, detail);
+  const btn = dbSignalEl.querySelector('#db-open-diff');
+  setText(btn, t('db.compare'));
+  setTitle(btn, t('db.compare.title'));
 }
 
 function partsText(counts, nounKey) {
@@ -1326,201 +1480,360 @@ function diffLookup(view) {
 }
 
 function renderDbTables(view) {
+  syncChildren(dbTablesEl, dbTableItems(view), buildDbItem, updateDbItem);
+}
+
+/**
+ * Everything the table list shows, in order. The search hides what does not
+ * match instead of dropping it: an open table stays open while one searches
+ * past it, and typing does not rebuild the list letter by letter.
+ */
+function dbTableItems(view) {
+  if (!view || !view.ok) {
+    return [{ id: 'note', kind: 'note', text: view && view.error ? view.error : t('common.noSession') }];
+  }
+  if (!view.plugin) {
+    // "Nothing detected" and "a plugin broke on the way there" look the same
+    // in the panel otherwise. The warnings tell them apart.
+    return [
+      { id: 'note', kind: 'note', text: t('db.none') },
+      { id: 'hint', kind: 'hint', codes: [view.project || view.root || '', 'supabase/migrations'] },
+      { id: 'warn', kind: 'warn', schema: view.schema },
+    ];
+  }
+
   const q = dbState.filter.trim().toLowerCase();
   const look = diffLookup(view);
-  dbTablesEl.innerHTML = '';
-  const frag = document.createDocumentFragment();
+  const items = [];
 
-  // --- Enums ---
-  const enums = view.schema.enums.filter((e) => !q
-    || e.name.toLowerCase().includes(q)
-    || e.values.some((v) => v.toLowerCase().includes(q)));
-  if (enums.length) {
+  if (view.schema.enums.length) {
     const enumDiff = new Map((view.diff ? view.diff.enums : []).map((e) => [e.id, e]));
-    const box = document.createElement('details');
-    box.className = 'db-enums';
-    if (dbState.open.has('__enums')) box.open = true;
-    box.innerHTML = `<summary>${escapeHtml(t('db.enums', { count: enums.length }))}</summary>
-      <div class="db-enum-list">${enums.map((e) => {
-        const d = enumDiff.get(e.id);
-        const st = d ? d.status : 'same';
-        return `<div class="db-enum ${st}">
-          <span class="db-enum-name">${escapeHtml(e.name)}</span>
-          <span class="db-enum-values">${e.values.map((v) => {
-            const added = d && d.added && d.added.includes(v);
-            return `<code class="${added ? 'added' : ''}">${escapeHtml(v)}</code>`;
-          }).join('')}${(d && d.removed || []).map((v) =>
-            `<code class="removed">${escapeHtml(v)}</code>`).join('')}</span>
-        </div>`;
-      }).join('')}</div>`;
-    box.addEventListener('toggle', () => {
-      if (box.open) dbState.open.add('__enums'); else dbState.open.delete('__enums');
+    const rows = view.schema.enums.map((e) => ({
+      id: `enum:${e.id}`,
+      enumeration: e,
+      diff: enumDiff.get(e.id),
+      hidden: Boolean(q) && !e.name.toLowerCase().includes(q)
+        && !e.values.some((v) => v.toLowerCase().includes(q)),
+    }));
+    const shown = rows.filter((r) => !r.hidden).length;
+    items.push({ id: '__enums', kind: 'enums', rows, count: shown, hidden: !shown });
+  }
+
+  // Removed tables: no longer in the schema, but they have to stand out
+  for (const td of (view.diff ? view.diff.tables : [])) {
+    if (td.status !== 'removed') continue;
+    items.push({
+      id: `gone:${td.id}`, kind: 'gone', table: td,
+      hidden: Boolean(q) && !td.name.toLowerCase().includes(q),
     });
-    frag.appendChild(box);
   }
 
-  // --- Removed tables: no longer in the schema, but they have to stand out
-  const removed = (view.diff ? view.diff.tables : []).filter((t) => t.status === 'removed');
-  for (const table of removed) {
-    if (q && !table.name.toLowerCase().includes(q)) continue;
-    const el = document.createElement('div');
-    el.className = 'db-table removed-table';
-    el.innerHTML = `<span class="db-status removed" title="${escapeHtml(t('db.table.removed'))}">−</span>
-      <span class="db-table-name">${escapeHtml(table.schema)}.${escapeHtml(table.name)}</span>
-      <span class="db-table-note">${escapeHtml(t('db.table.removed'))}</span>`;
-    frag.appendChild(el);
+  for (const table of view.schema.tables) {
+    items.push({
+      id: `table:${table.id}`, kind: 'table', table, diff: look.get(table.id), q,
+      hidden: Boolean(q) && !table.name.toLowerCase().includes(q)
+        && !table.columns.some((c) => c.name.toLowerCase().includes(q)),
+    });
   }
 
-  // --- Tables ---
-  const tables = view.schema.tables.filter((t) => !q
-    || t.name.toLowerCase().includes(q)
-    || t.columns.some((c) => c.name.toLowerCase().includes(q)));
-
-  for (const t of tables) {
-    frag.appendChild(buildDbTableCard(t, look.get(t.id), q));
+  if (!items.some((item) => !item.hidden)) {
+    items.push({ id: 'empty', kind: 'note', text: q ? t('common.noMatches') : t('db.noTables') });
   }
-
-  if (!frag.childNodes.length) {
-    const d = document.createElement('div');
-    d.className = 'muted';
-    d.textContent = q ? t('common.noMatches') : t('db.noTables');
-    frag.appendChild(d);
-  }
-  dbTablesEl.appendChild(frag);
+  return items;
 }
 
-function buildDbTableCard(table, d, q) {
-  const status = d ? d.status : 'same';
-  const box = document.createElement('details');
-  box.className = `db-table ${status}`;
-  // Expand changed tables and search hits right away - that is what one is
-  // looking for. Whatever was collapsed by hand stays collapsed.
-  if (dbState.open.has(table.id)
-      || (q && q.length > 1)
-      || (status !== 'same' && !dbState.closed.has(table.id))) {
-    box.open = true;
+function buildDbItem(item) {
+  if (item.kind === 'note') {
+    const el = document.createElement('div');
+    el.className = 'muted';
+    return el;
   }
+  if (item.kind === 'hint') {
+    const el = document.createElement('div');
+    el.className = 'db-hint';
+    return el;
+  }
+  if (item.kind === 'warn') return buildDbWarnings();
+  if (item.kind === 'enums') return buildDbEnums();
+  if (item.kind === 'gone') return buildDbGoneTable();
+  return buildDbTableCard();
+}
+
+function updateDbItem(el, item) {
+  el.classList.toggle('hidden', Boolean(item.hidden));
+  if (item.kind === 'note') { setText(el, item.text); return; }
+  if (item.kind === 'hint') {
+    setSlotSentence(el, t('db.none.hint', { project: '\u0000', path: '\u0001' }), 'code', item.codes);
+    return;
+  }
+  if (item.kind === 'warn') { updateDbWarnings(el, item.schema); return; }
+  if (item.kind === 'enums') { updateDbEnums(el, item); return; }
+  if (item.kind === 'gone') { updateDbGoneTable(el, item); return; }
+  updateDbTableCard(el, item);
+}
+
+function buildDbEnums() {
+  const el = document.createElement('details');
+  el.className = 'db-enums';
+  el.innerHTML = '<summary></summary><div class="db-enum-list"></div>';
+  return el;
+}
+
+function updateDbEnums(el, item) {
+  setText(el.querySelector('summary'), t('db.enums', { count: item.count }));
+  syncChildren(el.querySelector('.db-enum-list'), item.rows, buildDbEnumRow, updateDbEnumRow);
+}
+
+function buildDbEnumRow() {
+  const el = document.createElement('div');
+  el.innerHTML = '<span class="db-enum-name"></span><span class="db-enum-values"></span>';
+  return el;
+}
+
+function updateDbEnumRow(el, item) {
+  const d = item.diff;
+  el.className = `db-enum ${d ? d.status : 'same'}`;
+  el.classList.toggle('hidden', Boolean(item.hidden));
+  setText(el.querySelector('.db-enum-name'), item.enumeration.name);
+  const values = item.enumeration.values.map((v) => ({
+    id: `v:${v}`, value: v, state: d && d.added && d.added.includes(v) ? 'added' : '',
+  }));
+  for (const v of (d && d.removed) || []) values.push({ id: `r:${v}`, value: v, state: 'removed' });
+  syncChildren(
+    el.querySelector('.db-enum-values'), values,
+    () => document.createElement('code'),
+    (code, value) => { code.className = value.state; setText(code, value.value); },
+  );
+}
+
+function buildDbGoneTable() {
+  const el = document.createElement('div');
+  el.className = 'db-table removed-table';
+  el.innerHTML = `<span class="db-status removed">−</span>
+    <span class="db-table-name"></span>
+    <span class="db-table-note"></span>`;
+  return el;
+}
+
+function updateDbGoneTable(el, item) {
+  setTitle(el.querySelector('.db-status'), t('db.table.removed'));
+  setText(el.querySelector('.db-table-name'), `${item.table.schema}.${item.table.name}`);
+  setText(el.querySelector('.db-table-note'), t('db.table.removed'));
+}
+
+const DB_TABLE_HTML = `
+  <summary>
+    <span class="db-status"></span>
+    <span class="db-table-name"></span>
+    <span class="db-schema"></span>
+    <span class="db-rls">RLS</span>
+    <span class="db-chip external"></span>
+    <span class="db-count"></span>
+    <span class="db-chip changed"></span>
+  </summary>
+  <div class="db-body"></div>`;
+
+function buildDbTableCard() {
+  const el = document.createElement('details');
+  el.innerHTML = DB_TABLE_HTML;
+  return el;
+}
+
+function updateDbTableCard(box, item) {
+  const { table, diff: d, q } = item;
+  const status = d ? d.status : 'same';
+  box.className = `db-table ${status}`;
+  box.classList.toggle('hidden', Boolean(item.hidden));
+
+  const statusEl = box.querySelector('.db-status');
+  statusEl.className = `db-status ${status}`;
+  setText(statusEl, STATUS_MARK[status] || '·');
+  setTitle(statusEl, STATUS_WORD(status) || t('db.status.same'));
+
+  setText(box.querySelector('.db-table-name'), table.name);
+  const schemaEl = box.querySelector('.db-schema');
+  schemaEl.classList.toggle('hidden', table.schema === 'public');
+  setText(schemaEl, table.schema);
+
+  const rlsEl = box.querySelector('.db-rls');
+  rlsEl.classList.toggle('hidden', !table.rls.enabled);
+  rlsEl.classList.toggle('changed', Boolean(d && d.rlsChanged));
+  setTitle(rlsEl, `${t('db.rls.title')}, ${table.rls.policies.length
+    ? t('db.rls.policies', { count: table.rls.policies.length }) : t('db.rls.none')}`);
+
+  const externalEl = box.querySelector('.db-chip.external');
+  externalEl.classList.toggle('hidden', !table.external);
+  setText(externalEl, t('db.external'));
+  setTitle(externalEl, t('db.external.title'));
+  const countEl = box.querySelector('.db-count');
+  countEl.classList.toggle('hidden', Boolean(table.external));
+  setText(countEl, String(table.columns.length));
 
   const changedCols = d ? [...d.columns.values()].filter((c) => c.status !== 'same').length : 0;
-  box.innerHTML = `
-    <summary>
-      <span class="db-status ${status}" title="${escapeHtml(STATUS_WORD(status) || t('db.status.same'))}">${STATUS_MARK[status] || '·'}</span>
-      <span class="db-table-name">${escapeHtml(table.name)}</span>
-      ${table.schema !== 'public' ? `<span class="db-schema">${escapeHtml(table.schema)}</span>` : ''}
-      ${table.rls.enabled ? `<span class="db-rls${d && d.rlsChanged ? ' changed' : ''}" title="${escapeHtml(
-        `${t('db.rls.title')}, ${table.rls.policies.length
-          ? t('db.rls.policies', { count: table.rls.policies.length }) : t('db.rls.none')}`)}">RLS</span>` : ''}
-      ${table.external
-        ? `<span class="db-chip external" title="${escapeHtml(t('db.external.title'))}">${escapeHtml(t('db.external'))}</span>`
-        : `<span class="db-count">${table.columns.length}</span>`}
-      ${changedCols ? `<span class="db-chip changed">${escapeHtml(t('db.changedCount', { count: changedCols }))}</span>` : ''}
-    </summary>
-    <div class="db-body"></div>`;
+  const changedEl = box.querySelector('.db-chip.changed');
+  changedEl.classList.toggle('hidden', !changedCols);
+  setText(changedEl, changedCols ? t('db.changedCount', { count: changedCols }) : '');
 
-  const body = box.querySelector('.db-body');
-  if (table.external) {
-    // We do not know the columns - say so instead of showing an empty list
-    const note = document.createElement('div');
-    note.className = 'db-hint';
-    note.textContent = t('db.external.note');
-    body.appendChild(note);
-  } else {
-    body.appendChild(buildDbColumns(table, d));
-  }
+  syncChildren(box.querySelector('.db-body'), dbBodyItems(table, d), buildDbBodyPart, updateDbBodyPart);
 
-  const cons = (table.constraints || []).filter((c) => c.kind !== 'pk' || (c.columns || []).length > 1);
-  if (cons.length) body.appendChild(buildDbConstraints(cons, d));
-  if (table.rls.policies.length) body.appendChild(buildDbPolicies(table.rls.policies, d));
-  if (table.comment) {
-    const cm = document.createElement('div');
-    cm.className = 'db-comment';
-    cm.textContent = table.comment;
-    body.appendChild(cm);
-  }
-
-  box.addEventListener('toggle', () => {
-    if (box.open) { dbState.open.add(table.id); dbState.closed.delete(table.id); }
-    else { dbState.open.delete(table.id); dbState.closed.add(table.id); }
-  });
-  return box;
+  // Whether a table is expanded is the user's doing and stays in the element.
+  // Two things open one by themselves: a status that has just moved away from
+  // "same", and a search that has just found it - that is what one is looking
+  // for. Both only on the step, so a table closed by hand stays closed.
+  //
+  // Nothing here closes a card again. What is expanded stays expanded, no
+  // matter what expanded it: a table the search opened is still open when the
+  // search ends, and it is the same table one was just looking at.
+  const wasStatus = box.dataset.status;
+  box.dataset.status = status;
+  if (status !== 'same' && status !== wasStatus) box.open = true;
+  const wasQuery = box.dataset.query;
+  box.dataset.query = q;
+  if (q.length > 1 && q !== wasQuery && !item.hidden) box.open = true;
 }
 
-function buildDbColumns(table, d) {
-  const wrap = document.createElement('div');
-  wrap.className = 'db-cols';
-  const rows = table.columns.map((c) => {
-    const cd = d && d.columns.get(c.name);
-    const st = cd ? cd.status : 'same';
-    const why = cd && cd.fields && cd.fields.length
-      ? cd.fields.map((f) => `${fieldLabel(f)}: ${fmtDefault(cd.before[f])} → ${fmtDefault(cd.after[f])}`).join('\n')
-      : '';
-    return `<div class="db-col ${st}"${why ? ` title="${escapeHtml(why)}"` : ''}>
-      <span class="db-col-mark ${st}">${STATUS_MARK[st] || ''}</span>
-      <span class="db-col-name">${escapeHtml(c.name)}</span>
-      <span class="db-col-type">${escapeHtml(c.type)}</span>
-      <span class="db-col-tags">${tagsHtml(tagsForColumn(table, c.name))}</span>
-      <span class="db-col-meta">${escapeHtml(colMeta(c).join(' · '))}</span>
-    </div>`;
-  });
+function dbBodyItems(table, d) {
+  const items = [];
+  // We do not know the columns of a foreign table - say so instead of showing
+  // an empty list
+  if (table.external) items.push({ id: 'external', kind: 'external' });
+  else items.push({ id: 'cols', kind: 'cols', table, diff: d });
+
+  const cons = (table.constraints || []).filter((c) => c.kind !== 'pk' || (c.columns || []).length > 1);
+  if (cons.length) items.push({ id: 'cons', kind: 'cons', cons, diff: d });
+  if (table.rls.policies.length) items.push({ id: 'pols', kind: 'pols', policies: table.rls.policies, diff: d });
+  if (table.comment) items.push({ id: 'comment', kind: 'comment', text: table.comment });
+  return items;
+}
+
+function buildDbBodyPart(item) {
+  const el = document.createElement('div');
+  if (item.kind === 'external') el.className = 'db-hint';
+  else if (item.kind === 'comment') el.className = 'db-comment';
+  else if (item.kind === 'cols') el.className = 'db-cols';
+  else {
+    el.className = 'db-sub';
+    el.innerHTML = '<div class="db-sub-title"></div><div class="db-sub-rows"></div>';
+  }
+  return el;
+}
+
+function updateDbBodyPart(el, item) {
+  if (item.kind === 'external') { setText(el, t('db.external.note')); return; }
+  if (item.kind === 'comment') { setText(el, item.text); return; }
+  if (item.kind === 'cols') {
+    syncChildren(el, dbColumnItems(item.table, item.diff), buildDbColumn, updateDbColumn);
+    return;
+  }
+  const rows = item.kind === 'cons'
+    ? dbConstraintItems(item.cons, item.diff)
+    : dbPolicyItems(item.policies, item.diff);
+  setText(el.querySelector('.db-sub-title'), t(item.kind === 'cons' ? 'db.section.constraints' : 'db.section.policies'));
+  syncChildren(el.querySelector('.db-sub-rows'), rows, buildDbConstraint, updateDbConstraint);
+}
+
+function dbColumnItems(table, d) {
+  const items = table.columns.map((c) => ({
+    id: `col:${c.name}`, table, column: c, diff: d && d.columns.get(c.name),
+  }));
   // Show dropped columns too - otherwise one only sees that the count is smaller
   if (d) {
     for (const cd of d.columns.values()) {
-      if (cd.status !== 'removed') continue;
-      rows.push(`<div class="db-col removed" title="${escapeHtml(t('db.status.removed'))}">
-        <span class="db-col-mark removed">−</span>
-        <span class="db-col-name">${escapeHtml(cd.name)}</span>
-        <span class="db-col-type">${escapeHtml(cd.before.type)}</span>
-        <span class="db-col-tags"></span>
-        <span class="db-col-meta">${escapeHtml(colMeta(cd.before).join(' · '))}</span>
-      </div>`);
+      if (cd.status === 'removed') items.push({ id: `gone:${cd.name}`, table, column: cd.before, gone: true });
     }
   }
-  wrap.innerHTML = rows.join('');
-  return wrap;
+  return items;
 }
 
-function buildDbConstraints(cons, d) {
-  const box = document.createElement('div');
-  box.className = 'db-sub';
-  box.innerHTML = `<div class="db-sub-title">${escapeHtml(t('db.section.constraints'))}</div>
-    ${cons.map((c) => {
-      const cd = d && d.constraints.get(c.name);
-      const st = cd ? cd.status : 'same';
-      return `<div class="db-con ${st}">
-        <span class="db-tag ${c.kind}" title="${escapeHtml(KIND_TAG[c.kind] ? t(KIND_TAG[c.kind].key) : c.kind)}">${(KIND_TAG[c.kind] || {}).tag || c.kind}</span>
-        <span class="db-con-name">${escapeHtml(c.name)}</span>
-        <span class="db-con-text">${escapeHtml(constraintText(c))}</span>
-      </div>`;
-    }).join('')}
-    ${d ? [...d.constraints.values()].filter((c) => c.status === 'removed').map((c) => `
-      <div class="db-con removed" title="${escapeHtml(t('db.status.removed'))}">
-        <span class="db-tag ${c.before.kind}">${(KIND_TAG[c.before.kind] || {}).tag || c.before.kind}</span>
-        <span class="db-con-name">${escapeHtml(c.name)}</span>
-        <span class="db-con-text">${escapeHtml(constraintText(c.before))}</span>
-      </div>`).join('') : ''}`;
-  return box;
+function buildDbColumn() {
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <span class="db-col-mark"></span>
+    <span class="db-col-name"></span>
+    <span class="db-col-type"></span>
+    <span class="db-col-tags"></span>
+    <span class="db-col-meta"></span>`;
+  return el;
 }
 
-function buildDbPolicies(policies, d) {
-  const box = document.createElement('div');
-  box.className = 'db-sub';
-  box.innerHTML = `<div class="db-sub-title">${escapeHtml(t('db.section.policies'))}</div>
-    ${policies.map((p) => {
-      const pd = d && d.policies.get(p.name);
-      const st = pd ? pd.status : 'same';
-      return `<div class="db-con ${st}">
-        <span class="db-tag pol" title="${escapeHtml(t('db.tag.policy'))}">POL</span>
-        <span class="db-con-name">${escapeHtml(p.name)}</span>
-        <span class="db-con-text">${escapeHtml(policyText(p))}</span>
-      </div>`;
-    }).join('')}
-    ${d ? [...d.policies.values()].filter((p) => p.status === 'removed').map((p) => `
-      <div class="db-con removed" title="${escapeHtml(t('db.status.removed'))}">
-        <span class="db-tag pol">POL</span>
-        <span class="db-con-name">${escapeHtml(p.name)}</span>
-        <span class="db-con-text">${escapeHtml(policyText(p.before))}</span>
-      </div>`).join('') : ''}`;
-  return box;
+function updateDbColumn(el, item) {
+  const cd = item.diff;
+  const status = item.gone ? 'removed' : cd ? cd.status : 'same';
+  el.className = `db-col ${status}`;
+  const why = cd && cd.fields && cd.fields.length
+    ? cd.fields.map((f) => `${fieldLabel(f)}: ${fmtDefault(cd.before[f])} → ${fmtDefault(cd.after[f])}`).join('\n')
+    : '';
+  setTitle(el, item.gone ? t('db.status.removed') : why);
+
+  const markEl = el.querySelector('.db-col-mark');
+  markEl.className = `db-col-mark ${status}`;
+  setText(markEl, STATUS_MARK[status] || '');
+  setText(el.querySelector('.db-col-name'), item.column.name);
+  setText(el.querySelector('.db-col-type'), item.column.type);
+  syncChildren(
+    el.querySelector('.db-col-tags'),
+    item.gone ? [] : tagsForColumn(item.table, item.column.name).map((tag) => ({ id: tag.tag, tag })),
+    () => document.createElement('span'),
+    (tagEl, tagItem) => {
+      tagEl.className = `db-tag ${tagItem.tag.tag.toLowerCase()}`;
+      setTitle(tagEl, t(tagItem.tag.key));
+      setText(tagEl, tagItem.tag.tag);
+    },
+  );
+  setText(el.querySelector('.db-col-meta'), colMeta(item.column).join(' · '));
+}
+
+function dbConstraintItems(cons, d) {
+  const items = cons.map((c) => ({
+    id: `con:${c.name}`, constraint: c, diff: d && d.constraints.get(c.name),
+  }));
+  if (d) {
+    for (const cd of d.constraints.values()) {
+      if (cd.status === 'removed') items.push({ id: `gone:${cd.name}`, constraint: cd.before, gone: true });
+    }
+  }
+  return items;
+}
+
+function dbPolicyItems(policies, d) {
+  const items = policies.map((p) => ({
+    id: `pol:${p.name}`, policy: p, diff: d && d.policies.get(p.name),
+  }));
+  if (d) {
+    for (const pd of d.policies.values()) {
+      if (pd.status === 'removed') items.push({ id: `gone:${pd.name}`, policy: pd.before, gone: true });
+    }
+  }
+  return items;
+}
+
+function buildDbConstraint() {
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <span class="db-tag"></span>
+    <span class="db-con-name"></span>
+    <span class="db-con-text"></span>`;
+  return el;
+}
+
+function updateDbConstraint(el, item) {
+  const c = item.constraint || item.policy;
+  const status = item.gone ? 'removed' : item.diff ? item.diff.status : 'same';
+  el.className = `db-con ${status}`;
+  setTitle(el, item.gone ? t('db.status.removed') : '');
+
+  const tagEl = el.querySelector('.db-tag');
+  if (item.policy) {
+    tagEl.className = 'db-tag pol';
+    setText(tagEl, 'POL');
+    setTitle(tagEl, t('db.tag.policy'));
+  } else {
+    tagEl.className = `db-tag ${c.kind}`;
+    setText(tagEl, (KIND_TAG[c.kind] || {}).tag || c.kind);
+    setTitle(tagEl, KIND_TAG[c.kind] ? t(KIND_TAG[c.kind].key) : c.kind);
+  }
+  setText(el.querySelector('.db-con-name'), c.name);
+  setText(el.querySelector('.db-con-text'), item.policy ? policyText(c) : constraintText(c));
 }
 
 dbSearchEl.addEventListener('input', () => {
@@ -1551,9 +1864,12 @@ function diffMark(status, side) {
   return '';
 }
 
+// The comparison starts at the top, and so does a switch of the mode. A
+// refresh while it is open leaves the reader where they were reading.
 function openDbDiff() {
   dbDiffOverlay.open();
   renderDbDiff();
+  dbDiffBody.scrollTop = 0;
 }
 
 function renderDbDiffModes() {
@@ -1561,7 +1877,7 @@ function renderDbDiffModes() {
     dbDiffModes,
     [{ id: 'changed', label: t('dbdiff.mode.changed') }, { id: 'all', label: t('dbdiff.mode.all') }],
     dbDiffMode,
-    (id) => { dbDiffMode = id; renderDbDiff(); },
+    (id) => { dbDiffMode = id; renderDbDiff(); dbDiffBody.scrollTop = 0; },
   );
 }
 
@@ -1608,7 +1924,6 @@ function renderDbDiff() {
     frag.appendChild(dbDiffSpan(t('dbdiff.none')));
   }
   dbDiffBody.appendChild(frag);
-  dbDiffBody.scrollTop = 0;
 }
 
 /** A row that spans both columns of the grid. */
@@ -2336,9 +2651,7 @@ window.api.onInfo((info) => {
   if (rootChanged) {
     loadTodosFor(s); // different project -> load its notes
     if (info.id === activeId) {
-      dbState.lastJson = '';
-      dbState.open.clear();
-      dbState.closed.clear();
+      dbTablesEl.replaceChildren(); // different schema, different cards
       loadDbSchema();
     }
   }
