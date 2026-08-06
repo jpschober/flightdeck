@@ -69,7 +69,8 @@ npm install
 npm start
 ```
 
-Requirements: `git` on the PATH; for PR display additionally the
+Requirements: Node.js 22.12 or newer (Electron 43 asks for it) and `git` on
+the PATH; for PR display additionally the
 [GitHub CLI](https://cli.github.com/) (`gh auth login`).
 
 ## Plugins
