@@ -1,0 +1,55 @@
+// ---------------------------------------------------------------------------
+// Overlays and mode switches
+//
+// Preview, database comparison and the session browser differ in content only.
+// Each closes on a click on the backdrop, on its close button and on Escape,
+// and each hands the focus back to the terminal - the terminal is where typing
+// goes on, and a layer that leaves the focus behind swallows the next keystroke.
+// ---------------------------------------------------------------------------
+import { focusActiveTerm } from './sessions.js';
+
+const overlays = []; // most recently opened first - that is the Escape order
+
+export function makeOverlay(el, closeEl) {
+  const overlay = {
+    isOpen: () => !el.classList.contains('hidden'),
+    open() {
+      el.classList.remove('hidden');
+      const at = overlays.indexOf(overlay);
+      if (at > 0) overlays.unshift(...overlays.splice(at, 1));
+    },
+    close() {
+      el.classList.add('hidden');
+      focusActiveTerm();
+    },
+  };
+  el.addEventListener('click', (e) => { if (e.target === el) overlay.close(); });
+  if (closeEl) closeEl.addEventListener('click', () => overlay.close());
+  overlays.unshift(overlay);
+  return overlay;
+}
+
+/** Closes the topmost open overlay; reports whether there was one. */
+export function closeTopOverlay() {
+  const top = overlays.find((o) => o.isOpen());
+  if (!top) return false;
+  top.close();
+  return true;
+}
+
+/**
+ * The row of mode buttons above preview and comparison. Fewer than two modes
+ * leave the row empty - there is nothing to switch between.
+ */
+export function renderModeButtons(container, modes, current, onPick) {
+  container.innerHTML = '';
+  if (modes.length < 2) return;
+  for (const m of modes) {
+    const b = document.createElement('button');
+    b.textContent = m.label;
+    b.className = m.id === current ? 'active' : '';
+    b.setAttribute('role', 'tab');
+    b.addEventListener('click', () => { if (m.id !== current) onPick(m.id); });
+    container.appendChild(b);
+  }
+}
