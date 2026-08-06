@@ -2,7 +2,7 @@
 // File preview
 // ---------------------------------------------------------------------------
 import { $, escapeHtml } from './dom.js';
-import { t } from './i18n.js';
+import { t, onLocaleChange } from './i18n.js';
 import { mdToHtml } from './markdown.js';
 import { makeOverlay, renderModeButtons } from './overlays.js';
 
@@ -72,6 +72,15 @@ export function renderPreviewModes(hasDiff) {
     renderPreview();
   });
 }
+
+// Only the mode buttons and an error text are translated; the file content is
+// not, so a closed preview has nothing to redraw.
+onLocaleChange(() => {
+  if (!previewOverlay.isOpen() || !previewState) return undefined;
+  renderPreviewModes(Boolean(previewState.cache.default
+    && previewState.cache.default.kind === 'diff'));
+  return renderPreview();
+});
 
 export async function openPreview(sessionId, filePath, source) {
   previewTitle.textContent = t('preview.loading', { path: filePath });

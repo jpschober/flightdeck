@@ -5,7 +5,8 @@
 // ---------------------------------------------------------------------------
 import { $, escapeHtml } from './dom.js';
 import { logWarn } from './log.js';
-import { t, locale } from './i18n.js';
+import { t, locale, onLocaleChange } from './i18n.js';
+import { onPanelTab } from './panel.js';
 
 const usageContentEl = $('#usage-content');
 const dotUsageEl = $('#dot-usage');
@@ -154,6 +155,13 @@ export async function loadUsage(force = false) {
   dotUsageEl.className = 'tab-dot ' + worst;
   dotUsageEl.classList.toggle('hidden', worst !== 'warn' && worst !== 'over');
 }
+
+onPanelTab('usage', () => loadUsage());
+
+// The status words and the number formats come out of the dictionary and the
+// locale, so the card has to be built again.
+onLocaleChange(() => loadUsage(true)
+  .catch((e) => logWarn('language: usage not reloaded', { err: e })));
 
 // Keep running in the background so the dot on the tab is right without having
 // to keep the tab open

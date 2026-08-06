@@ -13,8 +13,9 @@
 // ---------------------------------------------------------------------------
 import { $, escapeHtml } from './dom.js';
 import { logWarn } from './log.js';
-import { t } from './i18n.js';
+import { t, onLocaleChange } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
+import { onPanelTab } from './panel.js';
 import { makeOverlay, renderModeButtons } from './overlays.js';
 
 const dbHeadEl = $('#db-head');
@@ -151,6 +152,16 @@ function setDbBadge(count) {
   badgeDbEl.classList.toggle('hidden', !count);
   badgeDbEl.classList.toggle('alert', Boolean(count));
 }
+
+onPanelTab('dbschema', () => loadDbSchema());
+
+// The main process builds the schema warnings and baseline labels itself and
+// has just dropped its cache - so this has to go out again, not come from the
+// renderer's own copy.
+onLocaleChange(() => {
+  dbState.lastJson = '';
+  return loadDbSchema(true).catch((e) => logWarn('language: db schema not reloaded', { err: e }));
+});
 
 // Keep running in the background so the indicator on the tab is right without
 // having to keep the tab open - a schema change should stand out, not have to

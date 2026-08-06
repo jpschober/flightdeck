@@ -1,5 +1,8 @@
 // ---------------------------------------------------------------------------
 // Meta popover: edit title & label
+//
+// Imports terminal.js and is imported by it. Mutual on purpose - see the note
+// at the top of terminal.js.
 // ---------------------------------------------------------------------------
 import { $ } from './dom.js';
 import { sessions } from './sessions.js';

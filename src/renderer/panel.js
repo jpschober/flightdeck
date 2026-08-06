@@ -1,19 +1,35 @@
 // ---------------------------------------------------------------------------
 // Panel tabs (git / history / notes / DB schema / usage) with badges
+//
+// Opening a tab costs something in four of the five - a fetch, a rebuild, a
+// focus. What that is belongs to the tab, so each one registers it through
+// onPanelTab(). This module therefore imports no panel; reaching into them
+// from here put it in a ring with all four.
+//
+// fitActive() lives here because the zoom is what decides whether a fit is
+// allowed at all.
 // ---------------------------------------------------------------------------
 import { $ } from './dom.js';
-import { t } from './i18n.js';
+import { logDebug } from './log.js';
+import { t, onLocaleChange } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
-import { fitActive } from './terminal.js';
-import { renderHistory } from './history.js';
-import { todoInputEl } from './notes.js';
-import { loadDbSchema } from './db-schema.js';
-import { loadUsage } from './usage.js';
 
 const badgeGit = $('#badge-git');
 const badgeHistory = $('#badge-history');
 const badgeTodos = $('#badge-todos');
 export let activePanelTab = 'git';
+
+const tabListeners = new Map(); // tab -> [fn]
+
+/**
+ * Register what happens when a tab becomes visible. The handler is called with
+ * the active session, and there may be none.
+ */
+export function onPanelTab(tab, fn) {
+  const list = tabListeners.get(tab);
+  if (list) list.push(fn);
+  else tabListeners.set(tab, [fn]);
+}
 
 function setPanelTab(tab) {
   activePanelTab = tab;
@@ -26,14 +42,7 @@ function setPanelTab(tab) {
   $('#page-usage').classList.toggle('hidden', tab !== 'usage');
   $('#page-dbschema').classList.toggle('hidden', tab !== 'dbschema');
   const s = activeId && sessions.get(activeId);
-  if (tab === 'usage') loadUsage();
-  if (tab === 'dbschema') loadDbSchema();
-  if (tab === 'history' && s) {
-    s.unseenHist = 0;
-    renderHistory(s);
-    updateBadges(s);
-  }
-  if (tab === 'todos' && s) todoInputEl.focus();
+  for (const fn of tabListeners.get(tab) || []) fn(s);
 }
 
 for (const btn of document.querySelectorAll('.panel-tab')) {
@@ -44,7 +53,7 @@ for (const btn of document.querySelectorAll('.panel-tab')) {
 // - only the panel itself is made large. The active tab stays the active one.
 const contextPanel = $('#context-panel');
 const panelBackdrop = $('#panel-backdrop');
-export const panelZoomBtn = $('#btn-panel-zoom');
+const panelZoomBtn = $('#btn-panel-zoom');
 export let panelZoomed = false;
 let panelWidth = '';
 
@@ -66,6 +75,18 @@ export function setPanelZoom(on) {
 
 panelZoomBtn.addEventListener('click', () => setPanelZoom(!panelZoomed));
 panelBackdrop.addEventListener('click', () => setPanelZoom(false));
+
+onLocaleChange(() => {
+  panelZoomBtn.title = panelZoomed ? t('panel.shrink') : t('panel.enlarge');
+});
+
+// Fit the active tab's terminal to its area. While the context panel is
+// enlarged that area would be wrong - see setPanelZoom().
+export function fitActive() {
+  if (panelZoomed) return;
+  const s = activeId && sessions.get(activeId);
+  if (s) { try { s.fit.fit(); } catch (e) { logDebug('terminal: fit failed, pane may still be 0px', { session: s.id, err: e }); } }
+}
 
 function setBadge(el, count) {
   el.textContent = count;

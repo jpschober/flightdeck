@@ -6,14 +6,14 @@
 import { $, basename } from './dom.js';
 import { t, applyStaticI18n } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
-import { newSession, setActive, closeSession, updateSessionItem, fitActive } from './terminal.js';
-import { buildShellMenu, buildMoreMenu, defaultShellId, loadOsc52Setting, menuOpen, closeMenus } from './menus.js';
+import { newSession, setActive, closeSession, updateSessionItem, defaultShellId } from './terminal.js';
+import { buildShellMenu, buildMoreMenu, loadOsc52Setting, menuOpen, closeMenus } from './menus.js';
 import { closeTopOverlay } from './overlays.js';
 import { renderContextPanel } from './git-panel.js';
 import { loadTodosFor } from './notes.js';
 import { dbState, loadDbSchema, startDbPolling } from './db-schema.js';
 import { startUsagePolling } from './usage.js';
-import { panelZoomed, setPanelZoom } from './panel.js';
+import { panelZoomed, setPanelZoom, fitActive } from './panel.js';
 import { gridCards, gridOpen, closeGrid, toggleGrid } from './grid.js';
 import { sizePulse, pulseWake } from './pulse.js';
 

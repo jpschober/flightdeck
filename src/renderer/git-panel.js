@@ -2,7 +2,7 @@
 // Right-hand panel: PR + changed files
 // ---------------------------------------------------------------------------
 import { $, escapeHtml, makeKeyActivatable } from './dom.js';
-import { t, locale } from './i18n.js';
+import { t, locale, onLocaleChange } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
 import { mdToHtml } from './markdown.js';
 import { updateBadges } from './panel.js';
@@ -121,6 +121,8 @@ export function renderContextPanel() {
   fileListEl.appendChild(frag);
   updateBadges(s);
 }
+
+onLocaleChange(renderContextPanel);
 
 // PR extra sections (description, commits, comments) - the expanded state
 // survives the periodic re-renders

@@ -2,13 +2,13 @@
 // Notes / TODO (persisted per project)
 // ---------------------------------------------------------------------------
 import { $, escapeHtml } from './dom.js';
-import { t } from './i18n.js';
+import { t, onLocaleChange } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
-import { updateBadges } from './panel.js';
+import { updateBadges, onPanelTab } from './panel.js';
 import { pulseWake } from './pulse.js';
 
 const todoListEl = $('#todo-list');
-export const todoInputEl = $('#todo-input');
+const todoInputEl = $('#todo-input');
 
 export function renderTodos(s) {
   todoListEl.innerHTML = '';
@@ -56,6 +56,11 @@ async function saveTodos(s) {
   await window.api.setTodos(s.id, s.todos);
   if (s.id === activeId) renderTodos(s);
 }
+
+// Whoever opens the tab wants to write a note.
+onPanelTab('todos', (s) => { if (s) todoInputEl.focus(); });
+
+onLocaleChange(() => renderTodos(activeId ? sessions.get(activeId) : null));
 
 todoInputEl.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;

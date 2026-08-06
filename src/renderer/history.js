@@ -3,9 +3,9 @@
 // ---------------------------------------------------------------------------
 import { $, escapeHtml, makeKeyActivatable } from './dom.js';
 import { logWarn } from './log.js';
-import { t, locale } from './i18n.js';
+import { t, locale, onLocaleChange } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
-import { activePanelTab, updateBadges } from './panel.js';
+import { activePanelTab, updateBadges, onPanelTab } from './panel.js';
 
 const historyListEl = $('#history-list');
 
@@ -42,6 +42,16 @@ export function renderHistory(s) {
   }
   historyListEl.appendChild(frag);
 }
+
+// Opening the tab is what marks the entries as seen.
+onPanelTab('history', (s) => {
+  if (!s) return;
+  s.unseenHist = 0;
+  renderHistory(s);
+  updateBadges(s);
+});
+
+onLocaleChange(() => renderHistory(activeId ? sessions.get(activeId) : null));
 
 window.api.onHistAdd((id, entry) => {
   const s = sessions.get(id);

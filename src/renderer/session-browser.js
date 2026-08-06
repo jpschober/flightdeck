@@ -4,8 +4,7 @@
 import { $, escapeHtml } from './dom.js';
 import { t, locale } from './i18n.js';
 import { makeOverlay } from './overlays.js';
-import { newSession } from './terminal.js';
-import { defaultShellId } from './menus.js';
+import { newSession, defaultShellId } from './terminal.js';
 
 const sessionsOverlay = makeOverlay($('#sessions-overlay'), $('#sessions-close'));
 const sessionsListEl = $('#sessions-list');

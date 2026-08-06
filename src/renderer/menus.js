@@ -3,24 +3,18 @@
 // ---------------------------------------------------------------------------
 import { $ } from './dom.js';
 import { logWarn } from './log.js';
-import { t, locale, locales, setLanguage } from './i18n.js';
-import { newSession } from './terminal.js';
+import { t, locale, locales, setLanguage, onLocaleChange } from './i18n.js';
+import { newSession, shells, refreshShells, defaultShellId } from './terminal.js';
 import { toggleGrid } from './grid.js';
 import { openSessionBrowser } from './session-browser.js';
 
 const shellMenu = $('#shell-menu');
 const moreMenu = $('#more-menu');
-let shells = [];
-
-/** The shell the + button starts a session in. */
-export function defaultShellId() {
-  return shells[0] && shells[0].id;
-}
 
 // The shells come from the main process and one of them ("Command Prompt") is
 // translated there, so the menu is rebuilt rather than relabelled.
 export async function buildShellMenu() {
-  shells = await window.api.listShells();
+  await refreshShells();
   shellMenu.innerHTML = '';
   for (const sh of shells) {
     const b = document.createElement('button');
@@ -87,6 +81,11 @@ export function buildMoreMenu() {
       () => setLanguage(l.code));
   }
 }
+
+onLocaleChange(() => {
+  buildMoreMenu();
+  return buildShellMenu();
+});
 
 $('#btn-new').addEventListener('click', () => newSession(defaultShellId()));
 $('#btn-new-menu').addEventListener('click', (e) => {

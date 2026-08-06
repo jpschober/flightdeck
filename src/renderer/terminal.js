@@ -2,10 +2,22 @@
 // ---------------------------------------------------------------------------
 // Sessions: create, activate, close - and the sidebar entry that belongs to
 // each of them.
+//
+// Two of the imports below point back at this module, and both are mutual on
+// purpose. grid.js: closing a session has to tear the grid down, because a tile
+// would otherwise point at a disposed terminal, and a tile activates the session
+// it shows. meta-popover.js: the sidebar entry opens the editor, and the editor
+// writes title and label back into that entry. Neither one is a layer above the
+// other, so neither import can be turned around.
+//
+// Both are safe under the module evaluation order because nothing on either
+// side's top level calls across the boundary - the top levels look up elements
+// and register listeners. A call added there would throw at load time, and the
+// error would depend on which module the graph reaches first.
 // ---------------------------------------------------------------------------
 import { $, basename, showToast } from './dom.js';
 import { logDebug, logWarn } from './log.js';
-import { t } from './i18n.js';
+import { t, onLocaleChange } from './i18n.js';
 import { sessions, activeId, setActiveId } from './sessions.js';
 import { renderContextPanel } from './git-panel.js';
 import { renderHistory } from './history.js';
@@ -13,12 +25,26 @@ import { loadTodosFor, renderTodos } from './notes.js';
 import { dbState, loadDbSchema, renderDbPanel } from './db-schema.js';
 import { gridOpen, closeGrid } from './grid.js';
 import { openMetaPopover } from './meta-popover.js';
-import { panelZoomed } from './panel.js';
 import { pulseForgetProgress } from './pulse.js';
 
 const sessionListEl = $('#session-list');
 const terminalsEl = $('#terminals');
 const emptyStateEl = $('#empty-state');
+
+// The shells a session can start in. One of the names ("Command Prompt") is
+// translated in the main process, so the list is fetched again on a language
+// switch rather than relabelled - see buildShellMenu() in menus.js.
+export let shells = [];
+
+export async function refreshShells() {
+  shells = await window.api.listShells();
+  return shells;
+}
+
+/** The shell the + button, Ctrl+T and a resumed session start in. */
+export function defaultShellId() {
+  return shells[0] && shells[0].id;
+}
 
 // First match wins. Without the Linux/macOS fonts the list fell back to the
 // generic `monospace` - together with lineHeight 1.25 that produced the
@@ -320,12 +346,7 @@ function updateAgentChip(el, agents) {
   el.title = [t('session.agents', { count: n }), ...lines].join('\n');
 }
 
-// ---------------------------------------------------------------------------
-// Fit the active tab's terminal to its area. While the context panel is
-// enlarged that area would be wrong - see setPanelZoom().
-// ---------------------------------------------------------------------------
-export function fitActive() {
-  if (panelZoomed) return;
-  const s = activeId && sessions.get(activeId);
-  if (s) { try { s.fit.fit(); } catch (e) { logDebug('terminal: fit failed, pane may still be 0px', { session: s.id, err: e }); } }
-}
+// Status tooltip, close button and the agent chip all carry translated text.
+onLocaleChange(() => {
+  for (const s of sessions.values()) updateSessionItem(s);
+});
