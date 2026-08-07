@@ -283,12 +283,19 @@ test('the counter counts tables and enums, not every single column', () => {
 });
 
 test('the sentence names what changed, and says so when nothing did', () => {
+  // The dictionary is English here, so the wording can be asserted directly.
   const unchanged = diff(schema(BASE), schema(BASE));
-  assert.strictEqual(typeof describe(unchanged), 'string');
-  assert.strictEqual(countChanges(unchanged), 0);
-  assert.strictEqual(describe(null), describe(unchanged));
+  assert.strictEqual(describe(unchanged), 'Schema unchanged');
+  assert.strictEqual(describe(null), 'Schema unchanged');
 
-  const result = diff(schema(BASE), schema(BASE, 'CREATE TABLE t (x int);'));
-  assert.notStrictEqual(describe(result), describe(unchanged));
-  assert.match(describe(result), /1/);
+  const added = diff(schema(BASE), schema(BASE, 'CREATE TABLE t (x int);'));
+  assert.strictEqual(describe(added), '1 new table');
+
+  const mixed = diff(schema(BASE), schema(BASE, `
+    CREATE TABLE t (x int);
+    DROP TABLE legacy_carts;
+    ALTER TABLE users ADD COLUMN a int;
+    ALTER TYPE order_status ADD VALUE 'shipped';
+  `));
+  assert.strictEqual(describe(mixed), '1 new table · 1 removed table · 1 changed table · 1 enum change');
 });

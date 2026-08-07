@@ -831,7 +831,7 @@ function dbDiffTableCard(td, table, side) {
     </div>`;
   });
 
-  // eslint-disable-next-line no-unsanitized/property -- every value goes through escapeHtml; the rule cannot follow the conditionals in between
+  // eslint-disable-next-line no-unsanitized/property -- foreign values go through escapeHtml, the rest are class names and marks from closed sets
   el.innerHTML = `
     <div class="dbd-card-head">
       <span class="dbd-name">${escapeHtml(table.name)}</span>

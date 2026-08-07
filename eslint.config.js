@@ -63,14 +63,18 @@ module.exports = [
       'no-throw-literal': 'error',
       'no-console': 'off',
 
-      // Noise from the security plugin that says nothing about this code: the
-      // object indexing is over our own maps and dictionaries, the regexes are
-      // literals in the sources rather than built out of input, and a file path
-      // that comes from somewhere else is what this app does all day - it reads
-      // the transcripts, migrations and repositories the user points it at.
+      // Off from the security plugin, each for its own reason:
+      // the object indexing is over our own maps and dictionaries;
       'security/detect-object-injection': 'off',
+      // the regexes are literals in the sources, not built out of input;
       'security/detect-non-literal-regexp': 'off',
+      // safe-regex counts star height and reports nested quantifiers that are
+      // anchored and bounded here - sixteen of them, all in parsers whose
+      // input the callers have already collapsed;
       'security/detect-unsafe-regex': 'off',
+      // and reading a path that comes from somewhere else is what this app
+      // does all day: the transcripts, migrations and repositories the user
+      // points it at.
       'security/detect-non-literal-fs-filename': 'off',
     },
   },

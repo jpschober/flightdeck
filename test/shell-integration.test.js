@@ -121,8 +121,12 @@ const cmdOsc = (s) => `\x1b]7770;cmd;${Buffer.from(s).toString('base64')}\x07`;
 test('bash keeps the user\'s PROMPT_COMMAND and their DEBUG trap', { skip: !BASH }, () => {
   const out = runBash(['-c', 'declare -p PROMPT_COMMAND; trap -p DEBUG']);
 
-  // declare -p quotes the newlines it holds: PROMPT_COMMAND=$'a\nb\nc'
-  assert.match(out, /PROMPT_COMMAND=\$'__flightdeck_prompt\\n__user_precmd\\n__flightdeck_arm'/);
+  // From bash 4.4 on, `declare -p` quotes the newlines it holds
+  // (PROMPT_COMMAND=$'a\nb\nc'); the 3.2 that macOS ships prints them as they
+  // are. Turning the escape back into a newline makes both readable the same
+  // way - what is asserted is the order of the three entries.
+  assert.match(out.replace(/\\n/g, '\n'),
+    /PROMPT_COMMAND=[$"']*__flightdeck_prompt\n__user_precmd\n__flightdeck_arm/);
   // The handler is chained in front of ours, with its quoting intact.
   assert.match(out, /trap -- '__user_preexec '\\''x'\\''\n__flightdeck_preexec' DEBUG/);
 });

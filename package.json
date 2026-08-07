@@ -6,7 +6,7 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "test": "node --test"
   },
   "license": "MIT",

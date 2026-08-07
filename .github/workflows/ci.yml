@@ -5,10 +5,15 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     name: lint & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A shell that does not come back would otherwise sit there for six hours
+    timeout-minutes: 15
     strategy:
       # One platform failing should not hide what the other two would have said
       fail-fast: false
@@ -32,12 +37,18 @@ jobs:
   audit:
     name: audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      # Without `cache: npm`: this job never installs, and the cache key holds
+      # no job name - it would store an empty ~/.npm under the key the job
+      # above then restores.
       - uses: actions/setup-node@v4
         with:
           node-version: '22.12'
-          cache: npm
-      # Without install: the lockfile is all the audit needs, and the answer
-      # should not depend on whether the install succeeded.
+      # Without install either: the lockfile is all the audit needs, and the
+      # answer should not depend on whether the install succeeded.
+      #
+      # devDependencies are audited along with the rest on purpose - Electron
+      # is one, and it is what ends up in front of the user.
       - run: npm audit --audit-level=high
