@@ -88,10 +88,12 @@ export async function loadTodosFor(s) {
 
 async function saveTodos(s) {
   // What comes back is what was stored, ids and all - a note just written has
-  // none of its own yet.
+  // none of its own yet. Nothing comes back when the main process has already
+  // let the session go; the note was not stored then, and rendering it would
+  // put a row without an id into a list that is found by ids.
   const stored = await window.api.setTodos(s.id, s.todos);
-  if (!sessions.has(s.id)) return;
-  if (stored) s.todos = stored;
+  if (!stored || !sessions.has(s.id)) return;
+  s.todos = stored;
   if (s.id === activeId) renderTodos(s);
 }
 

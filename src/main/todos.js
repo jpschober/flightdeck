@@ -16,12 +16,18 @@ function todosPath() { return path.join(app.getPath('userData'), 'flightdeck-tod
  * The renderer finds a note's row again by that id and updates it instead of
  * building it again, so ticking a note off no longer replaces the checkbox
  * that received the click. `ts` cannot carry that: two notes written in the
- * same millisecond share it, and notes from an older store have none. The id
- * is minted here because here is where the notes are stored and read again,
- * so it survives both.
+ * same millisecond share it, and notes from an older store have none.
+ *
+ * Minted here, because everything that reaches a note goes through here: the
+ * id a note is given on its first write is the one it carries in the store and
+ * the one it comes back with. Notes read out of a store from before the ids
+ * are given theirs in memory; those reach the file with the next write.
+ *
+ * Anything but a list throws - what the caller passes is what will be written,
+ * so a payload that is not notes has to stop before the store, not turn into
+ * an empty list that erases the project's notes.
  */
 function withIds(todos) {
-  if (!Array.isArray(todos)) return [];
   const seen = new Set();
   return todos.map((todo) => {
     const keep = todo && typeof todo.id === 'string' && todo.id && !seen.has(todo.id);
@@ -43,9 +49,14 @@ function loadTodos() {
       } catch (e2) { log.debug('todos: no store to migrate, starting empty', { err: e2 }); todosStore = {}; }
     }
     // Notes from a store written before the ids get theirs on the way in, so
-    // every reader downstream sees the same id for the same note.
+    // every reader downstream sees the same id for the same note. A key that
+    // holds something other than a list is left standing: it is not this
+    // project's business, and the next write would carry the whole store back
+    // to the file.
     if (!todosStore || typeof todosStore !== 'object') todosStore = {};
-    for (const key of Object.keys(todosStore)) todosStore[key] = withIds(todosStore[key]);
+    for (const [key, list] of Object.entries(todosStore)) {
+      if (Array.isArray(list)) todosStore[key] = withIds(list);
+    }
   }
   return todosStore;
 }
@@ -55,7 +66,8 @@ function rootKeyOf(session) {
 
 function getFor(session) {
   const key = rootKeyOf(session);
-  return { key, todos: loadTodos()[key] || [] };
+  const todos = loadTodos()[key];
+  return { key, todos: Array.isArray(todos) ? todos : [] };
 }
 
 // Returns the stored notes, which is what the caller has to go on with: a new
