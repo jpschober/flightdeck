@@ -288,4 +288,9 @@ module.exports = {
     other: 'Terminal-Ausgabe hat {count} Zeichen in die Zwischenablage geschrieben',
   },
   'osc52.off': 'Terminal-Ausgabe wollte die Zwischenablage schreiben – im Menü abgeschaltet',
+  // --- Update ---
+  'update.ready.title': 'Update bereit',
+  'update.ready.detail': 'Version {version} wurde heruntergeladen. Sie wird beim nächsten Start installiert.',
+  'update.restart': 'Jetzt neu starten',
+  'update.later': 'Später',
 };

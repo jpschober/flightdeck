@@ -77,6 +77,16 @@ the system language on first start.
 
 ## Getting started
 
+Installers for Linux, macOS and Windows are on the
+[releases page](https://github.com/jpschober/flightdeck/releases): `.AppImage`
+and `.deb`, `.dmg`, `.exe`. An installed Flightdeck checks for a new version by
+itself and asks before restarting into it.
+
+The builds are not signed yet. macOS puts them behind Gatekeeper and Windows
+behind a SmartScreen warning until they are.
+
+From the source instead:
+
 ```
 npm install
 npm start
@@ -84,6 +94,8 @@ npm start
 
 Requirements: Node.js 22.12 or newer and `git` on the PATH; for PR display
 additionally the [GitHub CLI](https://cli.github.com/) (`gh auth login`).
+
+`npm run dist` builds the installers for the platform it runs on, into `dist/`.
 
 Recognised today: Claude Code (status and subagent count), Codex and Aider
 (status only) as agents, Supabase migrations as the schema source. Further
@@ -123,3 +135,9 @@ app depends on it.
 
 **File preview stays inside the project root**, and reading Claude Code's
 session files is read-only — Flightdeck never writes under `~/.claude`.
+
+**An installed Flightdeck downloads its own updates.** It asks GitHub for the
+releases of this repository, a minute after the start and then every six hours,
+and downloads a newer version without asking. Installing it is the one step it
+does ask about: the new version goes in on a restart you agree to. A build run
+from the source checks nothing — there is no update path into a checkout.
