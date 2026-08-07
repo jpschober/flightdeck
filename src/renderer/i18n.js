@@ -1,4 +1,3 @@
-/* global I18nRuntime */
 // ---------------------------------------------------------------------------
 // Language
 //
@@ -15,12 +14,13 @@
 // downstream of every feature it serves, and each of those edges came back as
 // an import cycle.
 // ---------------------------------------------------------------------------
+import { createT } from '../i18n/runtime.js';
 import { $, escapeHtml } from './dom.js';
 import { logWarn } from './log.js';
 
 export let locale = window.api.i18n.locale;
 export const locales = window.api.i18n.locales;
-export let t = I18nRuntime.createT(window.api.i18n.dict, locale);
+export let t = createT(window.api.i18n.dict, locale);
 
 const localeListeners = [];
 
@@ -64,7 +64,7 @@ export async function setLanguage(code) {
   if (code === locale) return;
   const res = await window.api.setLocale(code);
   locale = res.locale;
-  t = I18nRuntime.createT(res.dict, locale);
+  t = createT(res.dict, locale);
   applyStaticI18n();
   // A panel that throws must not leave the rest standing in the old language.
   await Promise.all(localeListeners.map(async (fn) => {

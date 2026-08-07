@@ -80,10 +80,17 @@ module.exports = [
   },
 
   {
-    // The i18n runtime is loaded by the main process and by the page, so its
-    // wrapper looks for `self` before falling back to `this`.
+    // The build configuration is loaded by Vite, which reads ES modules only.
+    files: ['electron.vite.config.js', 'scripts/**/*.js'],
+    languageOptions: { sourceType: 'module' },
+  },
+
+  {
+    // The i18n runtime is the one module all three processes share, and the
+    // renderer imports it as it stands - so it is an ES module, unlike the
+    // rest of src/i18n and src/main around it.
     files: ['src/i18n/runtime.js'],
-    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+    languageOptions: { sourceType: 'module' },
   },
 
   {

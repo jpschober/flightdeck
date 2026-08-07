@@ -1,4 +1,3 @@
-/* global dagre */
 // ---------------------------------------------------------------------------
 // DB schema as an ER diagram
 //
@@ -22,11 +21,10 @@
 // layer underneath. Pan and zoom is a transform on the wrapper, so neither
 // panning nor searching nor focusing ever triggers a re-layout.
 //
-// dagre is a UMD bundle loaded as a classic script (see index.html) and reached
-// as a global; everything else this module needs comes in as an import. The
-// schema itself is handed over by db-schema.js, which holds it - that keeps the
-// edge between panel and diagram one-way.
+// The schema itself is handed over by db-schema.js, which holds it - that keeps
+// the edge between panel and diagram one-way.
 // ---------------------------------------------------------------------------
+import * as dagre from '@dagrejs/dagre';
 import { $, escapeHtml } from './dom.js';
 import { t } from './i18n.js';
 import { makeOverlay, renderModeButtons } from './overlays.js';
@@ -704,7 +702,6 @@ function render(refit) {
  * @param {string} filter  what was searched for in the panel
  */
 export function openDbGraph(view, filter) {
-  if (typeof dagre === 'undefined') return; // layout library missing - nothing to show
   state.view = view;
   overlay.open();
   // Whatever was searched for in the panel is what one is looking for here too

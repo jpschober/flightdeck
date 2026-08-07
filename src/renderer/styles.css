@@ -1,3 +1,7 @@
+/* xterm's own stylesheet, first so the rules below can override it. The bundler
+   resolves the package name and inlines the file - it is not fetched. */
+@import '@xterm/xterm/css/xterm.css';
+
 :root {
   --bg: #101116;
   --bg-panel: #16181f;

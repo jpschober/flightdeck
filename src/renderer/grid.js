@@ -1,10 +1,10 @@
-/* global Terminal */
 // ---------------------------------------------------------------------------
 // Grid overview: all sessions as live tiles
 //
 // Imports terminal.js and is imported by it. Mutual on purpose - see the note
 // at the top of terminal.js.
 // ---------------------------------------------------------------------------
+import { Terminal } from '@xterm/xterm';
 import { $, basename, makeKeyActivatable } from './dom.js';
 import { sessions, focusActiveTerm } from './sessions.js';
 import { setActive, TERM_FONT, TERM_THEME } from './terminal.js';
