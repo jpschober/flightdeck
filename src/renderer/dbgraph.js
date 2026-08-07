@@ -332,6 +332,7 @@ function nodeElement(node) {
       ? `<div class="dbg-more">${escapeHtml(t('dbgraph.more', { count: rest }))}</div>` : ''}</div>`
     : '';
 
+  // eslint-disable-next-line no-unsanitized/property -- head and body are built above, every value through escapeHtml
   el.innerHTML = head + body;
   return el;
 }
@@ -636,6 +637,7 @@ function renderLegend(view) {
   }
   items.push(`<span class="dbg-key note">${escapeHtml(t('dbgraph.legend.direction'))}</span>`);
   items.push(`<span class="dbg-key note">${escapeHtml(t('dbgraph.legend.optional'))}</span>`);
+  // eslint-disable-next-line no-unsanitized/property -- the items are built above, every value through escapeHtml
   legendEl.innerHTML = items.join('');
 }
 

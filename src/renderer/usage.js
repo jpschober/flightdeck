@@ -119,6 +119,7 @@ export async function loadUsage(force = false) {
   const data = await window.api.getUsage(force);
 
   if (data.error && !data.stale) {
+    // eslint-disable-next-line no-unsanitized/property -- the texts are escaped first, the markup put in afterwards is written here
     usageContentEl.innerHTML = `
       <div class="uz-error">${escapeHtml(data.error)}</div>
       <div class="muted" style="margin-top:8px">${escapeHtml(t('usage.source', { usage: '\u0000' }))
@@ -139,6 +140,7 @@ export async function loadUsage(force = false) {
 
   const stamp = new Date(data.fetchedAt).toLocaleTimeString(locale,
     { hour: '2-digit', minute: '2-digit' });
+  // eslint-disable-next-line no-unsanitized/property -- every value goes through escapeHtml; the rule cannot follow the conditionals in between
   usageContentEl.innerHTML = `
     <div class="uz-top">
       ${data.plan ? `<span class="uz-plan">${escapeHtml(data.plan)}</span>` : '<span></span>'}

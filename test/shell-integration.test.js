@@ -85,7 +85,7 @@ test('powershell calls the prompt and the read line it found', () => {
 // The bash part in a real bash
 // ---------------------------------------------------------------------------
 const BASH = ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash'].find((p) => {
-  try { return fs.statSync(p).isFile(); } catch (e) { return false; }
+  try { return fs.statSync(p).isFile(); } catch { return false; }
 });
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-shell-'));

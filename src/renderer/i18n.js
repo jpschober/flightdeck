@@ -53,6 +53,7 @@ export function applyStaticI18n() {
   // The hint has two keys inside it. The surrounding text is ours, so the
   // markup can be assembled here - only the keys are substituted, nothing
   // from outside gets in.
+  // eslint-disable-next-line no-unsanitized/property -- the text is escaped first, the markup put in afterwards is written here
   $('#empty-hint').innerHTML = escapeHtml(t('empty.hint', { plus: '\u0000', shortcut: '\u0001' }))
     .replace('\u0000', '<kbd>+</kbd>')
     .replace('\u0001', `<kbd>${escapeHtml(t('key.ctrl'))}</kbd>+<kbd>T</kbd>`);

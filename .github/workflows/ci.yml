@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: lint & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide what the other two would have said
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      # The tests run on Node, not in Electron - the ~100 MB binary would only
+      # be downloaded to sit there unused.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # The version package.json asks for - the oldest one that has to work
+          node-version: '22.12'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12'
+          cache: npm
+      # Without install: the lockfile is all the audit needs, and the answer
+      # should not depend on whether the install succeeded.
+      - run: npm audit --audit-level=high
