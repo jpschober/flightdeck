@@ -3,9 +3,24 @@
   "productName": "Flightdeck",
   "version": "0.1.0",
   "description": "Warp-like terminal app: multiple shell sessions, agent status, git/PR context panel, file preview",
-  "main": "src/main/main.js",
+  "main": "out/main/main.js",
+  "homepage": "https://github.com/jpschober/flightdeck",
+  "//desktopName": "Read by Electron for the window's WM_CLASS and by electron-builder for the .desktop file - see linux.syncDesktopName in electron-builder.yml.",
+  "desktopName": "flightdeck.desktop",
+  "author": {
+    "name": "Jean-Pierre Schober",
+    "email": "mail@jpschober.de"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jpschober/flightdeck.git"
+  },
   "scripts": {
-    "start": "electron .",
+    "start": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
     "lint": "eslint . --max-warnings 0",
     "test": "node --test"
   },
@@ -14,18 +29,22 @@
     "node": ">=22.12.0"
   },
   "devDependencies": {
+    "@dagrejs/dagre": "^3.1.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/xterm": "^5.5.0",
     "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
     "eslint": "^9.39.5",
     "eslint-plugin-no-unsanitized": "^4.1.5",
     "eslint-plugin-security": "^4.0.1",
     "globals": "^17.9.0"
   },
+  "//dependencies": "Only what stays outside the bundle: the native module, and the updater, whose own runtime files electron-builder has to find in node_modules. Everything the renderer draws with is bundled and therefore a devDependency.",
   "dependencies": {
-    "@dagrejs/dagre": "^3.1.0",
     "@lydell/node-pty": "^1.1.0",
-    "@xterm/addon-fit": "^0.10.0",
-    "@xterm/addon-web-links": "^0.11.0",
-    "@xterm/addon-webgl": "^0.18.0",
-    "@xterm/xterm": "^5.5.0"
+    "electron-updater": "^6.8.9"
   }
 }

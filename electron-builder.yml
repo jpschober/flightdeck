@@ -1,0 +1,89 @@
+# What electron-builder packs, and into what.
+#
+#   npm run pack   an unpacked app in dist/ - fast, for looking at the result
+#   npm run dist   the installers for the platform this runs on
+#
+# Each platform is built on its own runner (see .github/workflows/release.yml).
+# node-pty ships its native binary as a per-platform optional dependency, so
+# the tree a build sees is already the one for that platform - there is nothing
+# to cross-compile and nothing to rebuild.
+appId: de.jpschober.flightdeck
+productName: Flightdeck
+copyright: Copyright © 2026 Jean-Pierre Schober
+
+directories:
+  output: dist
+  buildResources: build
+
+# electron-vite has already bundled the three processes into out/; the sources
+# under src/ are not shipped. What is left in node_modules is what
+# `externalizeDeps` kept out of the bundle - node-pty and electron-updater.
+files:
+  - out/**
+  - assets/icon.png
+  - package.json
+
+# A .node file cannot be dlopen'd out of an asar archive, and node-pty's is
+# loaded by exactly that path.
+asarUnpack:
+  - '**/node_modules/@lydell/**'
+
+# The prebuilt binaries above are what this depends on. A rebuild would need a
+# toolchain on every runner and would replace a working binary with one built
+# against whatever Python and node-gyp happened to be there.
+npmRebuild: false
+
+# The .icns and .ico are generated from this PNG at build time, so there is one
+# icon in the repository and no binaries that can drift apart from it.
+mac:
+  icon: assets/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    # electron-updater reads the zip, not the dmg - without it macOS gets
+    # installers but no updates.
+    - zip
+  # Required for notarization, and it is what makes the entitlements below
+  # take effect. Without a signing identity in the environment,
+  # electron-builder skips signing and warns; the build still finishes.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Notarization needs APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID.
+  # The release workflow turns it on with `-c.mac.notarize=true` when those
+  # secrets are set; off here so a build without them does not fail.
+  notarize: false
+
+win:
+  icon: assets/icon.png
+  target:
+    - nsis
+  # Signing is picked up from CSC_LINK and CSC_KEY_PASSWORD when they are set.
+  # Unsigned builds work; SmartScreen warns about them.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  icon: assets/icon.png
+  category: Development
+  # Ties the .desktop file's name to the WM_CLASS the window carries - Electron
+  # takes that from `desktopName` in package.json, which is why the name itself
+  # lives there. Without the pair, the desktop shows a running Flightdeck as a
+  # second, nameless entry next to its own launcher icon.
+  syncDesktopName: true
+  desktop:
+    entry:
+      # The app brings its own window - it is not something a terminal runs.
+      Terminal: 'false'
+  target:
+    # AppImage is the format electron-updater can update in place.
+    - AppImage
+    - deb
+
+publish:
+  provider: github
+  owner: jpschober
+  repo: flightdeck
