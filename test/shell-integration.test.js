@@ -14,8 +14,21 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
+const Module = require('module');
 const { execFileSync } = require('child_process');
+
+// The module under test requires electron for `app.getPath('userData')`, which
+// readScript() does not touch. From Electron 42 on, `require('electron')`
+// outside Electron fetches the ~100 MB binary if it is not there yet, so the
+// require is intercepted here - the same route test/log.test.js takes.
+const origLoad = Module._load;
+Module._load = function (request, ...rest) {
+  if (request === 'electron') return { app: null };
+  return origLoad.call(this, request, ...rest);
+};
+
 const { readScript } = require('../src/main/shell-integration');
+Module._load = origLoad;
 
 const MAIN = path.join(__dirname, '..', 'src', 'main');
 

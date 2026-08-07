@@ -24,6 +24,9 @@ Module._load = function (request, ...rest) {
   if (request === 'electron') return { app: { getPath: (name) => path.join(home, name) } };
   return origLoad.call(this, request, ...rest);
 };
+// The logger reaches for electron only inside an Electron process, so the stub
+// alone is not enough - the marker it goes by has to be there too.
+process.versions.electron = '43.0.0';
 
 // The console belongs to the test runner while the checks run; warn and error
 // would otherwise print through it.
@@ -152,9 +155,13 @@ test('the file is not world-readable', () => {
   assert.strictEqual(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
 });
 
+// A plain node run - the other tests here, and anything that loads a main
+// module outside the app. The logger must not even ask for electron then: the
+// require would fetch the binary.
 test('without an Electron app the logger stays on the console', () => {
+  delete process.versions.electron;
   Module._load = function (request, ...rest) {
-    if (request === 'electron') throw new Error('Cannot find module "electron"');
+    if (request === 'electron') throw new Error('electron must not be required outside Electron');
     return origLoad.call(this, request, ...rest);
   };
   delete require.cache[require.resolve(LOG)];
@@ -162,10 +169,12 @@ test('without an Electron app the logger stays on the console', () => {
   assert.strictEqual(bare.path(), null);
   bare.error('nowhere to write this', { err: new Error('boom') }); // must not throw
   Module._load = origLoad;
+  process.versions.electron = '43.0.0';
   delete require.cache[require.resolve(LOG)];
 });
 
 test.after(() => {
   Module._load = origLoad;
+  delete process.versions.electron;
   fs.rmSync(home, { recursive: true, force: true });
 });
