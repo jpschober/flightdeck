@@ -49,9 +49,11 @@ test('nothing is recorded before Enter', () => {
 });
 
 test('the keystrokes may arrive in any number of chunks', () => {
-  const whole = type(session(), 'hello world\r');
-  const split = type(session(), 'hel', 'lo', ' wo', 'rld', '\r');
-  assert.deepStrictEqual(texts(split), texts(whole));
+  assert.deepStrictEqual(texts(type(session(), 'hello world\r')), ['hello world']);
+  assert.deepStrictEqual(texts(type(session(), 'hel', 'lo', ' wo', 'rld', '\r')), ['hello world']);
+  // A chunk boundary can fall inside an escape sequence - the PTY does not
+  // care where a read ends.
+  assert.deepStrictEqual(texts(type(session(), 'abc\x1b', '[Ddef\r')), ['abcdef']);
 });
 
 test('the first prompt is what makes the session count as prompted', () => {
@@ -92,6 +94,13 @@ test('cursor keys and other CSI sequences leave no trace', () => {
 test('a pasted block keeps its line breaks, the markers fall away', () => {
   const s = type(session(), `${ESC}[200~line one\nline two${ESC}[201~\r`);
   assert.deepStrictEqual(texts(s), ['line one\nline two']);
+  // The marker may be torn apart by the read boundary as well
+  const split = type(session(), `${ESC}[20`, `0~pasted`, `${ESC}`, `[201~\r`);
+  assert.deepStrictEqual(texts(split), ['pasted']);
+});
+
+test('an Alt shortcut loses the escape, not the key', () => {
+  assert.deepStrictEqual(texts(type(session(), `${ESC}bword\r`)), ['bword']);
 });
 
 test('a line of one character is not history', () => {
@@ -99,11 +108,18 @@ test('a line of one character is not history', () => {
   assert.deepStrictEqual(texts(s), ['ok']);
 });
 
-test('a very long prompt is cut off, the buffer stays bounded', () => {
-  const s = type(session(), 'x'.repeat(3000));
-  assert.strictEqual(s.inputBuf.length, 2000);
-  type(s, '\r');
-  assert.strictEqual(s.history[0].text.length, 500);
+test('a very long prompt is cut off at the front, the buffer stays bounded', () => {
+  const long = 'START' + 'x'.repeat(2995);
+  const s = type(session(), long, '\r');
+  assert.strictEqual(s.inputBuf, '');
+  assert.strictEqual(s.history[0].text, 'START' + 'x'.repeat(495));
+
+  // However the reads fall, the entry is the same one
+  const chunked = type(session(), long.slice(0, 1500), long.slice(1500), '\r');
+  assert.deepStrictEqual(texts(chunked), texts(s));
+
+  const open = type(session(), long);
+  assert.strictEqual(open.inputBuf.length, 2000);
 });
 
 test('the history keeps the last 200 entries', () => {

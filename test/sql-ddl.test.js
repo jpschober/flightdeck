@@ -347,13 +347,13 @@ test('a USING clause is not part of the new type', () => {
   assert.strictEqual(column(m, 'public.t', 'a').type, 'integer');
 });
 
-test('a dropped column takes its own constraints with it', () => {
+test('a dropped column takes every constraint that names it with it', () => {
   const m = model(
-    'CREATE TABLE t (a int UNIQUE, b int, UNIQUE (a, b));',
+    'CREATE TABLE t (a int UNIQUE, b int, c int, UNIQUE (a, b), UNIQUE (b, c));',
     'ALTER TABLE t DROP COLUMN a;',
   );
-  const kinds = table(m, 'public.t').constraints.map((c) => c.columns.join(','));
-  assert.deepStrictEqual(kinds, ['a,b'], 'only the multi-column constraint may remain');
+  const remaining = table(m, 'public.t').constraints.map((c) => c.columns.join(','));
+  assert.deepStrictEqual(remaining, ['b,c'], 'a constraint over the dropped column is left over');
 });
 
 test('ADD CONSTRAINT and DROP CONSTRAINT reach the table', () => {
@@ -529,15 +529,29 @@ test('WITH CHECK, RESTRICTIVE and the default command are read', () => {
   assert.strictEqual(p.check, 'owner = auth.uid()');
 });
 
-test('a policy of the same name replaces the old one, DROP POLICY removes it', () => {
+test('a policy of the same name replaces the old one', () => {
+  // The migration sequence of a project that redefines a policy without
+  // dropping it first - it must not end up in the schema twice.
   const m = model(
     'CREATE TABLE docs (id uuid);',
     'CREATE POLICY p ON docs FOR SELECT USING (true);',
-    'DROP POLICY p ON docs; CREATE POLICY p ON docs FOR INSERT WITH CHECK (false);',
+    'CREATE POLICY p ON docs FOR INSERT WITH CHECK (false);',
   );
   const policies = table(m, 'public.docs').rls.policies;
   assert.strictEqual(policies.length, 1);
   assert.strictEqual(policies[0].command, 'insert');
+});
+
+test('DROP POLICY removes it, a new one of the same name starts over', () => {
+  const m = model(
+    'CREATE TABLE docs (id uuid);',
+    'CREATE POLICY p ON docs FOR SELECT USING (true);',
+    'DROP POLICY p ON docs;',
+  );
+  assert.deepStrictEqual(table(m, 'public.docs').rls.policies, []);
+
+  applySql(m, 'CREATE POLICY p ON docs FOR INSERT WITH CHECK (false);');
+  assert.strictEqual(table(m, 'public.docs').rls.policies[0].command, 'insert');
 });
 
 test('ENABLE ROW LEVEL SECURITY creates a placeholder for a foreign table', () => {
@@ -591,9 +605,10 @@ test('what is not DDL says nothing about the schema and stays silent', () => {
 
 test('a statement that throws becomes a warning, the following one still runs', () => {
   const m = createModel();
-  // A table without columns is not something the reader itself builds - it
-  // stands in for whatever a handler might trip over, and shows what happens
-  // then: a warning, not an aborted migration sequence.
+  // The throw is provoked by a table without a `columns` list, which the
+  // reader itself never builds - if a guard is added there one day, this test
+  // needs another way to make a statement fail. What it is about is applySql:
+  // a failed statement is a warning, not an aborted migration sequence.
   m.tables.set('public.broken', { schema: 'public', name: 'broken' });
   applySql(m, 'ALTER TABLE broken ADD COLUMN a int; CREATE TABLE ok (x int);');
   assert.ok(m.tables.has('public.ok'), 'the replay stopped at the failed statement');

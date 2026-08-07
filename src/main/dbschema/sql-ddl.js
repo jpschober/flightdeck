@@ -741,9 +741,11 @@ function applyAlterAction(model, table, action) {
     const id = readIdent(s.slice(m[0].length));
     if (!id) return;
     table.columns = table.columns.filter((c) => c.name !== id.name);
-    // Constraints that only concern this column go away with it
+    // Every constraint that names the column goes with it, a multi-column one
+    // as well - that is what Postgres does, and a UNIQUE (a, b) left behind on
+    // a table without `a` would sit in the diff as unchanged forever.
     table.constraints = table.constraints.filter((c) =>
-      !(c.columns && c.columns.length === 1 && c.columns[0] === id.name));
+      !(c.columns && c.columns.includes(id.name)));
     return;
   }
 

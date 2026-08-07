@@ -17,7 +17,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-test-'));
-process.env.HOME = home;
+// os.homedir() reads HOME on Linux and macOS and USERPROFILE on Windows, and
+// the module reads it while being required - both are set before that happens.
+function setHome(dir) { process.env.HOME = dir; process.env.USERPROFILE = dir; }
+setHome(home);
 const PROJECTS = path.join(home, '.claude', 'projects');
 const REPO = path.join(PROJECTS, '-home-me-repo');
 const WORKTREE = path.join(PROJECTS, '-home-me-repo-wt-x');
@@ -261,7 +264,7 @@ test('the listing ages out even when no watch event ever arrives', () => {
 
 test('without a projects directory nothing is scanned and fs.watch is tried once', () => {
   const gone = fs.mkdtempSync(path.join(os.tmpdir(), 'flightdeck-nohome-'));
-  process.env.HOME = gone;
+  setHome(gone);
   const mod = reload(MODULE);
 
   let watchCalls = 0;
@@ -276,6 +279,6 @@ test('without a projects directory nothing is scanned and fs.watch is tried once
 
   fs.watch = realWatch;
   fs.rmSync(gone, { recursive: true, force: true });
-  process.env.HOME = home;
+  setHome(home);
   cs = reload(MODULE);
 });
