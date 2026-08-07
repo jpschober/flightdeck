@@ -180,6 +180,7 @@ const DB_HEAD_HTML = `
 function renderDbHead(view) {
   if (!view) { dbHeadEl.replaceChildren(); return; }
   if (!dbHeadEl.firstElementChild) {
+    // eslint-disable-next-line no-unsanitized/property -- constant markup, nothing is interpolated
     dbHeadEl.innerHTML = DB_HEAD_HTML;
     dbHeadEl.appendChild(buildDbWarnings());
     dbHeadEl.querySelector('#db-refresh').addEventListener('click', () => loadDbSchema(true));
@@ -252,6 +253,7 @@ function renderDbSignal(view) {
   const shape = !d ? 'none' : d.changed ? 'alert' : 'ok';
   if (dbSignalEl.dataset.shape !== shape) {
     dbSignalEl.dataset.shape = shape;
+    // eslint-disable-next-line no-unsanitized/property -- constant markup, nothing is interpolated
     dbSignalEl.innerHTML = shape === 'ok' ? DB_SIGNAL_OK_HTML
       : shape === 'alert' ? DB_SIGNAL_ALERT_HTML : '';
     if (shape === 'alert') dbSignalEl.querySelector('#db-open-diff').addEventListener('click', openDbDiff);
@@ -447,6 +449,7 @@ const DB_TABLE_HTML = `
 
 function buildDbTableCard() {
   const el = document.createElement('details');
+  // eslint-disable-next-line no-unsanitized/property -- constant markup, nothing is interpolated
   el.innerHTML = DB_TABLE_HTML;
   return el;
 }
@@ -756,6 +759,7 @@ function dbDiffEnumCard(e, side) {
       t(side === 'before' ? 'dbdiff.absent.before' : 'dbdiff.absent.after'))}</span></div>`;
     return el;
   }
+  // eslint-disable-next-line no-unsanitized/property -- every value goes through escapeHtml; the rule cannot follow the conditionals in between
   el.innerHTML = `
     <div class="dbd-card-head">
       <span class="dbd-name">${escapeHtml(e.name)}</span>
@@ -827,6 +831,7 @@ function dbDiffTableCard(td, table, side) {
     </div>`;
   });
 
+  // eslint-disable-next-line no-unsanitized/property -- every value goes through escapeHtml; the rule cannot follow the conditionals in between
   el.innerHTML = `
     <div class="dbd-card-head">
       <span class="dbd-name">${escapeHtml(table.name)}</span>

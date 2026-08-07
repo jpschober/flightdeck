@@ -247,7 +247,7 @@ const SERIAL_RE = /^(?:big|small)?serial[248]?$/i;
  * resolved. Array and precision specifications are preserved.
  */
 function normalizeType(raw) {
-  let t = squash(raw);
+  const t = squash(raw);
   if (!t) return '';
   // Separate precision/array from the base name: `varchar(255)[]` -> `varchar` + rest
   const m = /^([^([]+?)\s*((?:\(.*\))?(?:\s*\[[^\]]*\])*)$/.exec(t);
@@ -705,7 +705,7 @@ function renameInConstraints(table, from, to) {
 }
 
 function applyAlterAction(model, table, action) {
-  let s = action.trimStart();
+  const s = action.trimStart();
   let m;
 
   if ((m = /^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?/i.exec(s))) {

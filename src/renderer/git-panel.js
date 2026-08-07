@@ -72,6 +72,7 @@ function renderPrCard(s) {
   if (prCardEl.dataset.shape !== shape) {
     prCardEl.dataset.shape = shape;
     if (shape === 'pr') {
+      // eslint-disable-next-line no-unsanitized/property -- constant markup, nothing is interpolated
       prCardEl.innerHTML = PR_CARD_HTML;
       const titleEl = prCardEl.querySelector('.pr-title');
       makeKeyActivatable(titleEl);
@@ -82,6 +83,7 @@ function renderPrCard(s) {
         if (cur && cur.pr) window.api.openExternal(cur.pr.url);
       });
     } else {
+      // eslint-disable-next-line no-unsanitized/property -- the only value is one of two class names from this line
       prCardEl.innerHTML = `<div class="${shape === 'blocked' ? 'git-blocked' : 'muted'}"></div>`;
     }
   }
@@ -196,6 +198,7 @@ function updatePrDetails(el, item) {
   const body = el.querySelector('.pr-details-body');
   if (prDetailsHtml.get(body) === item.html) return;
   prDetailsHtml.set(body, item.html);
+  // eslint-disable-next-line no-unsanitized/property -- item.html is built in renderPrExtra() above, every value through escapeHtml or mdToHtml
   body.innerHTML = item.html;
 }
 
