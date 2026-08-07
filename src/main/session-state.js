@@ -272,11 +272,23 @@ function addHistory(session, text, kind) {
 }
 
 function feedInputRecon(session, data) {
-  // Strip bracketed-paste markers, keep the pasted content
-  data = data.replace(/\x1b\[20[01]~/g, '');
   let buf = session.inputBuf;
+  // Where in an escape sequence the last chunk ended: '' | 'esc' | 'csi'. The
+  // PTY reads wherever the buffer happens to end, so `\x1b` and `[D` can arrive
+  // separately - without this the `[D` would be typed into the prompt.
+  let esc = session.inputEsc || '';
   for (let i = 0; i < data.length; i++) {
     const ch = data[i];
+    if (esc === 'csi') { // runs up to the final byte, bracketed-paste markers too
+      const code = data.charCodeAt(i);
+      if (code >= 0x40 && code <= 0x7e) esc = '';
+      continue;
+    }
+    if (esc === 'esc') {
+      esc = '';
+      if (ch === '[' || ch === 'O') { esc = 'csi'; continue; }
+      // Alt+key: the escape is gone, the key itself was typed
+    }
     if (ch === '\r') {
       const text = buf; buf = '';
       // Shell commands arrive verbatim via OSC 7770 - only agent prompts here
@@ -291,18 +303,19 @@ function feedInputRecon(session, data) {
     } else if (ch === '\x17') { // Ctrl+W: delete the last word
       buf = buf.replace(/\S+\s*$/, '');
     } else if (ch === '\x1b') {
-      if (data[i + 1] === '[' || data[i + 1] === 'O') { // skip CSI/SS3
-        let j = i + 2;
-        while (j < data.length && (data.charCodeAt(j) < 0x40 || data.charCodeAt(j) > 0x7e)) j++;
-        i = j;
-      }
+      esc = 'esc';
     } else if (ch === '\n') {
       buf += '\n'; // part of a multi-line paste
     } else if (ch >= ' ') {
       buf += ch;
     }
   }
-  session.inputBuf = buf.length > 2000 ? buf.slice(-2000) : buf;
+  // The bound keeps the beginning, not the end: only the first 500 characters
+  // are recorded, and keeping the end would make the entry begin wherever the
+  // last read did - the same prompt would be written down differently
+  // depending on where the PTY chunks fell.
+  session.inputBuf = buf.length > 2000 ? buf.slice(0, 2000) : buf;
+  session.inputEsc = esc;
 }
 
 module.exports = {

@@ -242,6 +242,7 @@ function createSession(shellId, opts = {}) {
     cmdWatched: false,
     history: [],
     inputBuf: '',
+    inputEsc: '',
     lastInputAt: 0,
     altScreen: false,
     outputBuffer: [],
