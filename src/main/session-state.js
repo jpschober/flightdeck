@@ -256,10 +256,16 @@ async function updateAgentBinding(session) {
 // ---------------------------------------------------------------------------
 const HISTORY_MAX = 200;
 
+// The renderer finds an entry's row again by this id and updates it instead of
+// building the list again. `ts` cannot carry that: two entries from the same
+// millisecond share it. The counter runs for as long as the process does,
+// which is exactly as long as any history list exists.
+let histSeq = 0;
+
 function addHistory(session, text, kind) {
   text = text.trim();
   if (text.length < 2) return;
-  const entry = { ts: Date.now(), text: text.slice(0, 500), kind };
+  const entry = { id: `h${++histSeq}`, ts: Date.now(), text: text.slice(0, 500), kind };
   session.history.push(entry);
   if (session.history.length > HISTORY_MAX) session.history.shift();
   send('session:histadd', session.id, entry);

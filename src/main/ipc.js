@@ -231,9 +231,11 @@ function registerIpc() {
     return todoStore.getFor(s);
   });
 
+  // Answers with the stored notes - they carry the ids the renderer needs to
+  // find a note's row again, and a new note has none yet when it arrives here.
   ipcMain.handle('todos:set', (e, id, todos) => {
     const s = sessions.get(id);
-    if (!s) return false;
+    if (!s) return null;
     return todoStore.setFor(s, todos);
   });
 }
