@@ -290,7 +290,7 @@ module.exports = {
   'osc52.off': 'L’output del terminale voleva scrivere negli appunti – disattivato nel menu',
   // --- aggiornamento ---
   'update.ready.title': 'Aggiornamento pronto',
-  'update.ready.detail': 'La versione {version} è stata scaricata. Verrà installata al prossimo avvio.',
+  'update.ready.detail': 'La versione {version} è stata scaricata. Verrà installata al riavvio.',
   'update.restart': 'Riavvia ora',
   'update.later': 'Più tardi',
 };

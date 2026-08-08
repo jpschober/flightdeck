@@ -22,6 +22,10 @@ jobs:
     strategy:
       # One platform failing should not throw away the other two builds
       fail-fast: false
+      # One at a time: the first runner to publish creates the draft release,
+      # and three of them looking for it at once find nothing and each create
+      # one. A release happens rarely enough for the wall clock not to matter.
+      max-parallel: 1
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
@@ -39,10 +43,15 @@ jobs:
       - name: The tag has to be the version being built
         if: github.event_name == 'push'
         shell: bash
+        # The tag goes through the environment, not into the script text: a tag
+        # name may contain backticks and semicolons, and this job may write to
+        # the repository.
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           version=$(node -p 'require("./package.json").version')
-          test "${{ github.ref_name }}" = "v$version" \
-            || { echo "tag ${{ github.ref_name }} is not v$version from package.json"; exit 1; }
+          test "$TAG" = "v$version" \
+            || { echo "tag $TAG is not v$version from package.json"; exit 1; }
 
       # Not `npm ci --omit=dev`: electron-builder and electron-vite are
       # devDependencies, and the native binary comes from an optional

@@ -26,7 +26,8 @@ let timer = null;
 let asking = false;
 // The version the user said "later" to. The periodic check finds the same
 // downloaded update again every six hours and reports it again; without this
-// the same question would come back all day.
+// the same question would come back all day. It is not remembered past the
+// run - the next start asks once more.
 let declined = null;
 
 async function onDownloaded(updater, info) {
@@ -46,10 +47,8 @@ async function onDownloaded(updater, info) {
       detail: i18n.t('update.ready.detail', { version: info.version }),
     });
     if (response !== 0) {
-      // autoInstallOnAppQuit stays on, so "later" means the next quit and not
-      // never - which is what the dialog says.
       declined = info.version;
-      log.info('update: install postponed to the next quit', { version: info.version });
+      log.info('update: declined for this run', { version: info.version });
       return;
     }
     // The shells are children of this process and would be killed with it
@@ -77,18 +76,25 @@ function startUpdates() {
   }
 
   updater.autoDownload = true;
-  // What "later" falls back to: the downloaded version goes in on the next
-  // quit. Off, a declined update would install at no point at all, and the
-  // window closing with the app is the only quit this app has.
-  updater.autoInstallOnAppQuit = true;
-  // electron-updater's own narration, all of it at debug: what it says about a
-  // failure it also emits as an 'error' event, and that is where this module
-  // reports it - once, instead of the same failure three times over.
-  const trace = (m) => log.debug('update: ' + (m instanceof Error ? m.message : m));
-  updater.logger = { debug: trace, info: trace, warn: trace, error: trace };
+  // Nothing is installed unless the dialog was answered with yes. On quit is
+  // where electron-updater would otherwise do it, and for a .deb that means
+  // dpkg through pkexec: closing the window would put a password prompt in
+  // front of somebody who never agreed to an install. "Later" therefore means
+  // later, and the question comes back on the next start.
+  updater.autoInstallOnAppQuit = false;
+  // electron-updater's narration. Its own warn and error stay at warn - the
+  // stderr of a failed installer is logged there and nowhere else. The
+  // 'error' event below repeats some of it; a second line about a failure is
+  // cheaper than losing the only line that says why.
+  const say = (level) => (m) => log[level]('update: ' + (m instanceof Error ? m.message : m));
+  updater.logger = { debug: say('debug'), info: say('debug'), warn: say('warn'), error: say('warn') };
 
   updater.on('update-available', (info) => log.info('update: available', { version: info.version }));
-  updater.on('update-downloaded', (info) => onDownloaded(updater, info));
+  // onDownloaded is async, and a rejection with nobody holding the promise
+  // takes the process down in Node 22.
+  updater.on('update-downloaded', (info) => {
+    onDownloaded(updater, info).catch((e) => log.warn('update: the question could not be put', { err: e }));
+  });
   // No release yet, no network, a rate-limited GitHub API, a download that
   // broke off: all of them end up here. None is worth interrupting the user
   // for, and none of them stops the app working - hence warn and not error.

@@ -13,9 +13,12 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { defineConfig } from 'electron-vite';
 
-// Resolved against this file, not against the working directory a build was
-// started from.
-const SHELL_DIR = fileURLToPath(new URL('src/main/shell-integration', import.meta.url));
+// Every source path below is resolved against this file rather than against
+// the working directory, so none of them depends on where the build was
+// started from. The output directory is electron-vite's own and stays relative
+// to the project root.
+const here = (rel) => fileURLToPath(new URL(rel, import.meta.url));
+const SHELL_DIR = here('src/main/shell-integration');
 
 // The shell scripts are read at runtime with `path.join(__dirname, name)`, and
 // after bundling `__dirname` is out/main. They are copied there rather than
@@ -46,24 +49,24 @@ export default defineConfig({
     plugins: [copyShellScripts()],
     build: {
       externalizeDeps: true,
-      lib: { entry: 'src/main/main.js' },
+      lib: { entry: here('src/main/main.js') },
       commonjsOptions: cjs,
     },
   },
   preload: {
     build: {
       externalizeDeps: true,
-      lib: { entry: 'src/preload.js' },
+      lib: { entry: here('src/preload.js') },
       commonjsOptions: cjs,
     },
   },
   renderer: {
-    root: 'src/renderer',
+    root: here('src/renderer'),
     build: {
       // The vendor libraries are bundled in, so none of them has to be found
       // by a relative path into node_modules at runtime.
       commonjsOptions: cjs,
-      rollupOptions: { input: 'src/renderer/index.html' },
+      rollupOptions: { input: here('src/renderer/index.html') },
     },
   },
 });

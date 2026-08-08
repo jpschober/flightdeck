@@ -290,7 +290,7 @@ module.exports = {
   'osc52.off': 'La sortie du terminal a voulu écrire dans le presse-papiers – désactivé dans le menu',
   // --- mise à jour ---
   'update.ready.title': 'Mise à jour prête',
-  'update.ready.detail': 'La version {version} a été téléchargée. Elle sera installée au prochain démarrage.',
+  'update.ready.detail': 'La version {version} a été téléchargée. Elle sera installée au redémarrage.',
   'update.restart': 'Redémarrer maintenant',
   'update.later': 'Plus tard',
 };

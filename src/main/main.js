@@ -26,7 +26,9 @@ const ICON = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 
 // The dev server compared by origin, not by string: the URL a reload asks for
 // carries the path and the trailing slash that ELECTRON_RENDERER_URL may not.
-const DEV_ORIGIN = DEV_SERVER ? new URL(DEV_SERVER).origin : null;
+// A URL without a proper origin - file:, data: - stringifies its origin as
+// "null", and two of those would compare equal. Only a real http origin counts.
+const DEV_ORIGIN = /^https?:\/\//.test(DEV_SERVER || '') ? new URL(DEV_SERVER).origin : null;
 function isDevServerUrl(url) {
   if (!DEV_ORIGIN) return false;
   try { return new URL(url).origin === DEV_ORIGIN; } catch { return false; }
@@ -66,8 +68,10 @@ function createWindow() {
   // HMR cannot patch comes through as location.reload(), which is a navigation
   // to the URL this window was opened with. In a packed build DEV_SERVER is
   // undefined and nothing passes.
-  const blockNavigation = (e, url) => {
-    if (isDevServerUrl(url)) return;
+  // The URL off the details object, not off a second argument:
+  // will-frame-navigate is handed nothing but the details.
+  const blockNavigation = (e) => {
+    if (isDevServerUrl(e.url)) return;
     e.preventDefault();
   };
   win.webContents.on('will-navigate', blockNavigation);
