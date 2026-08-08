@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  What the hardened runtime has to allow for this app to work at all.
+  What the hardened runtime has to allow for this app to work at all. The app
+  is not sandboxed, so these are the only exceptions it asks for.
 
-  Electron's own JIT needs the first two. The last one is what a terminal is:
-  the app starts the user's shell, and every command that shell runs is a child
-  of it - without it macOS would kill each one for not carrying the signature.
+  The first two are Electron's: V8 compiles JavaScript at runtime, and the
+  hardened runtime forbids executable memory without them.
+
+  The other two are what a terminal needs. Library validation off, because the
+  app loads node-pty's binary, which carries a different team's signature than
+  the app around it. The dyld environment variables, because the shell
+  integration reaches the shell through the environment the sessions are
+  started with.
 -->
 <plist version="1.0">
 <dict>
@@ -16,8 +22,6 @@
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
   <key>com.apple.security.cs.allow-dyld-environment-variables</key>
-  <true/>
-  <key>com.apple.security.inherit</key>
   <true/>
 </dict>
 </plist>

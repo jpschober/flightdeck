@@ -24,6 +24,14 @@ const PRELOAD = path.join(__dirname, '..', 'preload', 'preload.js');
 // one electron-builder puts into the executable.
 const ICON = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 
+// The dev server compared by origin, not by string: the URL a reload asks for
+// carries the path and the trailing slash that ELECTRON_RENDERER_URL may not.
+const DEV_ORIGIN = DEV_SERVER ? new URL(DEV_SERVER).origin : null;
+function isDevServerUrl(url) {
+  if (!DEV_ORIGIN) return false;
+  try { return new URL(url).origin === DEV_ORIGIN; } catch { return false; }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1500,
@@ -53,7 +61,15 @@ function createWindow() {
   // never navigates - the document below is loaded once via loadFile/loadURL,
   // which these events do not cover - so every navigation that does occur is
   // cancelled. A dropped file is the most common trigger.
-  const blockNavigation = (e) => e.preventDefault();
+  //
+  // The one exception is the dev server reloading its own document: a change
+  // HMR cannot patch comes through as location.reload(), which is a navigation
+  // to the URL this window was opened with. In a packed build DEV_SERVER is
+  // undefined and nothing passes.
+  const blockNavigation = (e, url) => {
+    if (isDevServerUrl(url)) return;
+    e.preventDefault();
+  };
   win.webContents.on('will-navigate', blockNavigation);
   win.webContents.on('will-frame-navigate', blockNavigation);
 

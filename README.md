@@ -83,7 +83,9 @@ and `.deb`, `.dmg`, `.exe`. An installed Flightdeck checks for a new version by
 itself and asks before restarting into it.
 
 The builds are not signed yet. macOS puts them behind Gatekeeper and Windows
-behind a SmartScreen warning until they are.
+behind a SmartScreen warning until they are. Each one is built on a runner of
+its own architecture, so today that means x64 for Linux and Windows and Apple
+silicon for macOS — an Intel Mac has to build from the source.
 
 From the source instead:
 

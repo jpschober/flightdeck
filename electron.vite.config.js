@@ -9,10 +9,13 @@
 // is what makes that possible: without it Rollup leaves the `require` calls in
 // src/ standing, and the bundle points at files that are not next to it.
 import { readdir, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { defineConfig } from 'electron-vite';
 
-const SHELL_DIR = 'src/main/shell-integration';
+// Resolved against this file, not against the working directory a build was
+// started from.
+const SHELL_DIR = fileURLToPath(new URL('src/main/shell-integration', import.meta.url));
 
 // The shell scripts are read at runtime with `path.join(__dirname, name)`, and
 // after bundling `__dirname` is out/main. They are copied there rather than

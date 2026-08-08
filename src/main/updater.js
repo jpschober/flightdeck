@@ -24,28 +24,42 @@ const INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 let timer = null;
 let asking = false;
+// The version the user said "later" to. The periodic check finds the same
+// downloaded update again every six hours and reports it again; without this
+// the same question would come back all day.
+let declined = null;
 
-function onDownloaded(updater, info) {
-  // A second dialog on top of the first would come from the periodic check
-  // finding the same downloaded update again.
-  if (asking || !alive()) return;
+async function onDownloaded(updater, info) {
+  if (asking || declined === info.version || !alive()) return;
   asking = true;
-  const answer = dialog.showMessageBoxSync(getWindow(), {
-    type: 'info',
-    buttons: [i18n.t('update.restart'), i18n.t('update.later')],
-    defaultId: 0,
-    cancelId: 1,
-    title: i18n.t('update.ready.title'),
-    message: i18n.t('update.ready.title'),
-    detail: i18n.t('update.ready.detail', { version: info.version }),
-  });
-  asking = false;
-  if (answer !== 0) return;
-  // The shells are children of this process and would be killed with it
-  // anyway; quitAndInstall goes through the app's own quit, so the sessions
-  // are torn down by the handler in main.js like on any other quit.
-  log.info('update: restarting to install', { version: info.version });
-  updater.quitAndInstall();
+  try {
+    // Not showMessageBoxSync: this dialog appears unasked for, and the sync
+    // one stops the main process while it stands. Every terminal would sit
+    // there without output until somebody answered it.
+    const { response } = await dialog.showMessageBox(getWindow(), {
+      type: 'info',
+      buttons: [i18n.t('update.restart'), i18n.t('update.later')],
+      defaultId: 0,
+      cancelId: 1,
+      title: i18n.t('update.ready.title'),
+      message: i18n.t('update.ready.title'),
+      detail: i18n.t('update.ready.detail', { version: info.version }),
+    });
+    if (response !== 0) {
+      // autoInstallOnAppQuit stays on, so "later" means the next quit and not
+      // never - which is what the dialog says.
+      declined = info.version;
+      log.info('update: install postponed to the next quit', { version: info.version });
+      return;
+    }
+    // The shells are children of this process and would be killed with it
+    // anyway; quitAndInstall goes through the app's own quit, so the sessions
+    // are torn down by the handler in main.js like on any other quit.
+    log.info('update: restarting to install', { version: info.version });
+    updater.quitAndInstall();
+  } finally {
+    asking = false;
+  }
 }
 
 /**
@@ -63,26 +77,26 @@ function startUpdates() {
   }
 
   updater.autoDownload = true;
-  // The install has to wait for the answer to the dialog above.
-  updater.autoInstallOnAppQuit = false;
-  updater.logger = {
-    info: (m) => log.debug('update: ' + m),
-    warn: (m) => log.warn('update: ' + m),
-    error: (m) => log.warn('update: ' + m),
-    debug: (m) => log.debug('update: ' + m),
-  };
+  // What "later" falls back to: the downloaded version goes in on the next
+  // quit. Off, a declined update would install at no point at all, and the
+  // window closing with the app is the only quit this app has.
+  updater.autoInstallOnAppQuit = true;
+  // electron-updater's own narration, all of it at debug: what it says about a
+  // failure it also emits as an 'error' event, and that is where this module
+  // reports it - once, instead of the same failure three times over.
+  const trace = (m) => log.debug('update: ' + (m instanceof Error ? m.message : m));
+  updater.logger = { debug: trace, info: trace, warn: trace, error: trace };
 
   updater.on('update-available', (info) => log.info('update: available', { version: info.version }));
   updater.on('update-downloaded', (info) => onDownloaded(updater, info));
-  // No release yet, no network, a rate-limited GitHub API: all of them end up
-  // here, and none of them is worth interrupting the user for.
-  updater.on('error', (e) => log.warn('update: check failed', { err: e }));
+  // No release yet, no network, a rate-limited GitHub API, a download that
+  // broke off: all of them end up here. None is worth interrupting the user
+  // for, and none of them stops the app working - hence warn and not error.
+  updater.on('error', (e) => log.warn('update: failed', { err: e }));
 
-  const check = () => {
-    // checkForUpdates rejects rather than only emitting 'error' when the feed
-    // itself cannot be read.
-    updater.checkForUpdates().catch((e) => log.warn('update: check failed', { err: e }));
-  };
+  // checkForUpdates rejects on top of emitting 'error', so the rejection is
+  // swallowed here rather than reported a second time.
+  const check = () => updater.checkForUpdates().catch(() => {});
   // Neither timer keeps the process alive on its own - the window does that.
   const hold = (t) => (t.unref ? t.unref() : t);
   timer = setTimeout(() => {

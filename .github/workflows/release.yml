@@ -1,8 +1,9 @@
 name: Release
 
-# A tag is what makes a release. `v0.2.0` has to match the version in
-# package.json - electron-builder writes that version into the update metadata,
-# and electron-updater compares against it, not against the tag.
+# A tag is what makes a release. electron-builder takes the version from
+# package.json, not from the tag - a mismatch would upload to a release named
+# after the old version while the tag sits there with nothing attached, so the
+# first step checks the two against each other.
 on:
   push:
     tags: ['v*']
@@ -23,44 +24,68 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      # `secrets` cannot be read in a step's `if:`, so the ones that decide
+      # whether a step runs are lifted into the environment here.
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      PUBLISH: ${{ github.event_name == 'push' && 'always' || 'never' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22.12'
           cache: npm
+
+      - name: The tag has to be the version being built
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          test "${{ github.ref_name }}" = "v$version" \
+            || { echo "tag ${{ github.ref_name }} is not v$version from package.json"; exit 1; }
+
       # Not `npm ci --omit=dev`: electron-builder and electron-vite are
       # devDependencies, and the native binary comes from an optional
       # dependency that the platform picks - which is why each platform builds
       # on its own runner instead of one runner cross-compiling.
       - run: npm ci
 
+      # out/ is not in the repository, and electron-builder runs no build of
+      # its own - without this it packs an asar without the entry file.
+      - run: npm run build
+
       - name: Build and publish
-        run: npx electron-builder --publish ${{ github.event_name == 'push' && 'always' || 'never' }}
+        # macOS builds in the notarizing step below instead, so an unsigned
+        # build is never the one that reaches the release.
+        if: runner.os != 'macOS'
+        run: npx electron-builder --publish $PUBLISH
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS: a Developer ID certificate as base64, and its password.
-          # Absent, electron-builder skips signing and says so - the build
-          # still produces installers, they just warn on first launch.
-          CSC_LINK: ${{ secrets.MAC_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-          # Windows: same two variables, so only one of the pairs is ever set
-          # on a given runner.
+          # Windows: a certificate as base64 and its password. Absent,
+          # electron-builder skips signing and says so - the build still
+          # produces an installer, it just warns on first launch.
           WIN_CSC_LINK: ${{ secrets.WIN_CERTIFICATE }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
 
-      - name: Notarize and staple
+      - name: Build, notarize and publish
+        if: runner.os == 'macOS'
+        shell: bash
         # Notarization is a second pass over the signed app, so it only runs
-        # when there is a signature to notarize. electron-builder does it
-        # itself once `mac.notarize` is on; the flag is off in the config so a
-        # build without these secrets does not fail.
-        if: runner.os == 'macOS' && secrets.APPLE_ID != ''
-        run: npx electron-builder --mac -c.mac.notarize=true --publish ${{ github.event_name == 'push' && 'always' || 'never' }}
+        # when there is an Apple ID to notarize with. Without one this is the
+        # same build unsigned, which macOS puts behind Gatekeeper.
+        run: |
+          if [ -n "$APPLE_ID" ]; then
+            npx electron-builder --mac -c.mac.notarize=true --publish "$PUBLISH"
+          else
+            echo "no APPLE_ID - building unsigned"
+            npx electron-builder --mac --publish "$PUBLISH"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A Developer ID certificate as base64, and its password.
           CSC_LINK: ${{ secrets.MAC_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
