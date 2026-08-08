@@ -291,4 +291,9 @@ module.exports = {
     other: 'Terminal output wrote {count} characters to the clipboard',
   },
   'osc52.off': 'Terminal output wanted to write the clipboard – switched off in the menu',
+  // --- update ---
+  'update.ready.title': 'Update ready',
+  'update.ready.detail': 'Version {version} has been downloaded. It goes in when you restart.',
+  'update.restart': 'Restart now',
+  'update.later': 'Later',
 };

@@ -1,4 +1,3 @@
-/* global Terminal, FitAddon, WebLinksAddon, WebglAddon */
 // ---------------------------------------------------------------------------
 // Sessions: create, activate, close - and the sidebar entry that belongs to
 // each of them.
@@ -15,6 +14,10 @@
 // and register listeners. A call added there would throw at load time, and the
 // error would depend on which module the graph reaches first.
 // ---------------------------------------------------------------------------
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { $, basename, showToast } from './dom.js';
 import { logDebug, logWarn } from './log.js';
 import { t, onLocaleChange } from './i18n.js';
@@ -129,10 +132,9 @@ function handleOsc52(term) {
 // oldest one beyond that, which costs the affected terminal a redraw and the
 // three seconds the addon waits for a restore before it falls back.
 function loadWebgl(term) {
-  if (typeof WebglAddon === 'undefined') return;
   let webgl = null;
   try {
-    webgl = new WebglAddon.WebglAddon();
+    webgl = new WebglAddon();
     webgl.onContextLoss(() => webgl.dispose());
     term.loadAddon(webgl);
   } catch (e) {
@@ -160,9 +162,9 @@ export async function newSession(shellId, opts) {
     scrollback: 8000,
     theme: TERM_THEME,
   });
-  const fit = new FitAddon.FitAddon();
+  const fit = new FitAddon();
   term.loadAddon(fit);
-  term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => window.api.openExternal(uri)));
+  term.loadAddon(new WebLinksAddon((e, uri) => window.api.openExternal(uri)));
   handleOsc52(term);
   term.open(paneEl);
   loadWebgl(term);

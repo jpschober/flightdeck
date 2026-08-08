@@ -288,4 +288,9 @@ module.exports = {
     other: 'La salida del terminal escribió {count} caracteres en el portapapeles',
   },
   'osc52.off': 'La salida del terminal quiso escribir en el portapapeles – desactivado en el menú',
+  // --- actualización ---
+  'update.ready.title': 'Actualización lista',
+  'update.ready.detail': 'Se ha descargado la versión {version}. Se instalará al reiniciar.',
+  'update.restart': 'Reiniciar ahora',
+  'update.later': 'Más tarde',
 };

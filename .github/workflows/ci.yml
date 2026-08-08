@@ -33,6 +33,10 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
+      # The bundle is where a renderer import that resolves in the editor but
+      # not in the build shows up. It needs Vite, not the Electron binary, so
+      # it runs under the skipped download above.
+      - run: npm run build
 
   audit:
     name: audit
