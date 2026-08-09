@@ -6,10 +6,17 @@ module.exports = {
   'header.sessions.aria': 'Sesiones de Claude',
   'header.new.title': 'Nueva sesión (shell predeterminada)',
   'header.new.aria': 'Nueva sesión',
+  'header.new.label': 'Nueva sesión',
   'header.shell.title': 'Elegir shell',
   'header.language.title': 'Idioma',
 
   'header.more': 'Más acciones',
+
+  // --- barra de título: todo el conjunto en una línea ---
+  'deck.inTheAir': 'En vuelo',
+  'deck.waiting': { one: '{count} te espera', other: '{count} te esperan' },
+  'deck.sessions': { one: '{count} sesión', other: '{count} sesiones' },
+  'deck.agents': { one: '{count} agente', other: '{count} agentes' },
 
   // --- keyboard ---
   'key.ctrl': 'Ctrl',
@@ -23,7 +30,6 @@ module.exports = {
   'tabs.history': 'Historial',
   'tabs.dbschema': 'Esquema BD',
   'tabs.notes': 'Notas',
-  'tabs.usage': 'Uso',
   'panel.enlarge': 'Ampliar el panel',
   'panel.shrink': 'Reducir el panel (Esc)',
 
@@ -39,6 +45,7 @@ module.exports = {
   'session.state.idle': 'Esperando entrada',
   'session.state.unknown': 'Sin estado disponible: este intérprete no tiene integración',
   'session.agents': { one: '{count} agente trabajando', other: '{count} agentes trabajando' },
+  'session.agents.more': { one: '+{count} más', other: '+{count} más' },
 
   // --- git panel ---
   'git.heading.pr': 'Pull request',
@@ -191,12 +198,12 @@ module.exports = {
   'usage.reset': 'Reinicio {when} · {until}',
   'usage.window.5h': 'Ventana de 5 horas',
   'usage.window.7d': 'Ventana de 7 días',
-  'usage.window.7dOpus': '7 días · Opus',
   'usage.noLimits': 'No se ha informado de ningún límite.',
   'usage.asOf': 'A las {time}',
   'usage.stale': 'desactualizado',
   'usage.refresh': 'Actualizar ahora',
   'usage.refresh.aria': 'Actualizar',
+  'usage.close': 'Cerrar',
   'usage.legend': 'La marca en la barra indica cuánto debería haberse consumido a estas alturas si el cupo tiene que durar de forma uniforme durante toda la ventana.',
   'usage.source': 'Las cifras provienen de tu suscripción a Claude (el mismo estado que {usage}).',
 

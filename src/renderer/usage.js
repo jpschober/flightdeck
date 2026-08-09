@@ -6,11 +6,57 @@
 import { $, escapeHtml } from './dom.js';
 import { logWarn } from './log.js';
 import { t, locale, onLocaleChange } from './i18n.js';
-import { onPanelTab } from './panel.js';
+import { makeOverlay } from './overlays.js';
 
 const usageContentEl = $('#usage-content');
-const dotUsageEl = $('#dot-usage');
+const usagePopoverEl = $('#usage-popover');
+const limitBarEl = $('#limit-bar');
+const lbLabelEl = $('#lb-label');
+const lbValueEl = $('#lb-value');
+const lbFillEl = $('#lb-fill');
+const lbMarkEl = $('#lb-mark');
 let usageTimer = null;
+
+// The popover hangs off the limit bar rather than sitting in the panel: it is
+// wider than the panel, and the panel clips what sticks out of it.
+const usageOverlay = makeOverlay(usagePopoverEl, null, {
+  backdrop: false,
+  onClose() {
+    limitBarEl.classList.remove('open');
+    limitBarEl.setAttribute('aria-expanded', 'false');
+  },
+});
+
+function placeUsagePopover() {
+  const bar = limitBarEl.getBoundingClientRect();
+  usagePopoverEl.style.bottom = (window.innerHeight - bar.top + 9) + 'px';
+  usagePopoverEl.style.right = Math.max(8, window.innerWidth - bar.right + 1) + 'px';
+}
+
+export function closeUsagePopover() {
+  if (usageOverlay.isOpen()) usageOverlay.close();
+}
+
+function openUsagePopover() {
+  usageOverlay.open();
+  placeUsagePopover();
+  limitBarEl.classList.add('open');
+  limitBarEl.setAttribute('aria-expanded', 'true');
+  // The numbers are two minutes old at worst; opening the panel is the moment
+  // someone actually wants them current.
+  loadUsage().catch((e) => logWarn('usage: refresh on open failed', { err: e }));
+}
+
+limitBarEl.addEventListener('click', () => {
+  if (usageOverlay.isOpen()) closeUsagePopover();
+  else openUsagePopover();
+});
+document.addEventListener('click', (e) => {
+  if (!usageOverlay.isOpen()) return;
+  if (e.target.closest('#usage-popover') || e.target.closest('#limit-bar')) return;
+  closeUsagePopover();
+});
+window.addEventListener('resize', () => { if (usageOverlay.isOpen()) placeUsagePopover(); });
 
 function fmtPct(n) {
   if (typeof n !== 'number') return '–';
@@ -84,38 +130,66 @@ function renderLimit(title, limit, opts = {}) {
     </section>`;
 }
 
-// The worst status wins - the dot on the tab should show the tightest limit
+// The worst status wins - the bar should show the tightest limit
 const SEVERITY = { unknown: 0, early: 0, ok: 1, warn: 2, over: 3 };
 
-// Every window the endpoint delivers counts, including the ones that used to be
-// left out of this (seven days Sonnet) and any that come later. A limit that
-// bites stops work, whichever window it sits in - a dot that stays green while
-// one of them is exhausted would be showing the wrong thing.
-function worstStatus(data) {
-  let worst = 'unknown';
+// Both windows count. A limit that bites stops work, whichever of the two it
+// sits in - a bar that stays green while one of them is exhausted would be
+// showing the wrong thing.
+function tightestLimit(data) {
+  let worst = null;
   for (const l of data.limits || []) {
-    if (l && SEVERITY[l.status] > SEVERITY[worst]) worst = l.status;
+    if (!l) continue;
+    if (!worst) { worst = l; continue; }
+    const bySeverity = SEVERITY[l.status] - SEVERITY[worst.status];
+    if (bySeverity > 0) { worst = l; continue; }
+    // Same severity: the one furthest past its proportional share
+    if (bySeverity === 0 && overshoot(l) > overshoot(worst)) worst = l;
   }
   return worst;
 }
 
-// The endpoint names its windows itself; these three have a translation. A
-// window that is not among them is shown under its raw key - it is visible,
-// and the name says where it came from.
+function overshoot(limit) {
+  const used = typeof limit.used === 'number' ? limit.used : 0;
+  const budget = typeof limit.budget === 'number' ? limit.budget : 0;
+  return used - budget;
+}
+
+// The main process passes on these two windows only, so every limit that gets
+// here has a translated name.
 const WINDOW_LABELS = {
   five_hour: 'usage.window.5h',
   seven_day: 'usage.window.7d',
-  seven_day_opus: 'usage.window.7dOpus',
 };
 
 function limitLabel(limit) {
-  const key = WINDOW_LABELS[limit.key];
-  return key ? t(key) : limit.key;
+  return t(WINDOW_LABELS[limit.key]);
+}
+
+// The bar at the foot of the panel: the one limit that binds first, as a
+// percentage against the share that would be proportional by now.
+function renderLimitBar(limit) {
+  limitBarEl.classList.toggle('hidden', !limit);
+  if (!limit) { closeUsagePopover(); return; }
+  const status = limit.status || 'unknown';
+  const used = typeof limit.used === 'number' ? limit.used : 0;
+  const budget = typeof limit.budget === 'number' ? limit.budget : null;
+  // Only show the target mark where it says something (not at the window edge)
+  const showMark = budget !== null && budget > 1 && budget < 99;
+
+  limitBarEl.classList.remove('ok', 'warn', 'over', 'early', 'unknown');
+  limitBarEl.classList.add(status);
+  lbLabelEl.textContent = limitLabel(limit);
+  lbValueEl.textContent = showMark ? `${fmtPct(used)} / ${fmtPct(budget)}` : fmtPct(used);
+  lbFillEl.style.width = Math.min(used, 100) + '%';
+  lbMarkEl.classList.toggle('hidden', !showMark);
+  if (showMark) lbMarkEl.style.left = budget + '%';
+  limitBarEl.title = t('usage.status.' + status);
 }
 
 export async function loadUsage(force = false) {
-  // Deliberately without a visibility check: the dot on the tab should be right
-  // even when the tab is closed. Rendering into a hidden page costs nothing.
+  // Deliberately without a visibility check: the bar at the foot of the panel
+  // should be right even while the popover is closed.
   const data = await window.api.getUsage(force);
 
   if (data.error && !data.stale) {
@@ -124,7 +198,7 @@ export async function loadUsage(force = false) {
       <div class="uz-error">${escapeHtml(data.error)}</div>
       <div class="muted" style="margin-top:8px">${escapeHtml(t('usage.source', { usage: '\u0000' }))
         .replace('\u0000', '<code>/usage</code>')}</div>`;
-    dotUsageEl.classList.add('hidden');
+    renderLimitBar(null);
     return;
   }
 
@@ -134,7 +208,7 @@ export async function loadUsage(force = false) {
 
   if (!parts.length) {
     usageContentEl.innerHTML = `<div class="muted">${escapeHtml(t('usage.noLimits'))}</div>`;
-    dotUsageEl.classList.add('hidden');
+    renderLimitBar(null);
     return;
   }
 
@@ -144,7 +218,10 @@ export async function loadUsage(force = false) {
   usageContentEl.innerHTML = `
     <div class="uz-top">
       ${data.plan ? `<span class="uz-plan">${escapeHtml(data.plan)}</span>` : '<span></span>'}
-      <button id="usage-refresh" class="icon-btn" title="${escapeHtml(t('usage.refresh'))}" aria-label="${escapeHtml(t('usage.refresh.aria'))}">↻</button>
+      <span class="uz-actions">
+        <button id="usage-refresh" class="icon-btn" title="${escapeHtml(t('usage.refresh'))}" aria-label="${escapeHtml(t('usage.refresh.aria'))}">↻</button>
+        <button id="usage-close" class="icon-btn" title="${escapeHtml(t('usage.close'))}" aria-label="${escapeHtml(t('usage.close'))}">✕</button>
+      </span>
       <span class="uz-stamp">${escapeHtml(t('usage.asOf', { time: stamp }))}${data.stale ? ' · ' + escapeHtml(t('usage.stale')) : ''}</span>
     </div>
     ${data.stale ? `<div class="uz-error">${escapeHtml(data.error)}</div>` : ''}
@@ -152,21 +229,19 @@ export async function loadUsage(force = false) {
     <div class="uz-legend">${escapeHtml(t('usage.legend'))}</div>`;
   usageContentEl.querySelector('#usage-refresh')
     .addEventListener('click', () => loadUsage(true));
+  usageContentEl.querySelector('#usage-close')
+    .addEventListener('click', () => closeUsagePopover());
 
-  const worst = worstStatus(data);
-  dotUsageEl.className = 'tab-dot ' + worst;
-  dotUsageEl.classList.toggle('hidden', worst !== 'warn' && worst !== 'over');
+  renderLimitBar(tightestLimit(data));
 }
-
-onPanelTab('usage', () => loadUsage());
 
 // The status words and the number formats come out of the dictionary and the
 // locale, so the card has to be built again.
 onLocaleChange(() => loadUsage(true)
   .catch((e) => logWarn('language: usage not reloaded', { err: e })));
 
-// Keep running in the background so the dot on the tab is right without having
-// to keep the tab open
+// Keep running in the background so the limit bar is right without anyone
+// having to open the popover
 export function startUsagePolling() {
   loadUsage(true).catch((e) => logWarn('usage: first load failed, offline or similar', { err: e }));
   clearInterval(usageTimer);

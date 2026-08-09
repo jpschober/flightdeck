@@ -246,7 +246,7 @@ function buildFileItem(item) {
   el.className = 'file-item';
   el.innerHTML = `
     <span class="file-status"></span>
-    <span class="file-path"></span>
+    <span class="file-path"><span class="fp-dir"></span><span class="fp-name"></span></span>
     <span class="file-diffstat"><span class="add"></span> <span class="del"></span></span>`;
   makeKeyActivatable(el);
   // Directories (git reports them untracked with a trailing slash) are not
@@ -255,6 +255,19 @@ function buildFileItem(item) {
     if (!el.classList.contains('is-dir')) openPreview(activeId, item.file.path, item.source);
   });
   return el;
+}
+
+/**
+ * Where the path stops being directory and starts being name. The separating
+ * slash goes with the name, so the shortened path reads `src/rend…/panel.js`
+ * and not `src/rend…panel.js`. Git reports an untracked directory with a
+ * trailing slash; that one ends the name instead of starting it, so `a/b/c/`
+ * splits like `a/b/c.js`.
+ */
+function dirNameCut(path) {
+  const end = path.endsWith('/') ? path.length - 1 : path.length;
+  const slash = path.lastIndexOf('/', end - 1);
+  return slash < 0 ? 0 : slash;
 }
 
 function updateFileItem(el, item) {
@@ -274,9 +287,11 @@ function updateFileItem(el, item) {
   const statusEl = el.querySelector('.file-status');
   statusEl.className = `file-status ${status}`;
   setText(statusEl, status);
-  // Between the marks the path reads from the left even though the box lays it
-  // out from the right (see .file-path in the stylesheet).
-  setText(el.querySelector('.file-path'), `\u200e${f.path}\u200e`);
+  // Directory and name go in separate boxes: the shortening then eats into the
+  // directory and leaves the name (see .file-path in the stylesheet).
+  const cut = dirNameCut(f.path);
+  setText(el.querySelector('.fp-dir'), f.path.slice(0, cut));
+  setText(el.querySelector('.fp-name'), f.path.slice(cut));
 
   const statEl = el.querySelector('.file-diffstat');
   statEl.classList.toggle('hidden', f.additions === undefined && f.deletions === undefined);

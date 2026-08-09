@@ -23,6 +23,9 @@ const PRELOAD = path.join(__dirname, '..', 'preload', 'preload.js');
 // Only Linux takes the window icon from here; on Windows and macOS it is the
 // one electron-builder puts into the executable.
 const ICON = path.join(__dirname, '..', '..', 'assets', 'icon.png');
+// The height of #titlebar in styles.css. The window controls are drawn into
+// that strip, so the two have to agree - hence the number lives here as well.
+const TITLEBAR_HEIGHT = 44;
 
 // The dev server compared by origin, not by string: the URL a reload asks for
 // carries the path and the trailing slash that ELECTRON_RENDERER_URL may not.
@@ -40,9 +43,24 @@ function createWindow() {
     height: 950,
     minWidth: 900,
     minHeight: 500,
-    backgroundColor: '#101116',
+    // Same as --bg in the renderer: what is painted before the first frame
+    backgroundColor: '#0d1220',
     title: 'Flightdeck',
     icon: ICON,
+    // The window manager's title bar cannot be coloured by the app, so it is
+    // dropped: the renderer's own 44px bar becomes the title bar. The minimise,
+    // maximise and close buttons stay the system's - Chromium draws them into
+    // the overlay, on the side the platform puts them, in our colours.
+    // #titlebar keeps its distance from them via env(titlebar-area-*).
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#121828',       // --bg-panel
+      symbolColor: '#8794b0', // --text-dim
+      height: TITLEBAR_HEIGHT,
+    },
+    // macOS puts its traffic lights inside the window instead: centre them in
+    // the same 44px.
+    trafficLightPosition: { x: 14, y: (TITLEBAR_HEIGHT - 16) / 2 },
     webPreferences: {
       preload: PRELOAD,
       contextIsolation: true,

@@ -14,8 +14,8 @@ import { loadTodosFor } from './notes.js';
 import { loadDbSchema, startDbPolling, clearDbTables } from './db-schema.js';
 import { startUsagePolling } from './usage.js';
 import { panelZoomed, setPanelZoom, fitActive } from './panel.js';
-import { gridCards, gridOpen, closeGrid, toggleGrid } from './grid.js';
-import { sizePulse, pulseWake } from './pulse.js';
+import { gridCards, gridOpen, closeGrid, toggleGrid, setGridCardState } from './grid.js';
+import { noteOutput, startDeckTick, updateDeckStatus } from './deck.js';
 
 // A file dropped on the window would otherwise navigate the document to it. The
 // main process cancels that navigation as well; here the drop is swallowed before
@@ -61,6 +61,7 @@ window.api.onData((id, data) => {
   // far enough to matter.
   const gridEntry = gridCards.get(id);
   if (gridEntry) gridEntry.term.write(data);
+  noteOutput(id); // feeds the activity meter on the session card
   const s = sessions.get(id);
   if (s) s.term.write(data, () => window.api.ackData(id, data.length));
   else window.api.ackData(id, data.length);
@@ -72,9 +73,7 @@ window.api.onState((id, state) => {
   const prev = s.state;
   s.state = state;
   updateSessionItem(s);
-  const gridEntry = gridCards.get(id);
-  if (gridEntry) gridEntry.statusEl.className = 'si-status ' + (s.exited ? 'exited' : state);
-  pulseWake();
+  setGridCardState(id, s.exited ? 'exited' : state);
   if (state === 'attention' && prev !== 'attention') {
     maybeNotify(s, t('notify.attention'));
   }
@@ -86,6 +85,9 @@ window.api.onExit((id) => {
   s.exited = true;
   s.term.write(`\r\n\x1b[90m${t('term.exited')}\x1b[0m\r\n`);
   updateSessionItem(s);
+  // Without this the grid card of a session that was waiting keeps its gold dot
+  // and border until the next state event - which for an exited PTY never comes.
+  setGridCardState(id, 'exited');
 });
 
 window.api.onInfo((info) => {
@@ -107,7 +109,6 @@ window.api.onInfo((info) => {
     state: info.state,
   });
   updateSessionItem(s);
-  pulseWake(); // the agent count feeds into the pulse
   if (rootChanged) {
     loadTodosFor(s); // different project -> load its notes
     if (info.id === activeId) {
@@ -131,8 +132,6 @@ function setupDivider(dividerEl, panelEl, growsRight) {
       const dx = ev.clientX - startX;
       panelEl.style.width = (growsRight ? startW + dx : startW - dx) + 'px';
       fitActive();
-      sizePulse();
-      pulseWake();
     };
     const onUp = () => {
       dividerEl.classList.remove('dragging');
@@ -146,7 +145,7 @@ function setupDivider(dividerEl, panelEl, growsRight) {
 setupDivider($('#divider-left'), $('#sidebar'), true);
 setupDivider($('#divider-right'), $('#context-panel'), false);
 
-window.addEventListener('resize', () => { fitActive(); sizePulse(); pulseWake(); });
+window.addEventListener('resize', () => { fitActive(); });
 
 // Keyboard shortcuts
 window.addEventListener('keydown', (e) => {
@@ -179,10 +178,10 @@ window.addEventListener('keydown', (e) => {
   // has to be corrected a moment later is worse than a menu that appears late.
   await loadOsc52Setting();
   buildMoreMenu();
-  sizePulse();
-  pulseWake();
+  updateDeckStatus();
   await buildShellMenu();
   await newSession(defaultShellId());
+  startDeckTick();
   startUsagePolling();
   startDbPolling();
 })();

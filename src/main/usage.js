@@ -41,14 +41,12 @@ const KEYCHAIN_RETRY_AFTER = 5 * 60 * 1000;
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-const UNITS = { hour: HOUR, day: DAY, week: 7 * DAY, month: 30 * DAY };
-const NUMBER_WORDS = {
-  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
-  nine: 9, ten: 10, eleven: 11, twelve: 12, fourteen: 14, twenty: 20, thirty: 30,
-};
-// Window length for a key that names none - long enough that a short window
-// mistaken for it looks harmless rather than alarming.
-const DEFAULT_WINDOW = 7 * DAY;
+
+// The two windows the panel shows, in the order it shows them, each with its
+// length. The endpoint carries more alongside them - per-model windows,
+// `extra_usage`, keys that appear and vanish without notice. Those have no
+// translated name, so they would land in the panel as a raw key.
+const WINDOWS = { five_hour: 5 * HOUR, seven_day: 7 * DAY };
 
 // Below this fraction of the window the projection is pure noise - a single
 // prompt in the first minute would otherwise yield "500 % projected".
@@ -250,42 +248,19 @@ async function fetchUsage(token) {
   }
 }
 
-// The key names its own window: `five_hour`, `seven_day`, `seven_day_opus`.
-// Reading the length out of the name instead of a table means a window the
-// endpoint adds tomorrow arrives with the right length, not with a guess.
-function windowFor(key) {
-  const match = /^(\d+|[a-z]+)_(hour|day|week|month)s?(?:_|$)/.exec(key);
-  const unit = match && UNITS[match[2]];
-  const count = match && (/^\d+$/.test(match[1]) ? Number(match[1]) : NUMBER_WORDS[match[1]]);
-  if (unit && count > 0) return count * unit;
-  log.debug('usage: window length not readable from the key, using the default', { key });
-  return DEFAULT_WINDOW;
-}
-
-// Keys already seen, so an unknown window is reported once instead of at every
-// poll.
-const announced = new Set();
-
-// Everything the endpoint delivers that looks like a limit window becomes an
-// entry - a new window shows up on its own instead of having to be added here
-// first. Order is by window length, ties by key: the display stays the same
-// from one call to the next regardless of the order the server sends.
+// Only the windows from WINDOWS become entries, in that order - what the
+// server sends beyond them, and in which order, does not reach the panel.
 function shape(json, plan) {
+  const source = json && typeof json === 'object' ? json : {};
   const limits = [];
-  for (const [key, raw] of Object.entries(json && typeof json === 'object' ? json : {})) {
+  for (const [key, windowMs] of Object.entries(WINDOWS)) {
+    const raw = source[key];
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-    // A window says how much of it is used up. Anything else the endpoint
-    // carries alongside stays out - without utilization the row would say
-    // nothing, and a related object put next to the windows tomorrow would
-    // land in the panel as an empty line.
+    // A window says how much of it is used up. Without utilization the row
+    // would carry a title and nothing else.
     if (typeof raw.utilization !== 'number') continue;
-    if (!announced.has(key)) {
-      announced.add(key);
-      log.info('usage: limit window from the endpoint', { key });
-    }
-    limits.push({ key, ...pace(raw, windowFor(key)) });
+    limits.push({ key, ...pace(raw, windowMs) });
   }
-  limits.sort((a, b) => a.windowMs - b.windowMs || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   return { plan, fetchedAt: Date.now(), limits };
 }
 
@@ -309,4 +284,4 @@ async function getUsage(force = false) {
   return data;
 }
 
-module.exports = { getUsage, pace, parseReset, shape, windowFor };
+module.exports = { getUsage, pace, parseReset, shape };

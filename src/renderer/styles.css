@@ -3,27 +3,37 @@
 @import '@xterm/xterm/css/xterm.css';
 
 :root {
-  --bg: #101116;
-  --bg-panel: #16181f;
-  --bg-panel-2: #1b1e27;
-  --bg-hover: #232734;
-  --bg-active: #2a2f40;
-  --border: #262a36;
-  --text: #d6dae3;
-  --text-dim: #9aa1b2;
-  --text-faint: #7f8697;
+  --bg: #0d1220;
+  --bg-panel: #121828;
+  --bg-panel-2: #161d2e;
+  --bg-hover: #1b2337;
+  --bg-active: #1f2942;
+  --border: #1e2740;
+  --text: #e6ecf7;
+  --text-dim: #8794b0;
+  --text-faint: #65718c;
   --speed: 130ms;
   --ease: cubic-bezier(0.2, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --accent: #4f8cff;
-  --accent-soft: rgba(79, 140, 255, 0.16);
-  --green: #4ec97a;
-  --red: #e05f6a;
-  --yellow: #d9a441;
-  --purple: #a07bf0;
-  --radius: 8px;
+  --accent: #7cc4f5;
+  --accent-soft: rgba(124, 196, 245, 0.16);
+  --green: #8fd9a0;
+  --red: #e8837c;
+  --yellow: #f0c86a;
+  --purple: #b9a6f2;
+  --radius: 12px;
   --mono: "Cascadia Code", "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
   --sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  /* The one gold in the window: a session waiting for an answer. Nothing else
+     may claim it, otherwise the eye stops finding it without looking. */
+  --attention: #f0c86a;
+  --attention-soft: rgba(240, 200, 106, 0.14);
+  /* Between --text and --text-dim: the subagent tasks are the second line of
+     the card, readable but not competing with the session name. */
+  --text-mid: #a6b2c9;
+  /* Cards without running work sink below --bg-panel-2 instead of being greyed
+     out - "nothing going on here" without making the name harder to read. */
+  --card-quiet: #151a29;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -39,8 +49,58 @@ html, body {
 
 #layout {
   display: flex;
-  height: 100vh;
+  height: calc(100vh - 44px);
 }
+
+/* ------------------------------------------------------------------ */
+/* Title bar                                                           */
+/* ------------------------------------------------------------------ */
+/* Spans all three columns: the sessions, the terminal and the panel are three
+   views of one deck, and what the pill says holds for all of them. */
+#titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  /* This bar *is* the window's title bar: dragging it moves the window. The
+     controls sit in it as an overlay, and the two env() values say where -
+     left on macOS, right elsewhere. Without a title bar overlay both fall back
+     to the full width and only the 16px remain. */
+  -webkit-app-region: drag;
+  padding-left: max(16px, env(titlebar-area-x, 0px));
+  padding-right: max(16px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+}
+/* Everything clickable has to be lifted out of the drag region again, the open
+   menus included - inside it a click reaches the window manager, not the page. */
+#titlebar button,
+#titlebar .menu { -webkit-app-region: no-drag; }
+
+.app-name {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--text);
+}
+
+/* The whole deck in one sentence: how much is working, and whether anything is
+   waiting for you. Empty when there is nothing to say. */
+.deck-pill {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: #182034;
+  border-radius: 20px;
+  padding: 3px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.deck-pill:empty { display: none; }
+/* One session waiting outranks everything else the pill counts. */
+.deck-pill.attention { color: var(--attention); background: var(--attention-soft); }
 
 .hidden { display: none !important; }
 .muted { color: var(--text-faint); font-size: 12px; }
@@ -69,36 +129,31 @@ button:active { transform: translateY(0.5px); }
 }
 
 #sidebar-header {
-  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 12px 14px 10px;
 }
 
-/* Pulse: sits behind the wordmark and buttons and catches no clicks */
-#pulse-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.app-name {
-  position: relative;
-  z-index: 1;
+.sidebar-caption {
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.4px;
-  color: var(--text-dim);
-  font-size: 12px;
+  letter-spacing: 0.7px;
   text-transform: uppercase;
-  /* Keeps the wordmark readable while the curve runs behind it */
-  text-shadow: 0 0 6px var(--bg-panel), 0 0 3px var(--bg-panel);
+  color: var(--text-faint);
 }
+.deck-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(124, 196, 245, 0.13);
+  border-radius: 20px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+.deck-count:empty { display: none; }
 
-.header-actions { position: relative; z-index: 1; display: flex; align-items: center; gap: 6px; }
+.header-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
 .icon-btn {
   background: var(--bg-panel-2);
@@ -145,27 +200,28 @@ button:active { transform: translateY(0.5px); }
 .menu .menu-item.active { color: var(--accent); font-weight: 600; }
 .menu .menu-item.active .mi-icon { color: var(--accent); }
 
+/* The one filled button in the window: starting a session is what the title bar
+   is for, everything else up there is a report. */
 #btn-new, #btn-new-menu {
-  background: var(--bg-panel-2);
-  color: var(--text);
-  border: 1px solid var(--border);
+  background: var(--accent);
+  color: var(--bg);
+  border: 1px solid var(--accent);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 12px;
+  font-weight: 600;
   line-height: 1;
-  padding: 5px 9px;
+  padding: 6px 12px;
 }
-#btn-new { border-radius: 6px 0 0 6px; }
+#btn-new { border-radius: 8px 0 0 8px; }
 #btn-new-menu {
   font-size: 10px;
-  padding: 5px 6px;
-  border-radius: 0 6px 6px 0;
+  padding: 6px 8px;
+  border-radius: 0 8px 8px 0;
   margin-left: -1px;
-  color: var(--text-dim);
+  border-left-color: rgba(13, 18, 32, 0.25);
 }
 #btn-new:hover, #btn-new-menu:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent);
-  color: var(--text);
+  filter: brightness(1.12);
   position: relative;
   z-index: 1;
 }
@@ -201,29 +257,63 @@ button:active { transform: translateY(0.5px); }
 }
 .menu button:hover { background: var(--bg-hover); }
 
-#session-list { overflow-y: auto; flex: 1; padding: 8px 8px; }
+#session-list { overflow-y: auto; flex: 1; padding: 0 12px 12px; }
 
+/* A card, not a row: the sessions carry their own contents now - branch,
+   activity, and one line per running subagent. */
 .session-item {
   position: relative;
-  padding: 8px 26px 8px 10px;
+  padding: 12px 13px;
   border-radius: var(--radius);
+  background: var(--bg-panel-2);
+  border: 1.5px solid transparent;
+  margin-bottom: 8px;
   cursor: pointer;
-  margin-bottom: 4px;
-  border: 1px solid transparent;
   transition: background var(--speed) var(--ease), border-color var(--speed) var(--ease);
 }
+/* Nothing running here: the card sinks below the working ones. Stated before
+   hover and selection, both of which say something newer about the same card. */
+.session-item.idle,
+.session-item.unknown { background: var(--card-quiet); }
+.session-item.unknown { opacity: 0.5; }
+.session-item.exited { opacity: 0.55; }
+
 .session-item:hover { background: var(--bg-hover); }
 .session-item.active {
   background: var(--bg-active);
   border-color: var(--accent);
 }
-.session-item.exited { opacity: 0.55; }
+/* An 8px dot is too small to register peripherally, so the whole card carries
+   the waiting state. */
+.session-item.attention {
+  background: var(--bg-hover);
+  border-color: var(--attention);
+}
+/* Active AND waiting: gold wins, it is the more urgent statement. */
+.session-item.active.attention { border-color: var(--attention); }
 
 .si-top {
+  position: relative;
+  padding-left: 11px;
+  /* Kept clear for the close button, which appears on hover and would otherwise
+     land on top of the agent count. */
+  padding-right: 16px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 9px;
   min-width: 0;
+}
+/* Colour stripe per session: recognise a session among six without reading the
+   name. The colour comes from terminal.js and is stable across restarts. */
+.si-top::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 1px;
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--session-color, var(--text-faint));
 }
 .si-status {
   flex-shrink: 0;
@@ -236,8 +326,10 @@ button:active { transform: translateY(0.5px); }
   background: transparent;
   border: 1.5px solid var(--green);
 }
+/* Ice blue, not gold: gold is reserved for "waiting for you". The blink alone
+   already separates "working" from every other cool state. */
 .si-status.busy {
-  background: var(--yellow);
+  background: var(--accent);
   animation: busy-pulse 1.1s ease-in-out infinite;
 }
 .si-status.exited {
@@ -252,8 +344,8 @@ button:active { transform: translateY(0.5px); }
 /* Calm, not pulsing: "waiting for you" is a state, not a process -
    an animation would read as if something were running right now. */
 .si-status.attention {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.18);
+  background: var(--attention);
+  box-shadow: 0 0 0 3px var(--attention-soft);
 }
 @keyframes busy-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -262,7 +354,7 @@ button:active { transform: translateY(0.5px); }
 
 .si-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: 14px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -272,7 +364,7 @@ button:active { transform: translateY(0.5px); }
   font-size: 10px;
   font-weight: 600;
   color: var(--purple);
-  background: rgba(160, 123, 240, 0.14);
+  background: rgba(185, 166, 242, 0.14);
   border-radius: 4px;
   padding: 1px 6px;
   max-width: 90px;
@@ -289,50 +381,104 @@ button:active { transform: translateY(0.5px); }
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--yellow);
-  background: rgba(217, 164, 65, 0.14);
-  border-radius: 4px;
+  /* Ice blue, not gold: the chip sits in the same row as the status dot, and
+     gold there would compete with the one signal that means "your turn". */
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 5px;
   padding: 1px 6px;
   white-space: nowrap;
 }
+/* One line under the name: the branch if there is one, otherwise the directory.
+   Both answer the same question - which working copy is this? - and two answers
+   to it would push the subagents out of view. */
 .si-bottom {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 3px;
+  /* Same indent as .si-top, otherwise it starts 11px further left than the
+     title above it. */
+  padding-left: 11px;
+  margin-top: 6px;
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--text-dim);
   min-width: 0;
   overflow: hidden;
-}
-.si-cwd {
-  flex: 1 1 auto;
-  min-width: 0;
   white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.si-cwd, .si-branch {
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: var(--mono);
-}
-/* Worktree branches get long (feature/18-onboarding-start-presets) and used to
-   shoot past the frame of the tile. Now the branch truncates itself, but keeps
-   priority over the path. */
-.si-branch {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 60%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--green);
-  font-family: var(--mono);
-  font-size: 11px;
 }
 .si-branch::before { content: "⎇ "; }
 
+/* Activity of the last ten seconds. Answers the one question a spinner cannot:
+   is this session moving, or has it hung? Only shown while it is working. */
+.si-meter {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  margin-top: 9px;
+  display: none;
+}
+.session-item.busy .si-meter { display: block; }
+.si-meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 400ms var(--ease-out);
+}
+
+/* One line per running subagent: what it is doing, and for how long. */
+.si-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+}
+.si-agent-list:empty { display: none; }
+.si-agent { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.si-agent::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: none;
+  background: var(--accent);
+  transform: rotate(45deg);
+}
+.si-agent-task {
+  font-size: 11px;
+  color: var(--text-mid);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.si-agent-time {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+/* Running far longer than a subagent normally does. Red says "look at this
+   one", not "it failed" - nothing here can tell the difference. */
+.si-agent.overdue::before { background: var(--red); }
+.si-agent.overdue .si-agent-time { color: var(--red); }
+/* An agent that has just finished: held for a moment so short runs are seen at
+   all, and dimmed so it is not mistaken for one still working. */
+.si-agent.done { opacity: 0.45; }
+.si-agent.done::before { background: var(--text-faint); }
+.si-agent-more {
+  padding-left: 13px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
 .si-close {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 8px;
+  right: 8px;
   background: none;
   border: none;
   color: var(--text-faint);
@@ -343,7 +489,7 @@ button:active { transform: translateY(0.5px); }
   visibility: hidden;
 }
 .session-item:hover .si-close { visibility: visible; }
-.si-close:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
+.si-close:hover { color: var(--red); background: rgba(232, 131, 124, 0.12); }
 
 /* ------------------------------------------------------------------ */
 /* Terminal area                                                       */
@@ -405,6 +551,8 @@ button:active { transform: translateY(0.5px); }
   transition: border-color var(--speed) var(--ease);
 }
 .grid-card:hover { border-color: var(--accent); }
+/* Same statement as .session-item.attention, and it outranks the hover border */
+.grid-card.attention, .grid-card.attention:hover { border-color: var(--attention); }
 .grid-card-header {
   display: flex;
   align-items: center;
@@ -489,7 +637,7 @@ button:active { transform: translateY(0.5px); }
   padding: 4px 8px;
   border-radius: 4px;
 }
-#sessions-close:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
+#sessions-close:hover { color: var(--red); background: rgba(232, 131, 124, 0.12); }
 
 #sessions-list { flex: 1; overflow-y: auto; padding: 8px 10px; }
 
@@ -546,18 +694,26 @@ button:active { transform: translateY(0.5px); }
   padding: 4px 9px;
 }
 .cs-actions button:hover { border-color: var(--accent); background: var(--bg-hover); }
-.cs-actions .cs-resume { background: var(--accent); border-color: var(--accent); color: #fff; }
+.cs-actions .cs-resume { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 .cs-actions .cs-resume:hover { background: var(--accent); filter: brightness(1.1); }
 
 /* ------------------------------------------------------------------ */
 /* Dividers                                                            */
 /* ------------------------------------------------------------------ */
 .divider {
-  width: 4px;
+  position: relative;
+  width: 1px;
   cursor: col-resize;
   background: var(--border);
   flex-shrink: 0;
+  z-index: 5;
   transition: background var(--speed) var(--ease);
+}
+/* The grab zone stays wider than the 1px line, but outside the layout. */
+.divider::after {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
 }
 .divider:hover, .divider.dragging { background: var(--accent); }
 
@@ -587,6 +743,8 @@ button:active { transform: translateY(0.5px); }
   scrollbar-width: none;
 }
 #panel-tabs::-webkit-scrollbar { display: none; }
+/* Fixed height instead of padding: the pill matches the new-session button in
+   the title bar, and a tab with a badge stays as tall as one without. */
 .panel-tab {
   flex-shrink: 0;
   display: flex;
@@ -594,16 +752,30 @@ button:active { transform: translateY(0.5px); }
   gap: 6px;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 6px 6px 0 0;
+  border-bottom: 0;
+  border-radius: 7px;
   color: var(--text-dim);
   font-size: 12px;
   font-weight: 600;
-  padding: 7px 10px 8px;
+  height: 26px;
+  padding: 0 10px;
   cursor: pointer;
 }
 .panel-tab:hover { color: var(--text); background: var(--bg-hover); }
-.panel-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+/* Filled pill instead of an underline: which tab is open must be readable at a
+   glance, not by following a 2px line. */
+.panel-tab.active {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+/* The badge inside the active tab steps back, otherwise the number competes
+   with the label - and on the light pill it needs the dark ink too. */
+.panel-tab.active .tab-badge {
+  opacity: 0.7;
+  color: inherit;
+  background: rgba(13, 18, 32, 0.18);
+}
 
 /* Enlarge: sits to the right of the tabs and stays there when enlarged too */
 /* Stays put on the right while the bar scrolls instead of wandering out */
@@ -615,6 +787,9 @@ button:active { transform: translateY(0.5px); }
   margin-bottom: 6px;
   flex-shrink: 0;
   background: var(--bg-panel);
+  /* Covers the tab scrolling underneath it. With the filled pill that overlap
+     is no longer a cut-off label but a dark box on a light surface. */
+  box-shadow: -6px 0 6px -2px var(--bg-panel);
 }
 
 /* Enlarged panel: the same pattern as #preview-overlay and #dbdiff-overlay.
@@ -671,7 +846,7 @@ button:active { transform: translateY(0.5px); }
   align-items: baseline;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
-  background: rgba(79, 140, 255, 0.08);
+  background: rgba(124, 196, 245, 0.08);
   font-size: 12px;
 }
 #wt-banner .wt-icon { color: var(--accent); grid-row: span 2; font-size: 14px; }
@@ -733,10 +908,10 @@ button:active { transform: translateY(0.5px); }
   padding: 2px 7px;
   text-transform: uppercase;
 }
-.pr-state.open { color: var(--green); background: rgba(78, 201, 122, 0.14); }
-.pr-state.draft { color: var(--text-dim); background: rgba(139, 145, 160, 0.14); }
-.pr-state.merged { color: var(--purple); background: rgba(160, 123, 240, 0.14); }
-.pr-state.closed { color: var(--red); background: rgba(224, 95, 106, 0.14); }
+.pr-state.open { color: var(--green); background: rgba(143, 217, 160, 0.14); }
+.pr-state.draft { color: var(--text-dim); background: rgba(135, 148, 176, 0.14); }
+.pr-state.merged { color: var(--purple); background: rgba(185, 166, 242, 0.14); }
+.pr-state.closed { color: var(--red); background: rgba(232, 131, 124, 0.14); }
 .pr-branches {
   font-family: var(--mono);
   font-size: 10px;
@@ -759,9 +934,9 @@ button:active { transform: translateY(0.5px); }
   border-radius: 4px;
   padding: 1px 6px;
 }
-.check-chip.success { color: var(--green); background: rgba(78, 201, 122, 0.14); }
-.check-chip.failure { color: var(--red); background: rgba(224, 95, 106, 0.14); }
-.check-chip.pending { color: var(--yellow); background: rgba(217, 164, 65, 0.14); }
+.check-chip.success { color: var(--green); background: rgba(143, 217, 160, 0.14); }
+.check-chip.failure { color: var(--red); background: rgba(232, 131, 124, 0.14); }
+.check-chip.pending { color: var(--yellow); background: rgba(240, 200, 106, 0.14); }
 
 .pr-details { margin-top: 10px; }
 .pr-details summary {
@@ -845,31 +1020,133 @@ button:active { transform: translateY(0.5px); }
 #page-report { overflow-y: auto; padding: 12px; }
 
 /* --- Usage limits -------------------------------------------------------- */
-#page-usage { overflow-y: auto; padding: 12px; }
+/* The limit sits at the foot of the panel, always in view: it is the one number
+   that decides whether the next hour of work is possible at all. The breakdown
+   behind it is read rarely, so it opens as a popover instead of costing a tab. */
+#limit-bar {
+  flex-shrink: 0;
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 15px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+#limit-bar:hover { background: var(--bg-panel-2); }
+/* While the popover is open the bar is its anchor, and says so. */
+#limit-bar.open { background: var(--bg-panel-2); }
+.lb-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-faint);
+}
+#limit-bar.open .lb-row { font-weight: 600; }
+#limit-bar.open.ok .lb-row { color: var(--green); }
+#limit-bar.open.warn .lb-row { color: var(--yellow); }
+#limit-bar.open.over .lb-row { color: var(--red); }
+#lb-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lb-value { flex: none; font-variant-numeric: tabular-nums; }
+.lb-track {
+  position: relative;
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-panel-2);
+}
+#limit-bar.open .lb-track { background: var(--bg); }
+#lb-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--text-faint);
+  transition: width 400ms var(--ease-out);
+}
+#limit-bar.ok #lb-fill { background: var(--green); }
+#limit-bar.warn #lb-fill { background: var(--yellow); }
+#limit-bar.over #lb-fill { background: var(--red); }
+/* What should have been used by now if the quota is to last the window */
+#lb-mark {
+  position: absolute;
+  top: -2px;
+  width: 1px;
+  height: 9px;
+  background: var(--text-dim);
+}
+
+#usage-popover {
+  position: fixed;
+  z-index: 60;
+  width: 407px;
+  max-width: calc(100vw - 28px);
+  background: #111726;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+  padding: 16px 16px 14px;
+  animation: pop-in 140ms var(--ease-out);
+}
+/* Points at the bar it belongs to - without it the panel would be a second
+   window floating in front of the first. */
+#usage-popover::after {
+  content: "";
+  position: absolute;
+  right: 22px;
+  bottom: -7px;
+  width: 13px;
+  height: 13px;
+  background: #111726;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+/* Scrolls inside the popover, not the popover itself - the arrow hangs outside
+   the box and a scroll container would clip it away. */
+#usage-content {
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+}
 
 .uz-top {
   display: grid;
   grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 4px 8px;
-  margin-bottom: 12px;
+  align-items: start;
+  gap: 5px 10px;
+  margin-bottom: 14px;
 }
 .uz-plan {
-  font-size: 11px;
+  font-size: 11.5px;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--text-dim);
-  font-weight: 600;
+  letter-spacing: 1.1px;
+  color: var(--text);
+  font-weight: 700;
 }
-.uz-stamp { grid-column: 1 / -1; font-size: 11px; color: var(--text-faint); }
+.uz-actions { grid-row: span 2; display: flex; gap: 6px; }
+.uz-actions .icon-btn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 9px;
+  font-size: 13px;
+}
+.uz-stamp { font-size: 12px; color: var(--text-dim); }
 
 .uz-card {
-  padding: 11px 12px;
-  margin-bottom: 10px;
+  padding: 13px 14px;
+  margin-bottom: 11px;
   border: 1px solid var(--border);
-  border-left-width: 2px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.015);
+  border-left-width: 3px;
+  border-radius: 11px;
+  background: #151c2c;
 }
 .uz-card.ok { border-left-color: var(--green); }
 .uz-card.warn { border-left-color: var(--yellow); }
@@ -900,14 +1177,14 @@ button:active { transform: translateY(0.5px); }
 /* Bar: fill level = actual, vertical line = target as of now */
 .uz-bar {
   position: relative;
-  height: 9px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.07);
+  height: 7px;
+  border-radius: 4px;
+  background: var(--border);
   overflow: hidden;
 }
 .uz-fill {
   height: 100%;
-  border-radius: 5px 0 0 5px;
+  border-radius: 4px 0 0 4px;
   background: var(--text-faint);
   transition: width 0.4s ease;
 }
@@ -965,7 +1242,7 @@ button:active { transform: translateY(0.5px); }
   padding: 8px 10px;
   margin-bottom: 10px;
   border-left: 2px solid var(--yellow);
-  background: rgba(217, 164, 65, 0.09);
+  background: rgba(240, 200, 106, 0.09);
   font-size: 11px;
   color: var(--text-dim);
   line-height: 1.5;
@@ -978,17 +1255,6 @@ button:active { transform: translateY(0.5px); }
   line-height: 1.5;
 }
 
-/* Dot on the tab: only visible for amber/red */
-.tab-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-left: 5px;
-  border-radius: 50%;
-  vertical-align: middle;
-}
-.tab-dot.warn { background: var(--yellow); }
-.tab-dot.over { background: var(--red); }
 .rep-edits { flex-shrink: 0; color: var(--text-faint); font-size: 10px; }
 
 #file-list { min-height: 0; }
@@ -1041,13 +1307,19 @@ button:active { transform: translateY(0.5px); }
   color: var(--text-faint);
 }
 .file-item.is-dir:hover { background: none; }
+/* Too little room: the directory gives way and the file name stays whole -
+   `src/rend…/git-panel.js`, not `…/git-panel.js`. Only where the name alone is
+   already too long does it lose its own end. */
 .file-path {
+  display: flex;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;        /* the file name (the end) stays visible */
-  text-align: left;
 }
+/* The two shrink factors are worlds apart on purpose: flexbox distributes the
+   missing width over both boxes at once, so anything less would nibble a
+   character off the name while the directory still has room to give. */
+.fp-dir { flex: 0 99999 auto; overflow: hidden; text-overflow: ellipsis; }
+.fp-name { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
 .file-diffstat { flex-shrink: 0; font-size: 10px; }
 .file-diffstat .add { color: var(--green); }
 .file-diffstat .del { color: var(--red); }
@@ -1147,7 +1419,7 @@ button:active { transform: translateY(0.5px); }
   border-radius: 4px;
 }
 .todo-item:hover .todo-del { visibility: visible; }
-.todo-del:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
+.todo-del:hover { color: var(--red); background: rgba(232, 131, 124, 0.12); }
 
 #todo-input {
   margin-top: 8px;
@@ -1214,7 +1486,7 @@ button:active { transform: translateY(0.5px); }
   padding: 2px 6px;
   border-radius: 4px;
 }
-#preview-close:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
+#preview-close:hover { color: var(--red); background: rgba(232, 131, 124, 0.12); }
 #preview-content {
   flex: 1;
   overflow: auto;
@@ -1223,6 +1495,19 @@ button:active { transform: translateY(0.5px); }
   font-size: 12px;
   line-height: 1.5;
   tab-size: 4;
+}
+/* The diff view (@pierre/diffs) is virtualized and scrolls itself, so it takes
+   the container as it is - the padding of the other modes would be counted as
+   content height and shear the scroll position. Its own DOM sits in a shadow
+   root; only these custom properties reach in, and `color-scheme` is what makes
+   its `light-dark()` colours resolve to the dark side. */
+#preview-content.is-diff {
+  padding: 0;
+  color-scheme: dark;
+  --diffs-font-family: var(--mono);
+  --diffs-font-size: 12px;
+  --diffs-line-height: 18px;
+  --diffs-dark-bg: var(--bg-panel);
 }
 /* The raw and diff views keep the file's line breaks, the rendered markdown
    view wraps like body text. */
@@ -1272,10 +1557,6 @@ button:active { transform: translateY(0.5px); }
   color: var(--text);
   font-weight: 600;
 }
-#preview-content .dl-add { color: var(--green); background: rgba(78, 201, 122, 0.08); display: inline-block; width: 100%; padding: 0 6px; margin: 0 -6px; border-radius: 3px; }
-#preview-content .dl-del { color: var(--red); background: rgba(224, 95, 106, 0.08); display: inline-block; width: 100%; padding: 0 6px; margin: 0 -6px; border-radius: 3px; }
-#preview-content .dl-hunk { color: var(--accent); }
-#preview-content .dl-meta { color: var(--text-faint); }
 
 /* ------------------------------------------------------------------ */
 /* Meta popover (title/label)                                          */
@@ -1322,7 +1603,7 @@ button:active { transform: translateY(0.5px); }
   color: var(--text);
 }
 .popover-actions button:hover { background: var(--bg-hover); }
-#meta-save { background: var(--accent); border-color: var(--accent); color: #fff; }
+#meta-save { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 #meta-save:hover { background: var(--accent); filter: brightness(1.1); }
 
 /* ------------------------------------------------------------------ */
@@ -1406,8 +1687,8 @@ button:active { transform: translateY(0.5px); }
 .db-signal.ok { color: var(--text-faint); }
 .db-signal.ok .db-signal-icon { color: var(--green); }
 .db-signal.alert {
-  border-color: rgba(217, 164, 65, 0.45);
-  background: rgba(217, 164, 65, 0.09);
+  border-color: rgba(240, 200, 106, 0.45);
+  background: rgba(240, 200, 106, 0.09);
   color: var(--text);
 }
 .db-signal.alert .db-signal-icon { color: var(--yellow); font-size: 13px; }
@@ -1418,7 +1699,7 @@ button:active { transform: translateY(0.5px); }
   background: var(--accent);
   border: none;
   border-radius: 5px;
-  color: #fff;
+  color: var(--bg);
   font-family: inherit;
   font-size: 11px;
   font-weight: 600;
@@ -1440,7 +1721,7 @@ button:active { transform: translateY(0.5px); }
 }
 #db-search:focus { border-color: var(--accent); outline: none; }
 
-.tab-badge.alert { background: rgba(217, 164, 65, 0.18); color: var(--yellow); }
+.tab-badge.alert { background: rgba(240, 200, 106, 0.18); color: var(--yellow); }
 
 /* Enums */
 .db-enums { margin-bottom: 8px; font-size: 11px; }
@@ -1462,10 +1743,10 @@ button:active { transform: translateY(0.5px); }
   border-radius: 3px;
   padding: 0 4px;
 }
-.db-enum-values code.added { color: var(--green); background: rgba(78, 201, 122, 0.16); }
+.db-enum-values code.added { color: var(--green); background: rgba(143, 217, 160, 0.16); }
 .db-enum-values code.removed {
   color: var(--red);
-  background: rgba(224, 95, 106, 0.14);
+  background: rgba(232, 131, 124, 0.14);
   text-decoration: line-through;
 }
 
@@ -1477,9 +1758,9 @@ button:active { transform: translateY(0.5px); }
   background: rgba(255, 255, 255, 0.014);
   overflow: hidden;
 }
-.db-table.added { border-color: rgba(78, 201, 122, 0.45); }
-.db-table.changed { border-color: rgba(217, 164, 65, 0.45); }
-.db-table.removed, .db-table.removed-table { border-color: rgba(224, 95, 106, 0.4); }
+.db-table.added { border-color: rgba(143, 217, 160, 0.45); }
+.db-table.changed { border-color: rgba(240, 200, 106, 0.45); }
+.db-table.removed, .db-table.removed-table { border-color: rgba(232, 131, 124, 0.4); }
 .db-table > summary {
   display: flex;
   align-items: center;
@@ -1514,7 +1795,7 @@ button:active { transform: translateY(0.5px); }
   border-radius: 3px;
   padding: 1px 4px;
 }
-.db-chip.changed { color: var(--yellow); background: rgba(217, 164, 65, 0.16); }
+.db-chip.changed { color: var(--yellow); background: rgba(240, 200, 106, 0.16); }
 .db-chip.external {
   color: var(--text-faint);
   background: var(--bg-hover);
@@ -1526,12 +1807,12 @@ button:active { transform: translateY(0.5px); }
   font-size: 9px;
   font-weight: 700;
   color: var(--purple);
-  background: rgba(160, 123, 240, 0.16);
+  background: rgba(185, 166, 242, 0.16);
   border-radius: 3px;
   padding: 1px 4px;
   cursor: help;
 }
-.db-rls.changed { color: var(--yellow); background: rgba(217, 164, 65, 0.2); }
+.db-rls.changed { color: var(--yellow); background: rgba(240, 200, 106, 0.2); }
 
 .db-status {
   display: inline-flex;
@@ -1578,9 +1859,9 @@ button:active { transform: translateY(0.5px); }
 .db-col-tags { grid-area: tags; display: flex; gap: 2px; }
 .db-col-meta { grid-area: meta; color: var(--text-faint); overflow-wrap: anywhere; }
 .db-col-meta:empty { display: none; }
-.db-col.added { background: rgba(78, 201, 122, 0.07); }
-.db-col.changed { background: rgba(217, 164, 65, 0.08); }
-.db-col.removed { background: rgba(224, 95, 106, 0.07); opacity: 0.75; }
+.db-col.added { background: rgba(143, 217, 160, 0.07); }
+.db-col.changed { background: rgba(240, 200, 106, 0.08); }
+.db-col.removed { background: rgba(232, 131, 124, 0.07); opacity: 0.75; }
 .db-col.removed .db-col-name { text-decoration: line-through; }
 
 /* Short tags for constraints */
@@ -1594,14 +1875,14 @@ button:active { transform: translateY(0.5px); }
   font-family: var(--sans);
   cursor: help;
 }
-.db-tag.pk { color: var(--yellow); background: rgba(217, 164, 65, 0.18); }
+.db-tag.pk { color: var(--yellow); background: rgba(240, 200, 106, 0.18); }
 .db-tag.fk { color: var(--accent); background: var(--accent-soft); }
-.db-tag.uq, .db-tag.unique { color: var(--green); background: rgba(78, 201, 122, 0.16); }
-.db-tag.ck, .db-tag.check { color: var(--purple); background: rgba(160, 123, 240, 0.16); }
+.db-tag.uq, .db-tag.unique { color: var(--green); background: rgba(143, 217, 160, 0.16); }
+.db-tag.ck, .db-tag.check { color: var(--purple); background: rgba(185, 166, 242, 0.16); }
 .db-tag.ix, .db-tag.index { color: var(--text-dim); background: var(--bg-hover); }
 .db-tag.ex, .db-tag.exclude { color: var(--text-dim); background: var(--bg-hover); }
-.db-tag.pol { color: var(--purple); background: rgba(160, 123, 240, 0.16); }
-.db-tag.enum { color: var(--purple); background: rgba(160, 123, 240, 0.16); }
+.db-tag.pol { color: var(--purple); background: rgba(185, 166, 242, 0.16); }
+.db-tag.enum { color: var(--purple); background: rgba(185, 166, 242, 0.16); }
 
 /* Constraints and policies */
 .db-sub { margin-top: 7px; }
@@ -1624,9 +1905,9 @@ button:active { transform: translateY(0.5px); }
 }
 .db-con-name { color: var(--text-dim); overflow-wrap: anywhere; }
 .db-con-text { color: var(--text-faint); overflow-wrap: anywhere; }
-.db-con.added { background: rgba(78, 201, 122, 0.07); }
-.db-con.changed { background: rgba(217, 164, 65, 0.08); }
-.db-con.removed { background: rgba(224, 95, 106, 0.07); opacity: 0.75; }
+.db-con.added { background: rgba(143, 217, 160, 0.07); }
+.db-con.changed { background: rgba(240, 200, 106, 0.08); }
+.db-con.removed { background: rgba(232, 131, 124, 0.07); opacity: 0.75; }
 .db-con.removed .db-con-name { text-decoration: line-through; }
 
 /* ------------------------------------------------------------------ */
@@ -1699,7 +1980,7 @@ button:active { transform: translateY(0.5px); }
   padding: 2px 6px;
   border-radius: 4px;
 }
-#dbdiff-close:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
+#dbdiff-close:hover { color: var(--red); background: rgba(232, 131, 124, 0.12); }
 
 /* Header row of the two columns, stays put while scrolling */
 #dbdiff-cols {
@@ -1758,9 +2039,9 @@ button:active { transform: translateY(0.5px); }
   align-items: center;
   justify-content: center;
 }
-.dbd-card.added.after { border-color: rgba(78, 201, 122, 0.45); }
-.dbd-card.removed.before { border-color: rgba(224, 95, 106, 0.4); }
-.dbd-card.changed { border-color: rgba(217, 164, 65, 0.38); }
+.dbd-card.added.after { border-color: rgba(143, 217, 160, 0.45); }
+.dbd-card.removed.before { border-color: rgba(232, 131, 124, 0.4); }
+.dbd-card.changed { border-color: rgba(240, 200, 106, 0.38); }
 .dbd-absent { font-size: 10px; color: var(--text-faint); font-style: italic; }
 .dbd-card-head {
   display: flex;
@@ -1805,11 +2086,11 @@ button:active { transform: translateY(0.5px); }
 .dbd-cell { grid-area: name; }
 .dbd-row .db-tag { grid-area: type; justify-self: start; }
 
-.dbd-row.added { background: rgba(78, 201, 122, 0.1); }
+.dbd-row.added { background: rgba(143, 217, 160, 0.1); }
 .dbd-row.added .dbd-mark { color: var(--green); }
-.dbd-row.removed { background: rgba(224, 95, 106, 0.1); }
+.dbd-row.removed { background: rgba(232, 131, 124, 0.1); }
 .dbd-row.removed .dbd-mark { color: var(--red); }
-.dbd-row.changed { background: rgba(217, 164, 65, 0.11); }
+.dbd-row.changed { background: rgba(240, 200, 106, 0.11); }
 .dbd-row.changed .dbd-mark { color: var(--yellow); }
 .dbd-row .hot { color: var(--yellow); font-weight: 600; }
 .dbd-row.absent { opacity: 0.4; }
@@ -1922,7 +2203,7 @@ button:active { transform: translateY(0.5px); }
   border-radius: 4px;
   flex-shrink: 0;
 }
-#dbgraph-close:hover { color: var(--red); background: rgba(224, 95, 106, 0.12); }
+#dbgraph-close:hover { color: var(--red); background: rgba(232, 131, 124, 0.12); }
 
 /* The viewport. Everything inside is moved by one transform - panning, zooming,
    searching and focusing therefore never cost a new layout. */
@@ -1980,9 +2261,9 @@ button:active { transform: translateY(0.5px); }
 }
 /* Measured before it is placed: it must not flicker through at 0/0 */
 .dbg-node.measuring { visibility: hidden; left: 0; top: 0; }
-.dbg-node.added { border-color: rgba(78, 201, 122, 0.55); }
-.dbg-node.changed { border-color: rgba(217, 164, 65, 0.55); }
-.dbg-node.removed { border-color: rgba(224, 95, 106, 0.5); }
+.dbg-node.added { border-color: rgba(143, 217, 160, 0.55); }
+.dbg-node.changed { border-color: rgba(240, 200, 106, 0.55); }
+.dbg-node.removed { border-color: rgba(232, 131, 124, 0.5); }
 .dbg-node.gone { opacity: 0.7; }
 .dbg-node.gone .dbg-name { text-decoration: line-through; }
 .dbg-node.ghost, .dbg-node.external { border-style: dashed; }
@@ -1995,9 +2276,9 @@ button:active { transform: translateY(0.5px); }
   padding: 6px 9px;
   background: rgba(255, 255, 255, 0.035);
 }
-.dbg-node.added .dbg-head { background: rgba(78, 201, 122, 0.12); }
-.dbg-node.changed .dbg-head { background: rgba(217, 164, 65, 0.12); }
-.dbg-node.removed .dbg-head { background: rgba(224, 95, 106, 0.12); }
+.dbg-node.added .dbg-head { background: rgba(143, 217, 160, 0.12); }
+.dbg-node.changed .dbg-head { background: rgba(240, 200, 106, 0.12); }
+.dbg-node.removed .dbg-head { background: rgba(232, 131, 124, 0.12); }
 .dbg-mark { font-weight: 700; font-size: 12px; }
 .dbg-mark.added { color: var(--green); }
 .dbg-mark.removed { color: var(--red); }
@@ -2034,25 +2315,25 @@ button:active { transform: translateY(0.5px); }
   text-overflow: ellipsis;
 }
 .dbg-col-tags { display: flex; gap: 2px; }
-.dbg-col.added { background: rgba(78, 201, 122, 0.09); }
-.dbg-col.changed { background: rgba(217, 164, 65, 0.1); }
-.dbg-col.removed { background: rgba(224, 95, 106, 0.09); opacity: 0.75; }
+.dbg-col.added { background: rgba(143, 217, 160, 0.09); }
+.dbg-col.changed { background: rgba(240, 200, 106, 0.1); }
+.dbg-col.removed { background: rgba(232, 131, 124, 0.09); opacity: 0.75; }
 .dbg-col.removed .dbg-col-name { text-decoration: line-through; }
 .dbg-more { font-size: 9px; color: var(--text-faint); padding-top: 2px; }
 
 /* Relations */
 .dbg-line {
   fill: none;
-  stroke: #4a5164;
+  stroke: #3d4a6b;
   stroke-width: 1.4;
 }
 .dbg-foot {
   fill: none;
-  stroke: #4a5164;
+  stroke: #3d4a6b;
   stroke-width: 1.4;
   stroke-linecap: round;
 }
-.dbg-opt { fill: var(--bg); stroke: #4a5164; stroke-width: 1.4; }
+.dbg-opt { fill: var(--bg); stroke: #3d4a6b; stroke-width: 1.4; }
 .dbg-edge.added .dbg-line, .dbg-edge.added .dbg-foot, .dbg-edge.added .dbg-opt { stroke: var(--green); }
 .dbg-edge.added .dbg-line { stroke-width: 1.8; }
 .dbg-edge.changed .dbg-line, .dbg-edge.changed .dbg-foot, .dbg-edge.changed .dbg-opt { stroke: var(--yellow); }
@@ -2102,6 +2383,6 @@ button:active { transform: translateY(0.5px); }
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: #2c3140; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #3a4054; }
+::-webkit-scrollbar-thumb { background: #253052; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #33406a; }
 ::-webkit-scrollbar-track { background: transparent; }

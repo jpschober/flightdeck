@@ -34,8 +34,6 @@ function openGrid() {
     const branchEl = card.querySelector('.gc-branch');
     branchEl.classList.toggle('hidden', !s.branch);
     branchEl.textContent = s.branch || '';
-    const statusEl = card.querySelector('.si-status');
-    statusEl.className = 'si-status ' + (s.exited ? 'exited' : (s.state || 'idle'));
     card.addEventListener('click', () => { closeGrid(); setActive(s.id); });
     makeKeyActivatable(card);
     gridContainerEl.appendChild(card);
@@ -54,12 +52,27 @@ function openGrid() {
       scrollback: 50,
     });
     mini.open(card.querySelector('.grid-card-term'));
-    gridCards.set(s.id, { term: mini, statusEl });
+    gridCards.set(s.id, { term: mini, card, statusEl: card.querySelector('.si-status') });
+    setGridCardState(s.id, s.exited ? 'exited' : (s.state || 'idle'));
     window.api.getBuffer(s.id).then((buf) => {
       const entry = gridCards.get(s.id);
       if (entry && entry.term === mini && buf) mini.write(buf);
     });
   }
+}
+
+const CARD_STATES = ['attention', 'idle', 'busy', 'unknown', 'exited'];
+
+/**
+ * The state of one grid card - dot and card, the same pair as in the sidebar.
+ * Does nothing while the grid is closed; opening it reads the state again.
+ */
+export function setGridCardState(id, state) {
+  const entry = gridCards.get(id);
+  if (!entry) return;
+  entry.statusEl.className = 'si-status ' + state;
+  entry.card.classList.remove(...CARD_STATES);
+  entry.card.classList.add(state);
 }
 
 export function closeGrid() {

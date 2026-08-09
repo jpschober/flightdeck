@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
-// Panel tabs (git / history / notes / DB schema / usage) with badges
+// Panel tabs (git / history / notes / DB schema) with badges
 //
-// Opening a tab costs something in four of the five - a fetch, a rebuild, a
+// Opening a tab costs something in three of the four - a fetch, a rebuild, a
 // focus. What that is belongs to the tab, so each one registers it through
 // onPanelTab(). This module therefore imports no panel; reaching into them
-// from here put it in a ring with all four.
+// from here put it in a ring with all of them.
 //
 // fitActive() lives here because the zoom is what decides whether a fit is
 // allowed at all.
@@ -13,6 +13,7 @@ import { $ } from './dom.js';
 import { logDebug } from './log.js';
 import { t, onLocaleChange } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
+import { closeUsagePopover } from './usage.js';
 
 const badgeGit = $('#badge-git');
 const badgeHistory = $('#badge-history');
@@ -39,7 +40,6 @@ function setPanelTab(tab) {
   $('#page-git').classList.toggle('hidden', tab !== 'git');
   $('#page-history').classList.toggle('hidden', tab !== 'history');
   $('#page-todos').classList.toggle('hidden', tab !== 'todos');
-  $('#page-usage').classList.toggle('hidden', tab !== 'usage');
   $('#page-dbschema').classList.toggle('hidden', tab !== 'dbschema');
   const s = activeId && sessions.get(activeId);
   for (const fn of tabListeners.get(tab) || []) fn(s);
@@ -60,6 +60,8 @@ let panelWidth = '';
 export function setPanelZoom(on) {
   if (on === panelZoomed) return;
   panelZoomed = on;
+  // The popover is anchored to the limit bar, and that bar is about to move.
+  closeUsagePopover();
   // The width set via the divider is inline and would otherwise beat `inset`.
   if (on) { panelWidth = contextPanel.style.width; contextPanel.style.width = ''; }
   else contextPanel.style.width = panelWidth;

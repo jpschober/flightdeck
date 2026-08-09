@@ -28,7 +28,7 @@ import { loadTodosFor, renderTodos } from './notes.js';
 import { dbState, loadDbSchema, renderDbPanel, clearDbTables } from './db-schema.js';
 import { gridOpen, closeGrid } from './grid.js';
 import { openMetaPopover } from './meta-popover.js';
-import { pulseForgetProgress } from './pulse.js';
+import { syncAgentRows, updateDeckStatus } from './deck.js';
 
 const sessionListEl = $('#session-list');
 const terminalsEl = $('#terminals');
@@ -58,17 +58,19 @@ export const TERM_FONT = [
   '"Noto Sans Mono"', '"Ubuntu Mono"', 'Menlo', 'Consolas', 'monospace',
 ].join(', ');
 
+// Mirrors the :root tokens in styles.css - the terminal is the largest surface
+// in the window, so a theme of its own would show as a seam against the panels.
 export const TERM_THEME = {
-  background: '#101116',
-  foreground: '#d6dae3',
-  cursor: '#4f8cff',
-  cursorAccent: '#101116',
-  selectionBackground: 'rgba(79,140,255,0.30)',
-  black: '#1b1e27', red: '#e05f6a', green: '#4ec97a', yellow: '#d9a441',
-  blue: '#4f8cff', magenta: '#a07bf0', cyan: '#4dc4cd', white: '#d6dae3',
-  brightBlack: '#5c6270', brightRed: '#ef8089', brightGreen: '#6fe098',
-  brightYellow: '#eec06a', brightBlue: '#7baaff', brightMagenta: '#bb9cf6',
-  brightCyan: '#72dde5', brightWhite: '#f2f4f8',
+  background: '#0d1220',
+  foreground: '#e6ecf7',
+  cursor: '#7cc4f5',
+  cursorAccent: '#0d1220',
+  selectionBackground: 'rgba(124,196,245,0.30)',
+  black: '#161d2e', red: '#e8837c', green: '#8fd9a0', yellow: '#f0c86a',
+  blue: '#7cc4f5', magenta: '#b9a6f2', cyan: '#8fd9cf', white: '#e6ecf7',
+  brightBlack: '#5a6a8c', brightRed: '#f09a93', brightGreen: '#a6e5b4',
+  brightYellow: '#f7d98c', brightBlue: '#a3d8fa', brightMagenta: '#cbbcf7',
+  brightCyan: '#a6e4dc', brightWhite: '#f4f8ff',
 };
 
 // Full-screen interfaces like Claude turn on mouse reporting; xterm.js then
@@ -226,9 +228,6 @@ export async function newSession(shellId, opts) {
 
 export function setActive(id) {
   setActiveId(id);
-  // The progress of the new session is not progress that just happened -
-  // otherwise the pulse would flash on every session switch.
-  pulseForgetProgress();
   for (const s of sessions.values()) {
     const active = s.id === id;
     s.paneEl.classList.toggle('inactive', !active);
@@ -260,6 +259,7 @@ export async function closeSession(id) {
   s.paneEl.remove();
   s.itemEl.remove();
   sessions.delete(id);
+  updateDeckStatus();
   if (activeId === id) {
     const rest = [...sessions.keys()];
     if (rest.length) setActive(rest[rest.length - 1]);
@@ -278,9 +278,27 @@ export async function closeSession(id) {
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
+// Colour stripe on the session card. Gold and red are left out: they mean
+// "waiting for you" and "failed" everywhere else in the window. Four hues
+// remain, so from the fifth session on two of them share a colour.
+const SESSION_COLORS = ['#7cc4f5', '#8fd9a0', '#b9a6f2', '#8fd9cf'];
+
+// Keyed on the id, not on the list position: the colour then survives closing
+// another session, and it holds for the whole life of the card. It does not
+// survive a restart - ids are a per-process counter (nextId in
+// main/sessions.js) and sessions are not persisted, so after a restart there is
+// no same session to recognise. Keying on the directory instead would give all
+// cards one colour, because every session starts in the same one.
+function sessionColor(s) {
+  let h = 0;
+  for (const ch of String(s.id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return SESSION_COLORS[h % SESSION_COLORS.length];
+}
+
 function buildSessionItem(s) {
   const el = document.createElement('div');
   el.className = 'session-item';
+  el.style.setProperty('--session-color', sessionColor(s));
   el.dataset.id = s.id;
   el.innerHTML = `
     <div class="si-top">
@@ -290,9 +308,11 @@ function buildSessionItem(s) {
       <span class="si-agents hidden"></span>
     </div>
     <div class="si-bottom">
-      <span class="si-cwd"></span>
       <span class="si-branch hidden"></span>
+      <span class="si-cwd"></span>
     </div>
+    <div class="si-meter"><div class="si-meter-fill"></div></div>
+    <div class="si-agent-list"></div>
     <button class="si-close"></button>`;
   el.addEventListener('click', (e) => {
     if (e.target.closest('.si-close')) return;
@@ -316,6 +336,10 @@ export function updateSessionItem(s) {
   const statusEl = el.querySelector('.si-status');
   const state = s.exited ? 'exited' : (s.state || 'idle');
   statusEl.className = 'si-status ' + state;
+  // The card carries the state too, not just the dot: the meter and the quiet
+  // background hang off it, and an 8px dot is too small to register in passing.
+  el.classList.remove('attention', 'idle', 'busy', 'unknown');
+  el.classList.add(state);
   statusEl.title = t('session.state.' + (
     state === 'busy' || state === 'attention' || state === 'exited' || state === 'unknown'
       ? state : 'idle'));
@@ -325,11 +349,18 @@ export function updateSessionItem(s) {
   labelEl.classList.toggle('hidden', !s.label);
   labelEl.textContent = s.label || '';
   updateAgentChip(el.querySelector('.si-agents'), s.agents);
-  el.querySelector('.si-cwd').textContent = s.cwd || '';
-  el.querySelector('.si-cwd').title = s.cwd || '';
+  // Branch and directory answer the same question - which working copy is
+  // this? Two answers to it would push the subagent rows out of the card.
   const branchEl = el.querySelector('.si-branch');
   branchEl.classList.toggle('hidden', !s.branch);
   branchEl.textContent = s.branch || '';
+  branchEl.title = s.branch || '';
+  const cwdEl = el.querySelector('.si-cwd');
+  cwdEl.classList.toggle('hidden', Boolean(s.branch));
+  cwdEl.textContent = s.cwd || '';
+  cwdEl.title = s.cwd || '';
+  syncAgentRows(s);
+  updateDeckStatus();
 }
 
 // How many agents are working in this session? The chip only appears while
@@ -340,7 +371,7 @@ function updateAgentChip(el, agents) {
   const n = agents ? agents.running : 0;
   el.classList.toggle('hidden', !n);
   if (!n) { el.textContent = ''; el.title = ''; return; }
-  el.textContent = `✈ ${n}`;
+  el.textContent = `${n} ✈`;
   const lines = agents.agents.map((a) => {
     const what = a.description || a.type || a.id.slice(0, 8);
     return `• ${what}${a.worktree ? ` (⑂ ${a.worktree})` : ''}`;
