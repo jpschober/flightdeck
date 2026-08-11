@@ -7,7 +7,7 @@
   --bg-panel: #121828;
   --bg-panel-2: #161d2e;
   --bg-hover: #1b2337;
-  --bg-active: #1f2942;
+  --bg-active: #26355a;
   --border: #1e2740;
   --text: #e6ecf7;
   --text-dim: #8794b0;
@@ -269,7 +269,7 @@ button:active { transform: translateY(0.5px); }
   border: 1.5px solid transparent;
   margin-bottom: 8px;
   cursor: pointer;
-  transition: background var(--speed) var(--ease), border-color var(--speed) var(--ease);
+  transition: background var(--speed) var(--ease), border-color var(--speed) var(--ease), box-shadow var(--speed) var(--ease);
 }
 /* Nothing running here: the card sinks below the working ones. Stated before
    hover and selection, both of which say something newer about the same card. */
@@ -279,18 +279,22 @@ button:active { transform: translateY(0.5px); }
 .session-item.exited { opacity: 0.55; }
 
 .session-item:hover { background: var(--bg-hover); }
+/* Selection owns one channel: a clearly brighter fill plus an accent rail down
+   the left card edge. A rail reads as "this one is chosen" and cannot be
+   mistaken for the gold state ring the way a full border could. */
 .session-item.active {
   background: var(--bg-active);
-  border-color: var(--accent);
+  border-color: transparent;
+  box-shadow: inset 3px 0 0 var(--accent);
 }
-/* An 8px dot is too small to register peripherally, so the whole card carries
-   the waiting state. */
+/* Waiting owns a different channel: a warm tint plus the gold status dot, which
+   already glows (.si-status.attention). No card border, so "waiting" never
+   imitates "selected" - and an active, waiting card shows both at once (rail +
+   tint) without one state erasing the other. */
 .session-item.attention {
-  background: var(--bg-hover);
-  border-color: var(--attention);
+  background: var(--attention-soft);
+  border-color: transparent;
 }
-/* Active AND waiting: gold wins, it is the more urgent statement. */
-.session-item.active.attention { border-color: var(--attention); }
 
 .si-top {
   position: relative;
