@@ -7,12 +7,12 @@
 // over a clock, so the clock is fixed here and the real module is used - the
 // numbers in the assertions are the numbers the panel prints.
 //
-// windowFor() and shape() are tested alongside: they decide which windows the
-// endpoint delivers reach the panel at all, and in which order.
+// shape() is tested alongside: it decides which windows the endpoint delivers
+// reach the panel at all, and in which order.
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { pace, parseReset, shape, windowFor } = require('../src/main/usage');
+const { pace, parseReset, shape } = require('../src/main/usage');
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -122,56 +122,42 @@ test('resets_at as ISO string, as seconds and as milliseconds', () => {
   assert.strictEqual(parseReset('whenever'), null);
 });
 
-test('the window length is read out of the key', () => {
-  assert.strictEqual(windowFor('five_hour'), 5 * HOUR);
-  assert.strictEqual(windowFor('seven_day'), WEEK);
-  assert.strictEqual(windowFor('seven_day_opus'), WEEK);
-  assert.strictEqual(windowFor('seven_day_sonnet'), WEEK);
-  assert.strictEqual(windowFor('30_day'), 30 * DAY);
-  assert.strictEqual(windowFor('one_week_haiku'), WEEK);
-  // A key that names no length falls back rather than guessing
-  assert.strictEqual(windowFor('monthly_opus'), WEEK);
-  assert.strictEqual(windowFor(''), WEEK);
-});
-
-test('a window the endpoint adds ends up in the list', () => {
+test('the two windows come with their length, five hours first', () => {
   const data = at(() => shape({
-    five_hour: limit(10, 0.5, 5 * HOUR),
     seven_day: limit(20, 0.5),
-    two_day_haiku: limit(30, 0.5, 2 * DAY),
+    five_hour: limit(10, 0.5, 5 * HOUR),
   }, 'max'));
 
-  assert.deepStrictEqual(data.limits.map((l) => l.key),
-    ['five_hour', 'two_day_haiku', 'seven_day']);   // sorted by window length
-  assert.strictEqual(data.limits[1].windowMs, 2 * DAY);
-  assert.strictEqual(data.limits[1].used, 30);
+  assert.deepStrictEqual(data.limits.map((l) => l.key), ['five_hour', 'seven_day']);
+  assert.strictEqual(data.limits[0].windowMs, 5 * HOUR);
+  assert.strictEqual(data.limits[0].used, 10);
+  assert.strictEqual(data.limits[1].windowMs, WEEK);
   assert.strictEqual(data.plan, 'max');
 });
 
-test('windows of equal length keep a fixed order regardless of the server', () => {
-  const forward = at(() => shape({
-    seven_day: limit(1, 0.5), seven_day_opus: limit(2, 0.5), seven_day_sonnet: limit(3, 0.5),
+test('every other window of the endpoint stays out', () => {
+  const data = at(() => shape({
+    five_hour: limit(10, 0.5, 5 * HOUR),
+    // Windows with the same shape but without a name of their own in the panel
+    seven_day_opus: limit(2, 0.5),
+    two_day_haiku: limit(30, 0.5, 2 * DAY),
+    extra_usage: limit(40, 0.5),
+    nimbus_quill: limit(50, 0.5),
   }, null));
-  const reversed = at(() => shape({
-    seven_day_sonnet: limit(3, 0.5), seven_day_opus: limit(2, 0.5), seven_day: limit(1, 0.5),
-  }, null));
-  assert.deepStrictEqual(forward.limits.map((l) => l.key), reversed.limits.map((l) => l.key));
-  assert.deepStrictEqual(forward.limits.map((l) => l.key),
-    ['seven_day', 'seven_day_opus', 'seven_day_sonnet']);
+  assert.deepStrictEqual(data.limits.map((l) => l.key), ['five_hour']);
 });
 
 test('anything that is not a limit window stays out', () => {
   const data = at(() => shape({
-    five_hour: limit(10, 0.5, 5 * HOUR),
+    seven_day: limit(20, 0.5),
     subscription: 'max',
     flags: ['a', 'b'],
     account: { id: 'abc', email: 'someone@example.com' },
-    empty: null,
     // Carries a reset but no utilization: a row from this would show a title
     // and nothing else.
-    next_cycle: { resets_at: new Date(NOW + DAY).toISOString() },
+    five_hour: { resets_at: new Date(NOW + DAY).toISOString() },
   }, null));
-  assert.deepStrictEqual(data.limits.map((l) => l.key), ['five_hour']);
+  assert.deepStrictEqual(data.limits.map((l) => l.key), ['seven_day']);
 });
 
 test('an answer without windows gives an empty list, not an error', () => {

@@ -7,23 +7,28 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- Title bar: the whole deck in one line, above all three columns -->
+  <header id="titlebar">
+    <span class="app-name">Flightdeck</span>
+    <span id="deck-status" class="deck-pill"></span>
+    <div class="header-actions">
+      <div class="more-wrap">
+        <button id="btn-more" class="icon-btn" data-i18n-title="header.more" data-i18n-aria="header.more" title="More actions" aria-label="More actions">⋯</button>
+        <div id="more-menu" class="menu hidden"></div>
+      </div>
+      <div class="new-session-wrap">
+        <button id="btn-new" data-i18n-title="header.new.title" data-i18n-aria="header.new.aria" title="New session (default shell)" aria-label="New session"><span data-i18n="header.new.label">New session</span></button>
+        <button id="btn-new-menu" data-i18n-title="header.shell.title" data-i18n-aria="header.shell.title" title="Choose shell" aria-label="Choose shell">▾</button>
+        <div id="shell-menu" class="menu hidden"></div>
+      </div>
+    </div>
+  </header>
   <div id="layout">
     <!-- Left sidebar: sessions -->
     <aside id="sidebar">
       <div id="sidebar-header">
-        <canvas id="pulse-canvas" aria-hidden="true"></canvas>
-        <span class="app-name">Flightdeck</span>
-        <div class="header-actions">
-          <div class="more-wrap">
-            <button id="btn-more" class="icon-btn" data-i18n-title="header.more" data-i18n-aria="header.more" title="More actions" aria-label="More actions">⋯</button>
-            <div id="more-menu" class="menu hidden"></div>
-          </div>
-          <div class="new-session-wrap">
-            <button id="btn-new" data-i18n-title="header.new.title" data-i18n-aria="header.new.aria" title="New session (default shell)" aria-label="New session">+</button>
-            <button id="btn-new-menu" data-i18n-title="header.shell.title" data-i18n-aria="header.shell.title" title="Choose shell" aria-label="Choose shell">▾</button>
-            <div id="shell-menu" class="menu hidden"></div>
-          </div>
-        </div>
+        <span class="sidebar-caption" data-i18n="deck.inTheAir">In the air</span>
+        <span id="deck-count" class="deck-count"></span>
       </div>
       <div id="session-list"></div>
     </aside>
@@ -50,7 +55,6 @@
         <button class="panel-tab" data-tab="history"><span data-i18n="tabs.history">History</span><span class="tab-badge hidden" id="badge-history"></span></button>
         <button class="panel-tab" data-tab="dbschema"><span data-i18n="tabs.dbschema">DB schema</span><span class="tab-badge hidden" id="badge-dbschema"></span></button>
         <button class="panel-tab" data-tab="todos"><span data-i18n="tabs.notes">Notes</span><span class="tab-badge hidden" id="badge-todos"></span></button>
-        <button class="panel-tab" data-tab="usage"><span data-i18n="tabs.usage">Usage</span><span class="tab-dot hidden" id="dot-usage"></span></button>
         <button id="btn-panel-zoom" class="icon-btn" data-i18n-title="panel.enlarge" data-i18n-aria="panel.enlarge" title="Enlarge panel" aria-label="Enlarge panel">⤢</button>
       </nav>
       <div class="panel-page" id="page-git">
@@ -67,9 +71,6 @@
           <div id="file-list"></div>
         </section>
       </div>
-      <div class="panel-page hidden" id="page-usage">
-        <div id="usage-content"><div class="muted">—</div></div>
-      </div>
       <div class="panel-page hidden" id="page-history">
         <div id="history-list"></div>
       </div>
@@ -83,7 +84,25 @@
         <input id="db-search" type="text" data-i18n-placeholder="db.search" placeholder="Search table or column…" />
         <div id="db-tables"><div class="muted">—</div></div>
       </div>
+      <!-- The subscription's tightest limit, always in view. Click opens the
+           full breakdown as a popover above it. -->
+      <button id="limit-bar" class="hidden" aria-expanded="false">
+        <span class="lb-row">
+          <span id="lb-label"></span>
+          <span id="lb-value"></span>
+        </span>
+        <span class="lb-track">
+          <span id="lb-fill"></span>
+          <span id="lb-mark" class="hidden"></span>
+        </span>
+      </button>
     </aside>
+  </div>
+
+  <!-- Usage limits, anchored to the limit bar. Outside #context-panel: it is
+       wider than the panel and the panel clips its overflow. -->
+  <div id="usage-popover" class="hidden">
+    <div id="usage-content"><div class="muted">—</div></div>
   </div>
   <!-- Dimming behind the enlarged context panel -->
   <div id="panel-backdrop" class="hidden"></div>

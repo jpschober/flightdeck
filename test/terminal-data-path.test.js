@@ -527,9 +527,16 @@ test('the title asterisk raises attention only once the agent was prompted', () 
   calls.length = 0;
   const s = stateSession();
   s.state = 'busy';
+  // Before the first prompt the wait is not a "needs you" - but it is still a
+  // wait, and the busy from the start of `claude` may not stay standing.
   applyStateFromData(s, osc.title('✳ waiting'), 0, osc.title('✳ waiting'));
-  assert.deepStrictEqual(calls, [], 'no attention before the first prompt');
+  assert.deepStrictEqual(calls, ['session:state:idle'], 'no attention before the first prompt');
+
+  calls.length = 0;
   s.agentPrompted = true;
+  // Whatever was asked runs first - without it the session stays quiet, and a
+  // quiet one is not raised to attention.
+  applyStateFromData(s, osc.title('⠋ working'), 0, osc.title('⠋ working'));
   applyStateFromData(s, osc.title('✳ waiting'), 0, osc.title('✳ waiting'));
-  assert.deepStrictEqual(calls, ['session:state:attention']);
+  assert.deepStrictEqual(calls, ['session:state:busy', 'session:state:attention']);
 });

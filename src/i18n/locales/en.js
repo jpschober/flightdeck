@@ -7,10 +7,17 @@ module.exports = {
   'header.sessions.aria': 'Claude sessions',
   'header.new.title': 'New session (default shell)',
   'header.new.aria': 'New session',
+  'header.new.label': 'New session',
   'header.shell.title': 'Choose shell',
   'header.language.title': 'Language',
 
   'header.more': 'More actions',
+
+  // --- title bar: the whole deck in one line ---
+  'deck.inTheAir': 'In the air',
+  'deck.waiting': { one: '{count} waiting for you', other: '{count} waiting for you' },
+  'deck.sessions': { one: '{count} session', other: '{count} sessions' },
+  'deck.agents': { one: '{count} agent', other: '{count} agents' },
 
   // --- keyboard ---
   'key.ctrl': 'Ctrl',
@@ -24,7 +31,6 @@ module.exports = {
   'tabs.history': 'History',
   'tabs.dbschema': 'DB schema',
   'tabs.notes': 'Notes',
-  'tabs.usage': 'Usage',
   'panel.enlarge': 'Enlarge panel',
   'panel.shrink': 'Shrink panel (Esc)',
 
@@ -40,6 +46,7 @@ module.exports = {
   'session.state.idle': 'Waiting for input',
   'session.state.unknown': 'No status available – this shell has no integration',
   'session.agents': { one: '{count} agent working', other: '{count} agents working' },
+  'session.agents.more': { one: '+{count} more', other: '+{count} more' },
 
   // --- git panel ---
   'git.heading.pr': 'Pull Request',
@@ -194,12 +201,12 @@ module.exports = {
   'usage.reset': 'Reset {when} · {until}',
   'usage.window.5h': '5-hour window',
   'usage.window.7d': '7-day window',
-  'usage.window.7dOpus': '7 days · Opus',
   'usage.noLimits': 'No limits reported.',
   'usage.asOf': 'As of {time}',
   'usage.stale': 'stale',
   'usage.refresh': 'Refresh now',
   'usage.refresh.aria': 'Refresh',
+  'usage.close': 'Close',
   'usage.legend': 'The mark in the bar shows how much may have been used by now if the quota is meant to last evenly across the window.',
   'usage.source': 'The numbers come from your Claude subscription (the same state as {usage}).',
 

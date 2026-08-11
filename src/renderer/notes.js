@@ -10,7 +10,6 @@ import { $, setText, setTitle, syncChildren } from './dom.js';
 import { t, onLocaleChange } from './i18n.js';
 import { sessions, activeId } from './sessions.js';
 import { updateBadges, onPanelTab } from './panel.js';
-import { pulseWake } from './pulse.js';
 
 const todoListEl = $('#todo-list');
 const todoInputEl = $('#todo-input');
@@ -19,8 +18,6 @@ export function renderTodos(s) {
   const todos = s ? s.todos : [];
   todoInputEl.disabled = !s;
   updateBadges(s);
-  // A single funnel for both: note ticked off and session switched
-  pulseWake();
   syncChildren(todoListEl, todoItems(todos), buildTodoItem, updateTodoItem);
 }
 

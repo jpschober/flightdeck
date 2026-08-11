@@ -6,10 +6,17 @@ module.exports = {
   'header.sessions.aria': 'Claude-Sessions',
   'header.new.title': 'Neue Session (Standard-Shell)',
   'header.new.aria': 'Neue Session',
+  'header.new.label': 'Neue Session',
   'header.shell.title': 'Shell auswählen',
   'header.language.title': 'Sprache',
 
   'header.more': 'Weitere Aktionen',
+
+  // --- Kopfleiste: das ganze Deck in einer Zeile ---
+  'deck.inTheAir': 'In der Luft',
+  'deck.waiting': { one: '{count} wartet auf Dich', other: '{count} warten auf Dich' },
+  'deck.sessions': { one: '{count} Session', other: '{count} Sessions' },
+  'deck.agents': { one: '{count} Agent', other: '{count} Agenten' },
 
   // --- keyboard ---
   'key.ctrl': 'Strg',
@@ -23,7 +30,6 @@ module.exports = {
   'tabs.history': 'Verlauf',
   'tabs.dbschema': 'DB-Schema',
   'tabs.notes': 'Notizen',
-  'tabs.usage': 'Nutzung',
   'panel.enlarge': 'Panel vergrößern',
   'panel.shrink': 'Panel verkleinern (Esc)',
 
@@ -39,6 +45,7 @@ module.exports = {
   'session.state.idle': 'Wartet auf Eingabe',
   'session.state.unknown': 'Kein Status verfügbar – diese Shell hat keine Integration',
   'session.agents': { one: '{count} Agent arbeitet', other: '{count} Agenten arbeiten' },
+  'session.agents.more': { one: '+{count} weiterer', other: '+{count} weitere' },
 
   // --- git panel ---
   'git.heading.pr': 'Pull Request',
@@ -191,12 +198,12 @@ module.exports = {
   'usage.reset': 'Reset {when} · {until}',
   'usage.window.5h': '5-Stunden-Fenster',
   'usage.window.7d': '7-Tage-Fenster',
-  'usage.window.7dOpus': '7 Tage · Opus',
   'usage.noLimits': 'Keine Limits gemeldet.',
   'usage.asOf': 'Stand {time}',
   'usage.stale': 'veraltet',
   'usage.refresh': 'Jetzt aktualisieren',
   'usage.refresh.aria': 'Aktualisieren',
+  'usage.close': 'Schließen',
   'usage.legend': 'Der Strich in der Leiste markiert, wie viel zum jetzigen Zeitpunkt verbraucht sein dürfte, wenn das Kontingent gleichmäßig über das Fenster reichen soll.',
   'usage.source': 'Die Zahlen stammen aus deinem Claude-Abo (derselbe Stand wie {usage}).',
 

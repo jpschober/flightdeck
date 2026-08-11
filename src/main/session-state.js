@@ -30,8 +30,13 @@ function setState(session, state) {
 // "Waiting for you" only applies once the agent has actually received a task.
 // Right after `claude` it sits at the prompt by definition - sending that out
 // as an attention notice would be a false alarm every single time.
+//
+// The notice is dropped, the state is not: the agent is waiting either way, and
+// the `busy` from the OSC 133 C of the start would otherwise stay standing. It
+// would stay for good, too - Claude reports "waiting" once and does not repeat
+// it, and the silence heuristic below is off as soon as it has reported at all.
 function setAttention(session) {
-  if (!session.agentPrompted) return false;
+  if (!session.agentPrompted) { setState(session, 'idle'); return false; }
   if (session.state === 'idle') return false;
   setState(session, 'attention');
   return true;

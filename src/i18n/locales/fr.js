@@ -6,10 +6,17 @@ module.exports = {
   'header.sessions.aria': 'Sessions Claude',
   'header.new.title': 'Nouvelle session (shell par défaut)',
   'header.new.aria': 'Nouvelle session',
+  'header.new.label': 'Nouvelle session',
   'header.shell.title': 'Choisir le shell',
   'header.language.title': 'Langue',
 
   'header.more': 'Autres actions',
+
+  // --- barre de titre : tout le pont en une ligne ---
+  'deck.inTheAir': 'En vol',
+  'deck.waiting': { one: '{count} attend votre réponse', other: '{count} attendent votre réponse' },
+  'deck.sessions': { one: '{count} session', other: '{count} sessions' },
+  'deck.agents': { one: '{count} agent', other: '{count} agents' },
 
   // --- keyboard ---
   'key.ctrl': 'Ctrl',
@@ -23,7 +30,6 @@ module.exports = {
   'tabs.history': 'Historique',
   'tabs.dbschema': 'Schéma BD',
   'tabs.notes': 'Notes',
-  'tabs.usage': 'Utilisation',
   'panel.enlarge': 'Agrandir le panneau',
   'panel.shrink': 'Réduire le panneau (Échap)',
 
@@ -39,6 +45,7 @@ module.exports = {
   'session.state.idle': 'En attente de saisie',
   'session.state.unknown': 'Aucun état disponible – ce shell n’a pas d’intégration',
   'session.agents': { one: '{count} agent au travail', other: '{count} agents au travail' },
+  'session.agents.more': { one: '+{count} autre', other: '+{count} autres' },
 
   // --- git panel ---
   'git.heading.pr': 'Pull request',
@@ -191,12 +198,12 @@ module.exports = {
   'usage.reset': 'Réinitialisation {when} · {until}',
   'usage.window.5h': 'Fenêtre de 5 heures',
   'usage.window.7d': 'Fenêtre de 7 jours',
-  'usage.window.7dOpus': '7 jours · Opus',
   'usage.noLimits': 'Aucune limite signalée.',
   'usage.asOf': 'Au {time}',
   'usage.stale': 'obsolète',
   'usage.refresh': 'Actualiser maintenant',
   'usage.refresh.aria': 'Actualiser',
+  'usage.close': 'Fermer',
   'usage.legend': 'Le repère dans la barre indique combien devrait être consommé à cet instant si le quota doit durer uniformément sur toute la fenêtre.',
   'usage.source': 'Les chiffres proviennent de votre abonnement Claude (le même état que {usage}).',
 

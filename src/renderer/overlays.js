@@ -10,7 +10,14 @@ import { focusActiveTerm } from './sessions.js';
 
 const overlays = []; // most recently opened first - that is the Escape order
 
-export function makeOverlay(el, closeEl) {
+/**
+ * @param el        the layer itself
+ * @param closeEl   its close button, if it has one
+ * @param opts      `backdrop: false` for a layer that fills its own box - there
+ *                  is no dimmed surround to click, and its padding is not one.
+ *                  `onClose` runs however the layer was closed, Escape included.
+ */
+export function makeOverlay(el, closeEl, opts = {}) {
   const overlay = {
     isOpen: () => !el.classList.contains('hidden'),
     open() {
@@ -20,10 +27,13 @@ export function makeOverlay(el, closeEl) {
     },
     close() {
       el.classList.add('hidden');
+      if (opts.onClose) opts.onClose();
       focusActiveTerm();
     },
   };
-  el.addEventListener('click', (e) => { if (e.target === el) overlay.close(); });
+  if (opts.backdrop !== false) {
+    el.addEventListener('click', (e) => { if (e.target === el) overlay.close(); });
+  }
   if (closeEl) closeEl.addEventListener('click', () => overlay.close());
   overlays.unshift(overlay);
   return overlay;
