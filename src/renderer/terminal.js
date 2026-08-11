@@ -163,6 +163,12 @@ export async function newSession(shellId, opts) {
     allowProposedApi: true,
     scrollback: 8000,
     theme: TERM_THEME,
+    // OSC 8 hyperlinks (the escape-sequence links programs like Claude Code
+    // emit) go through xterm's own provider, not the WebLinksAddon below.
+    // Without a handler they hit xterm's defaultActivate: a confirm() warning,
+    // then a window.open() that setWindowOpenHandler denies - so the link warns
+    // and then does nothing. Route them to the same openExternal path.
+    linkHandler: { activate: (e, uri) => window.api.openExternal(uri) },
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
