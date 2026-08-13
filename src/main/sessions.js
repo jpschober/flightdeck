@@ -351,21 +351,33 @@ async function doRefresh(session, force, cwdAtStart) {
   const gitCwd = session.agentCwd || cwdAtStart;
   const git = await getGitInfo(gitCwd);
   if (session.cwd !== cwdAtStart || session.exited) return; // stale -> discard
-  // If the repo or branch changes, the memory starts over - otherwise one would
-  // drag along files from a foreign branch.
-  if (git && (session.gitRoot !== git.root || session.branch !== git.branch)) {
-    resetFileMemory(session);
+  // A transient git failure ({ transient: true } - a timeout, a lock held while
+  // the agent commits) leaves branch, root, files and the PR standing. The null
+  // of a failed call would otherwise blank the panel and the tab's branch and,
+  // because the notes key hangs off gitRoot, flip that key to the bare cwd and
+  // empty the notes until the next pass. Genuine "no repository" (git === null)
+  // and a refused directory (git.blocked) still fall through and clear it.
+  if (!(git && git.transient)) {
+    // If the repo or branch changes, the memory starts over - otherwise one would
+    // drag along files from a foreign branch.
+    if (git && (session.gitRoot !== git.root || session.branch !== git.branch)) {
+      resetFileMemory(session);
+    }
+    session.branch = git ? git.branch : null;
+    session.gitRoot = git ? git.root : null;
+    // Git was refused in this directory (see gitinfo.js). The panel says so, and
+    // nothing further is asked of git here.
+    session.gitBlocked = git ? git.blocked || null : null;
+    if (!git) resetFileMemory(session);
+    // git.files is null when the status call failed though the repo is there:
+    // keep the last list, since [] through mergeFileMemory would mark every
+    // remembered file committed and jump the list about.
+    if (git && git.files != null) session.files = mergeFileMemory(session, git.files);
+    else if (!git) session.files = [];
+    const pr = git && !git.blocked ? await getPrInfo(gitCwd, git.root, git.branch, force) : null;
+    if (session.cwd !== cwdAtStart || session.exited) return; // cd in the meantime -> discard
+    session.pr = pr;
   }
-  session.branch = git ? git.branch : null;
-  session.gitRoot = git ? git.root : null;
-  // Git was refused in this directory (see gitinfo.js). The panel says so, and
-  // nothing further is asked of git here.
-  session.gitBlocked = git ? git.blocked || null : null;
-  if (!git) resetFileMemory(session);
-  session.files = git ? mergeFileMemory(session, git.files) : [];
-  const pr = git && !git.blocked ? await getPrInfo(gitCwd, git.root, git.branch, force) : null;
-  if (session.cwd !== cwdAtStart || session.exited) return; // cd in the meantime -> discard
-  session.pr = pr;
 
   // Who is working here right now? The sensor puts that question to the
   // plugins - which agent CLI runs in the terminal is none of the refresh's

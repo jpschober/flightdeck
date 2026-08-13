@@ -174,8 +174,11 @@ test('a working directory without a repo stops after the first call', async () =
   fs.rmSync(fresh, { recursive: true, force: true });
 
   // And where the verdict is already in, the branch stays the abort condition.
+  // The verdict already vouched for a repository here, so a failing branch is a
+  // transient hiccup, not "no repo": reported apart so the caller keeps the last
+  // known state instead of blanking it. Either way nothing runs past rev-parse.
   const known = await counted(() => gitinfo.getGitInfo(parallel));
-  assert.strictEqual(known.value, null);
+  assert.deepStrictEqual(known.value, { transient: true });
   assert.deepStrictEqual(known.calls, ['git rev-parse --abbrev-ref HEAD']);
 });
 

@@ -286,7 +286,12 @@ async function getGitInfo(cwd) {
   if (!verdict.repo) return null;
   if (verdict.risk) return { blocked: verdict.risk, branch: null, root: null, files: [] };
   const branch = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
-  if (branch === null) return null;
+  // The verdict already found a repository here, so a failing branch lookup is a
+  // transient git hiccup - a timeout under load, an index or HEAD lock held
+  // while the agent commits - not "no repository". Reported apart as transient
+  // so the caller keeps the last known branch, root and files instead of
+  // blanking them (and, since the notes key hangs off the root, the notes too).
+  if (branch === null) return { transient: true };
   // Root and status do not depend on each other, so they run together. The
   // branch above stays the abort condition and therefore stays on its own.
   const [root, status] = await Promise.all([
@@ -298,7 +303,9 @@ async function getGitInfo(cwd) {
     branch: branch.trim(),
     // gitRoot() hands back an already normalised path or null.
     root: root || cwd,
-    files: status ? parseStatus(status) : [],
+    // null (the call failed) is kept apart from "" (no changes): the first keeps
+    // the last file list, the second is genuinely empty. See doRefresh.
+    files: status === null ? null : parseStatus(status),
   };
 }
 
