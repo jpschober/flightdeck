@@ -246,10 +246,16 @@ async function updateAgentBinding(session) {
   const agentCwd = file ? await readAgentCwd(id, file) : null;
   // Only adopt it if it lies below the shell's directory (i.e. a worktree or
   // similar) - anything else would be a foreign transcript.
-  if (agentCwd && agentCwd !== session.cwd
-      && agentCwd.startsWith(session.cwd.replace(/[\\/]+$/, '') + path.sep)
-      && fs.existsSync(agentCwd)) {
+  const belowShell = (p) => Boolean(p) && p !== session.cwd
+    && p.startsWith(session.cwd.replace(/[\\/]+$/, '') + path.sep)
+    && fs.existsSync(p);
+  if (belowShell(agentCwd)) {
     session.agentCwd = agentCwd;
+  } else if (agentCwd === null && belowShell(session.agentCwd)) {
+    // The transcript read came back empty this pass (a truncated or busy file),
+    // not a move out of the worktree. Keep the worktree confirmed before rather
+    // than snap the git lookup back to the shell directory - which would flip
+    // branch, root and with them the notes key for a tick.
   } else {
     session.agentCwd = null;
   }
