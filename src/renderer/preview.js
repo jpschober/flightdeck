@@ -12,8 +12,13 @@ const previewTitle = $('#preview-title');
 const previewContent = $('#preview-content');
 
 const previewModesEl = $('#preview-modes');
+const previewWrapBtn = $('#preview-wrap');
 const MD_EXT = /\.(md|markdown|mdx)$/i;
 export let previewState = null; // { sessionId, filePath, source, mode, cache }
+
+// Line wrapping sticks across files within a session - a user who turns it on
+// once means it for the next diff too.
+let wrapLines = false;
 
 // ---------------------------------------------------------------------------
 // Diff view
@@ -31,11 +36,20 @@ const DIFF_OPTIONS = {
   theme: 'pierre-dark',      // the app has no light mode
   themeType: 'dark',
   diffStyle: 'unified',      // as the previous view showed it
-  overflow: 'scroll',
   disableFileHeader: true,   // the file name is already in the overlay header
 };
 
 let diffView = null;
+
+// The wrap toggle belongs to the diff view alone - the markdown view already
+// wraps and the plain-text fallback keeps the file's own breaks. It is shown
+// only while a diff is on screen, and its pressed state mirrors `wrapLines`.
+function syncWrapToggle() {
+  const shown = Boolean(diffView);
+  previewWrapBtn.classList.toggle('hidden', !shown);
+  previewWrapBtn.classList.toggle('active', shown && wrapLines);
+  previewWrapBtn.setAttribute('aria-pressed', String(shown && wrapLines));
+}
 
 /** The view holds observers and a shiki highlighter - both are given back. */
 function disposeDiffView() {
@@ -43,6 +57,7 @@ function disposeDiffView() {
   try { diffView.cleanUp(); } catch (e) { logWarn('preview: diff view not cleanly disposed', { err: e }); }
   diffView = null;
   previewContent.classList.remove('is-diff');
+  syncWrapToggle();
 }
 
 /**
@@ -64,14 +79,22 @@ function renderDiffView(text, filePath) {
 
   previewContent.replaceChildren();
   previewContent.classList.add('is-diff');
-  diffView = new CodeView(DIFF_OPTIONS);
+  diffView = new CodeView({ ...DIFF_OPTIONS, overflow: wrapLines ? 'wrap' : 'scroll' });
   diffView.setup(previewContent);
   diffView.setItems([{ id: filePath, type: 'diff', fileDiff }]);
+  syncWrapToggle();
   return true;
 }
 
 export const previewOverlay = makeOverlay($('#preview-overlay'), $('#preview-close'), {
   onClose: disposeDiffView,
+});
+
+// Toggling rebuilds the view - `overflow` is fixed when the CodeView is created.
+previewWrapBtn.addEventListener('click', () => {
+  wrapLines = !wrapLines;
+  if (diffView) renderPreview();
+  else syncWrapToggle();
 });
 
 // Fetches a view and remembers it - switching between the modes should not go

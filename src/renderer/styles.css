@@ -1491,6 +1491,22 @@ button:active { transform: translateY(0.5px); }
   border-radius: 4px;
 }
 #preview-close:hover { color: var(--red); background: rgba(232, 131, 124, 0.12); }
+#preview-wrap {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 7px;
+  margin-right: 6px;
+  border-radius: 4px;
+}
+#preview-wrap:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+#preview-wrap.active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.09);
+}
 #preview-content {
   flex: 1;
   overflow: auto;
@@ -1520,21 +1536,64 @@ button:active { transform: translateY(0.5px); }
   font: inherit;
   white-space: pre;
 }
+/* The formatted view mirrors VS Code's Markdown preview: a GitHub-style
+   document on the panel background, wide with comfortable spacing rather than
+   the dense side-panel wording. The renderer offsets heading levels (`#`
+   becomes h3, `##` h4, ...), so the visual scale is pinned to the tag. */
 #preview-content > .pv-md {
   font-family: var(--sans);
-  font-size: 13px;
-  line-height: 1.65;
-  max-width: 78ch;
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 900px;
+  color: var(--text);
 }
-/* The .md rules are meant for the narrow panel; in the wide preview headings
-   may have size gradations again. */
-#preview-content .pv-md .md-h { margin: 18px 0 6px; color: var(--text); }
-#preview-content .pv-md h3.md-h { font-size: 18px; }
-#preview-content .pv-md h4.md-h { font-size: 15px; }
-#preview-content .pv-md h5.md-h { font-size: 13px; }
-#preview-content .pv-md .md-p { margin: 8px 0; }
-#preview-content .pv-md .md-list { margin: 8px 0 8px 20px; }
-#preview-content .pv-md .md-code { font-size: 12px; padding: 10px 12px; }
+#preview-content .pv-md .md-h {
+  margin: 24px 0 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text);
+}
+#preview-content .pv-md .md-h:first-child { margin-top: 0; }
+#preview-content .pv-md h3.md-h {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+#preview-content .pv-md h4.md-h {
+  font-size: 1.35em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+#preview-content .pv-md h5.md-h { font-size: 1.15em; }
+#preview-content .pv-md h6.md-h { font-size: 1em; color: var(--text-dim); }
+#preview-content .pv-md .md-p { margin: 0 0 16px; }
+#preview-content .pv-md .md-list { margin: 0 0 16px; padding-left: 2em; }
+#preview-content .pv-md .md-list li { margin: 4px 0; }
+#preview-content .pv-md .md-task { list-style: none; margin-left: -1.4em; }
+#preview-content .pv-md code {
+  font-size: 0.85em;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  border-radius: 4px;
+  padding: 0.2em 0.4em;
+}
+#preview-content .pv-md .md-code {
+  font-size: 0.85em;
+  line-height: 1.45;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin: 0 0 16px;
+}
+#preview-content .pv-md .md-quote {
+  margin: 0 0 16px;
+  padding: 0 1em;
+  border-left: 0.25em solid var(--border);
+  color: var(--text-dim);
+}
+#preview-content .pv-md .md-hr { height: 2px; margin: 24px 0; }
+#preview-content .pv-md a { color: var(--accent); text-decoration: none; }
+#preview-content .pv-md a:hover { text-decoration: underline; }
+#preview-content .pv-md strong { font-weight: 600; color: var(--text); }
 
 #preview-modes {
   display: flex;
