@@ -214,6 +214,8 @@ module.exports = {
   'preview.view': 'View',
   'preview.close': 'Close (Esc)',
   'preview.close.aria': 'Close preview',
+  'preview.wrap': 'Wrap lines',
+  'preview.wrap.aria': 'Wrap long lines',
   'preview.mode.diff': 'Diff',
   'preview.mode.file': 'File',
   'preview.mode.source': 'Source',
@@ -221,9 +223,7 @@ module.exports = {
   'preview.loading': '{path} (loading…)',
 
   // --- title/label popover ---
-  'meta.title': 'Title',
   'meta.label': 'Label',
-  'meta.title.placeholder': '(automatic)',
   'meta.label.placeholder': 'e.g. ticket no.',
   'meta.save': 'Save',
   'meta.cancel': 'Cancel',

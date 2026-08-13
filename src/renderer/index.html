@@ -113,6 +113,7 @@
       <div id="preview-header">
         <span id="preview-title"></span>
         <div id="preview-modes" role="tablist" data-i18n-aria="preview.view" aria-label="View"></div>
+        <button id="preview-wrap" class="hidden" aria-pressed="false" data-i18n-title="preview.wrap" data-i18n-aria="preview.wrap.aria" title="Wrap lines" aria-label="Wrap long lines">↵</button>
         <button id="preview-close" data-i18n-title="preview.close" data-i18n-aria="preview.close.aria" title="Close (Esc)" aria-label="Close preview">✕</button>
       </div>
       <div id="preview-content"></div>
@@ -175,7 +176,6 @@
 
   <!-- Popover: edit title/label -->
   <div id="meta-popover" class="hidden">
-    <label><span data-i18n="meta.title">Title</span> <input id="meta-title" type="text" data-i18n-placeholder="meta.title.placeholder" placeholder="(automatic)" /></label>
     <label><span data-i18n="meta.label">Label</span> <input id="meta-label" type="text" data-i18n-placeholder="meta.label.placeholder" placeholder="e.g. ticket no." /></label>
     <div class="popover-actions">
       <button id="meta-save" data-i18n="meta.save">Save</button>
