@@ -32,6 +32,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # checkJs over the main process and the i18n runtime (see jsconfig.json).
+      # A field that no longer exists or an argument in the wrong place is
+      # caught here, where neither the linter nor the tests look.
+      - run: npm run typecheck
       - run: npm test
       # The bundle is where a renderer import that resolves in the editor but
       # not in the build shows up. It needs Vite, not the Electron binary, so
