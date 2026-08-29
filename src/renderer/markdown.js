@@ -11,6 +11,7 @@ import { escapeHtml } from './dom.js';
 // attribute - an apostrophe cannot end the double-quoted value it sits in.
 // Everything else passes, unicode paths and IDN hosts included; a target that
 // fails keeps its literal [label](target) form instead of becoming an anchor.
+// eslint-disable-next-line security/detect-unsafe-regex -- anchored; each repeat of the outer group must start with a literal &amp;/&#39;, and & is excluded from the surrounding [^\s&<>"']* runs, so the star cannot re-split a run it already matched
 const MD_URL = /^https?:\/\/[^\s&<>"']*(?:(?:&amp;|&#39;)[^\s&<>"']*)*$/u;
 
 function mdInline(s) {

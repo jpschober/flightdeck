@@ -68,10 +68,10 @@ module.exports = [
       'security/detect-object-injection': 'off',
       // the regexes are literals in the sources, not built out of input;
       'security/detect-non-literal-regexp': 'off',
-      // safe-regex counts star height and reports nested quantifiers that are
-      // anchored and bounded here - sixteen of them, all in parsers whose
-      // input the callers have already collapsed;
-      'security/detect-unsafe-regex': 'off',
+      // safe-regex counts star height and reports nested quantifiers. The
+      // parser regexes it flags are anchored and bounded - each is disabled at
+      // its site with the reason - so the rule stays on to catch a new one.
+      'security/detect-unsafe-regex': 'error',
       // and reading a path that comes from somewhere else is what this app
       // does all day: the transcripts, migrations and repositories the user
       // points it at.
