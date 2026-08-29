@@ -249,8 +249,11 @@ const SERIAL_RE = /^(?:big|small)?serial[248]?$/i;
 function normalizeType(raw) {
   const t = squash(raw);
   if (!t) return '';
-  // Separate precision/array from the base name: `varchar(255)[]` -> `varchar` + rest
-  const m = /^([^([]+?)\s*((?:\(.*\))?(?:\s*\[[^\]]*\])*)$/.exec(t);
+  // Separate precision/array from the base name: `varchar(255)[]` -> `varchar` + rest.
+  // The base group ends on a non-whitespace char (`[^([\s]`) so the following `\s*`
+  // has no whitespace to backtrack over — linear regardless of the input, without
+  // relying on squash() above having collapsed it.
+  const m = /^([^([]*[^([\s])\s*((?:\(.*\))?(?:\s*\[[^\]]*\])*)$/.exec(t);
   if (!m) return t.toLowerCase();
   let base = squash(m[1]);
   const suffix = squash(m[2]).replace(/\s*\(\s*/, '(').replace(/\s*\)/, ')').replace(/\s*,\s*/g, ',');
