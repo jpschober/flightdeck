@@ -174,11 +174,26 @@ function readTailCustomTitle(filePath) {
   return null;
 }
 
+/**
+ * One transcript on disk. The `id`/`file`/`mtime`/`size` fields come from the
+ * directory scan; `cwd`/`slug`/`preview` are filled in later from the file's
+ * head via `Object.assign`, so they are optional until that step has run.
+ * @typedef {object} ClaudeSessionRecord
+ * @property {string} id
+ * @property {string} file
+ * @property {number} mtime
+ * @property {number} size
+ * @property {string|null} [cwd]
+ * @property {string|null} [slug]
+ * @property {string|null} [preview]
+ */
+
 function listClaudeSessions(limit = 200) {
   // The session browser is opened by hand and shows what is there right now, so
   // it reads the listing rather than taking one that is up to a minute old.
   const dirs = projectDirs({ fresh: true });
 
+  /** @type {ClaudeSessionRecord[]} */
   const found = [];
   for (const dir of dirs) {
     const dirPath = path.join(PROJECTS_DIR, dir);
@@ -259,6 +274,7 @@ function snapshotTranscripts(cwd) {
 // first. A newly created file is a reliable signal and therefore beats any
 // already existing one.
 function detectTranscript(cwd, snapshot, startedAt) {
+  /** @type {{ id: string, fresh: boolean, mtime: number } | null} */
   let best = null;
   eachTranscript(cwd, (id, stat) => {
     if (stat.size < 200 || stat.mtimeMs < startedAt) return;
@@ -277,6 +293,7 @@ function detectTranscript(cwd, snapshot, startedAt) {
 // of `claude --continue`. `before` masks out writes that only happened after
 // the start (such as the new session itself).
 function newestTranscript(cwd, before) {
+  /** @type {{ id: string, mtime: number } | null} */
   let best = null;
   eachTranscript(cwd, (id, stat) => {
     if (stat.size < 200) return;

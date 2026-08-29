@@ -156,6 +156,9 @@ function parseCredentials(raw, source) {
 // that yields no usable token is not the end of the search - the next one gets
 // its turn, and only if none of them delivers does the first complaint stand.
 async function readToken(force = false) {
+  // `read` is either synchronous (the file) or asynchronous (the keychain); the
+  // `await` in the loop below covers both, so the union keeps the array honest.
+  /** @type {{ name: string, read: () => string | null | Promise<string | null> }[]} */
   const sources = [{ name: 'file', read: readFile }];
   if (process.platform === 'darwin') {
     sources.push({ name: 'keychain', read: () => readKeychain(force) });
