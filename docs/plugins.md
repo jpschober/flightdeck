@@ -1,13 +1,14 @@
 # Plugins
 
-Two things in the panel depend on the technology in front of them: which agent
-CLI runs in a terminal, and how a project describes its database schema. Both
-go through plugins, so support for a further agent or a further schema source
-is one file plus one line in a list — the sensors, the IPC and the UI stay
-untouched. This is also the path along which the app is generalised: what used
-to be written for one setup is now the coverage of its plugins.
+Three things in the panel depend on the technology in front of them: which agent
+CLI runs in a terminal, which spec-driven workflow the session follows, and how
+a project describes its database schema. Each goes through plugins, so support
+for a further agent, workflow or schema source is one file plus one line in a
+list — the sensors, the IPC and the UI stay untouched. This is also the path
+along which the app is generalised: what used to be written for one setup is now
+the coverage of its plugins.
 
-Both registries detect the same way (`src/main/plugin-registry.js`): every
+All three registries detect the same way (`src/main/plugin-registry.js`): every
 plugin says whether it feels responsible and how sure it is, the most confident
 one wins, and a plugin that throws is skipped instead of taking the run down.
 
@@ -16,6 +17,7 @@ one wins, and a plugin that throws is skipped instead of taking the run down.
 | Agents | Claude Code | recognises itself by the bound session; counts running subagents and names their tasks |
 | Agents | Codex | command pattern only — keeps the busy/attention detection, counts nothing |
 | Agents | Aider | command pattern only |
+| Workflow | SDD (sdd-kit) | detects `.sdd-contract`; reads the current step of a `feature/<N>-` Vorgang from the disk markers and the phase file last read |
 | DB schema | Supabase | detects `supabase/config.toml` or `supabase/migrations/`, reads the schema by replaying the Postgres migrations |
 
 An agent plugin brings two things: the pattern that says its CLI is an agent at
@@ -25,9 +27,15 @@ reader that returns the standardised schema format; it reads through a file
 provider, so the same plugin also delivers the state of a git commit, which is
 what the before/after comparison compares against.
 
-Not there yet: Drizzle, Prisma and plain SQL migration folders as schema
-sources, and any database other than Postgres. Each of them fits the existing
-interface described below.
+A workflow plugin brings detection — does the repo follow this methodology? —
+and a reader that returns the step the session is in. A methodology is
+orthogonal to the agent CLI (it is not a command), so it is its own axis rather
+than a field on the agent plugin.
+
+Not there yet as workflows: spec-kit and other spec-driven flows. Not there yet
+as schema sources: Drizzle, Prisma and plain SQL migration folders, and any
+database other than Postgres. Each of them fits the existing interface described
+below.
 
 ## Agent plugins
 
@@ -100,6 +108,66 @@ new remainder. That makes the check every 4 s essentially free.
 All of this is undocumented internal format. If Claude Code changes it, nothing
 breaks: the plugin simply finds no agents and the chip disappears instead of
 becoming wrong.
+
+## Workflow plugins
+
+A spec-driven workflow moves a change through fixed steps, and knowing which one
+a session is in is worth a glance without opening the terminal. The chip on the
+tab names the step; it appears only while a run is active and stays out of the
+way otherwise.
+
+```
+src/main/workflow/index.js       Sensor: asks the plugins, picks the most confident one
+src/main/workflow/plugins/sdd.js sdd-kit: detection + step reading
+```
+
+The sensor knows nothing about Tore, phase files or `.sdd-contract` — only the
+interface:
+
+```js
+{
+  id, label,
+  detect(ctx) -> { confidence, evidence[] } | null,   // does this repo follow the workflow?
+  read(ctx)   -> { step: {...} | null },               // which step right now?
+}
+```
+
+`ctx` is what the refresh has already resolved for the terminal: `cwd`,
+`agentCwd`, `gitRoot`, `branch`, `pr`, and the bound Claude session and
+transcript. Like the agents sensor and unlike the schema sensor, nothing is
+cached here — "which step right now" is about this very moment, and the only
+expensive part (the incremental transcript scan) the plugin keeps to itself.
+`step` is `null` for a recognised workflow with no active run. Adding another
+workflow means: create a file under `plugins/`, register it in `PLUGINS`, done.
+
+### SDD plugin
+
+sdd-kit stamps a project with `.sdd-contract` at the repo root (`/sdd-init`);
+that file is the detection signal. A change runs as a *Vorgang* on a
+`feature/<N>-` branch and passes through five steps, each with a marker on disk
+and its own phase file that the orchestrator reads:
+
+| # | Step | Phase file | Disk marker |
+| --- | --- | --- | --- |
+| 1 | Spec (Schritt 0–2) | `phases/step-0-2.md` | `feature/<N>-`, `work/<N>/`, no marker, no PR |
+| 2 | Tor 1 | `phases/gate-1.md` | (the transcript alone places this) |
+| 3 | Build (Schritt 3) | `phases/step-3.md` | `work/<N>/.tor1-freigegeben` exists |
+| 4 | Tor 2 | `phases/gate-2.md` | PR open (non-draft) |
+| 5 | Merge (Schritt 4) | `phases/step-4.md` | PR merged |
+
+The step is a hybrid, taken as the **max** of two monotonic signals. The
+filesystem sets a *floor* — facts that have happened: the Tor-1 approval marker
+(`.tor1-freigegeben`, created only through a permission dialog), the open PR, the
+merge. The transcript sets the *live* position — the phase file the orchestrator
+last read, found by scanning for a `Read` of `implement-work-item/phases/*.md`.
+The transcript is what reveals "standing at Tor 1" before the marker exists and
+"entering Tor 2" before the PR does; the floor is what holds the step where a
+long stretch of implementation has pushed the last phase read far up the
+transcript. Their max moves the chip forward and never back.
+
+If sdd-kit changes its layout, `detect` stops matching and the chip disappears
+rather than turning wrong. The step logic is pinned in
+`test/workflow-sdd.test.js`.
 
 ## DB schema plugins
 

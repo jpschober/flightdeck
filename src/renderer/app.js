@@ -102,6 +102,7 @@ window.api.onInfo((info) => {
     agentCwd: info.agentCwd,
     worktree: info.worktree,
     agents: info.agents,
+    workflow: info.workflow,
     files: info.files,
     pr: info.pr,
     title: info.title,
