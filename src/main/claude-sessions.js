@@ -149,6 +149,31 @@ function readTailSlug(filePath) {
   }
 }
 
+// `/rename` is persisted separately from the generated slug. Read complete
+// JSONL records from the tail so an older generated slug cannot mask a newer
+// custom title, and so escaped quotes in a title are decoded correctly.
+function readTailCustomTitle(filePath) {
+  try {
+    const size = fs.statSync(filePath).size;
+    const readSize = Math.min(size, 65536);
+    const buf = Buffer.alloc(readSize);
+    const fd = fs.openSync(filePath, 'r');
+    fs.readSync(fd, buf, 0, readSize, size - readSize);
+    fs.closeSync(fd);
+    const lines = buf.toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let entry;
+      try { entry = JSON.parse(lines[i]); } catch { continue; }
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
+        return entry.customTitle;
+      }
+    }
+  } catch (e) {
+    log.debug('sessions: tail custom title not readable', { file: filePath, err: e });
+  }
+  return null;
+}
+
 function listClaudeSessions(limit = 200) {
   // The session browser is opened by hand and shows what is there right now, so
   // it reads the listing rather than taking one that is up to a minute old.
@@ -376,5 +401,7 @@ module.exports = {
   newestTranscript,
   findTranscriptById,
   readAgentCwd,
+  readTailSlug,
+  readTailCustomTitle,
   stopWatchingProjects,
 };

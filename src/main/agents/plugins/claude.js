@@ -33,7 +33,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { findTranscriptById } = require('../../claude-sessions');
+const { findTranscriptById, readTailSlug, readTailCustomTitle } = require('../../claude-sessions');
 const log = require('../../log');
 
 const id = 'claude';
@@ -310,4 +310,32 @@ function read(ctx) {
   return { agents };
 }
 
-module.exports = { id, label, commandPattern, detect, read };
+// Session-control hooks -----------------------------------------------------
+// These are deliberately optional plugin methods. The registry calls them only
+// after this plugin has claimed the terminal, so /clear and /rename remain
+// Claude details rather than becoming rules of the terminal implementation.
+function onInput(ctx, text) {
+  if (!/^\/clear(?:\s|$)/.test(text.trim())) return null;
+  return { clearHistory: true };
+}
+
+function commandForLabel(ctx, label) {
+  const clean = String(label || '').replace(/[\r\n\x00-\x1f\x7f]/g, ' ').trim();
+  // The normalized title travels back alongside the command: Claude stores
+  // `clean`, so that - not the raw request - is what the caller must expect to
+  // read back from the transcript and match its pending marker against.
+  return clean ? { command: `/rename ${clean}`, label: clean } : null;
+}
+
+function observeSession(ctx) {
+  const transcript = transcriptOf(ctx);
+  // Claude Code records `/rename` as a `custom-title` JSONL record; `slug` is
+  // only its generated session name and remains as the legacy fallback.
+  const label = transcript && (readTailCustomTitle(transcript) || readTailSlug(transcript));
+  return label ? { label } : null;
+}
+
+module.exports = {
+  id, label, commandPattern, detect, read,
+  onInput, commandForLabel, observeSession,
+};

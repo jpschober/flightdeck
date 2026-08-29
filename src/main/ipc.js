@@ -7,6 +7,7 @@ const {
   sessions, createSession, closeSession, refreshSession, ackOutput, gridPreview,
 } = require('./sessions');
 const { setState, feedInputRecon } = require('./session-state');
+const { commandForLabel } = require('./agents');
 const { previewFile } = require('./preview');
 const todoStore = require('./todos');
 const { getUsage } = require('./usage');
@@ -206,7 +207,36 @@ function registerIpc() {
     const s = sessions.get(id);
     if (!s) return;
     if ('title' in meta) s.title = meta.title || null;
-    if ('label' in meta) s.label = meta.label || null;
+    if ('label' in meta) {
+      const wanted = meta.label || null;
+      s.label = wanted;
+      // Mark the rename as pending *now*, on the value we are about to send.
+      // The command is built asynchronously, but the refresh below starts at
+      // once and Claude's redraw triggers more refreshes: without the marker
+      // set synchronously, one of them would mirror Claude's old title back
+      // over the label just set here - and the async assignment would then
+      // record that stale title as pending, freezing the mirror for good.
+      s.agentLabelPending = wanted;
+      // The plugin owns the command syntax and may decline entirely. Writing
+      // straight to the PTY bypasses reconstructed input history, so this UI
+      // action never appears as a prompt in the History panel.
+      Promise.resolve(commandForLabel(s, wanted)).then((result) => {
+        const command = result && result.command;
+        if (command && !s.exited) {
+          // Narrow the marker to the title Claude will actually store. The raw
+          // request and the plugin's normalized title usually agree (the popover
+          // already trims), but when they differ the mirror must match the
+          // stored value, or it stays frozen waiting for a title that never comes.
+          if (s.agentLabelPending === wanted) s.agentLabelPending = result.label;
+          try { s.proc.write(command + '\r'); } catch (err) { log.debug('session: label command not sent, session gone', { session: s.id, err }); }
+        } else if (s.agentLabelPending === wanted) {
+          // Nothing was sent - no agent that renames, or an empty label. Drop
+          // the marker so the mirror is not left waiting for a /rename that
+          // will never reach a transcript.
+          s.agentLabelPending = null;
+        }
+      });
+    }
     refreshSession(s, true);
   });
 

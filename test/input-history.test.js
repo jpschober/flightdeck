@@ -140,3 +140,11 @@ test('every entry carries an id of its own - the row is found again by it', () =
   assert.strictEqual(new Set(ids).size, ids.length, 'two entries share an id');
   assert.deepStrictEqual(s.history.map((h) => h.kind), ['shell', 'agent']);
 });
+
+test('Claude /clear empties the reconstructed input history', async () => {
+  const s = session({ currentCmd: 'claude', cwd: '/nonexistent-for-the-binding' });
+  type(s, 'first prompt\r', '/clear\r');
+  // Plugin controls run after the hot keyboard path has reconstructed its line.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepStrictEqual(texts(s), []);
+});

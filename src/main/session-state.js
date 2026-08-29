@@ -8,7 +8,7 @@ const {
   snapshotTranscripts, detectTranscript, newestTranscript, readAgentCwd,
   findTranscriptById,
 } = require('./claude-sessions');
-const { isAgentCommand } = require('./agents');
+const { isAgentCommand, onSessionInput } = require('./agents');
 const { OSC_ANY_RE, OSC_EVENT_RE } = require('./osc');
 const { send } = require('./window');
 const log = require('./log');
@@ -282,6 +282,12 @@ function addHistory(session, text, kind) {
   send('session:histadd', session.id, entry);
 }
 
+function clearHistory(session) {
+  if (!session.history.length) return;
+  session.history.length = 0;
+  send('session:histclear', session.id);
+}
+
 function feedInputRecon(session, data) {
   let buf = session.inputBuf;
   // Where in an escape sequence the last chunk ended: '' | 'esc' | 'csi'. The
@@ -306,6 +312,11 @@ function feedInputRecon(session, data) {
       if (session.cmdWatched) {
         session.agentPrompted = true;
         addHistory(session, text, 'agent');
+        // This is intentionally asynchronous: keyboard reconstruction remains
+        // on the PTY's hot path, while a plugin may inspect a transcript.
+        Promise.resolve(onSessionInput(session, text)).then((effect) => {
+          if (effect && effect.clearHistory) clearHistory(session);
+        });
       }
     } else if (ch === '\x7f' || ch === '\b') {
       buf = buf.slice(0, -1);
@@ -331,5 +342,5 @@ function feedInputRecon(session, data) {
 
 module.exports = {
   setState, setAttention, applyStateFromData,
-  updateAgentBinding, addHistory, feedInputRecon,
+  updateAgentBinding, addHistory, clearHistory, feedInputRecon,
 };
