@@ -80,6 +80,21 @@ the state detection for those CLIs, `detect()` returns `null` and they count
 nothing. What is watched and what is not is written down in
 `test/agent-commands.test.js`.
 
+Plugins may additionally implement session controls. The registry first uses
+the same `detect(ctx)` selection, then invokes only the winning plugin's
+optional hook:
+
+```js
+onInput(ctx, text)          // e.g. { clearHistory: true }
+commandForLabel(ctx, label) // slash command to send, or null
+observeSession(ctx)         // e.g. { label }, read from agent session state
+```
+
+The terminal and UI do not know any agent command syntax. Claude Code uses
+these hooks for `/clear` (empty Flightdeck's reconstructed input history) and
+`/rename` (keep the Claude session name and the tab label in sync). A new agent
+plugin can decline any hook simply by omitting it.
+
 ### Claude plugin
 
 Claude Code stores every subagent of a session as its own pair under

@@ -103,4 +103,45 @@ async function getAgentView(ctx) {
   return view;
 }
 
-module.exports = { getAgentView, isAgentCommand, PLUGINS };
+// Optional session controls use the same winner selection as the agent panel.
+// A plugin that does not implement either hook simply has nothing to control.
+// This keeps agent-specific commands out of the terminal and UI code.
+async function controlFor(ctx, hook, arg) {
+  const found = await detectAll(ctx);
+  const winner = found[0];
+  if (!winner || typeof winner.plugin[hook] !== 'function') return null;
+  try {
+    return await winner.plugin[hook](ctx, arg);
+  } catch (e) {
+    log.warn('agents: control failed', { plugin: winner.plugin.id, hook, session: ctx.claudeSessionId || null, err: e });
+    return null;
+  }
+}
+
+function sessionControlContext(session) {
+  return {
+    cwd: session.cwd,
+    agentCwd: session.agentCwd,
+    command: session.currentCmd,
+    claudeSessionId: session.claudeSessionId,
+    claudeTranscript: session.transcript && session.transcript.id === session.claudeSessionId
+      ? session.transcript.path : undefined,
+  };
+}
+
+async function onSessionInput(session, text) {
+  return controlFor(sessionControlContext(session), 'onInput', text);
+}
+
+async function commandForLabel(session, label) {
+  return controlFor(sessionControlContext(session), 'commandForLabel', label);
+}
+
+async function observeSession(session) {
+  return controlFor(sessionControlContext(session), 'observeSession');
+}
+
+module.exports = {
+  getAgentView, isAgentCommand, PLUGINS,
+  onSessionInput, commandForLabel, observeSession,
+};

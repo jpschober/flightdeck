@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('api', {
   onExit: (cb) => ipcRenderer.on('session:exit', (e, id) => cb(id)),
   onInfo: (cb) => ipcRenderer.on('session:info', (e, info) => cb(info)),
   onHistAdd: (cb) => ipcRenderer.on('session:histadd', (e, id, entry) => cb(id, entry)),
+  onHistClear: (cb) => ipcRenderer.on('session:histclear', (e, id) => cb(id)),
   onNotify: (cb) => ipcRenderer.on('session:notify', (e, id, message) => cb(id, message)),
   onTodosChanged: (cb) => ipcRenderer.on('todos:changed', (e, key, todos) => cb(key, todos)),
 });

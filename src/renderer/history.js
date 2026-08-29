@@ -97,3 +97,14 @@ window.api.onHistAdd((id, entry) => {
     if (id === activeId) updateBadges(s);
   }
 });
+
+window.api.onHistClear((id) => {
+  const s = sessions.get(id);
+  if (!s) return;
+  s.history = [];
+  s.unseenHist = 0;
+  if (id === activeId) {
+    renderHistory(s);
+    updateBadges(s);
+  }
+});

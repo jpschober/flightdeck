@@ -279,22 +279,18 @@ button:active { transform: translateY(0.5px); }
 .session-item.exited { opacity: 0.55; }
 
 .session-item:hover { background: var(--bg-hover); }
-/* Selection owns one channel: a clearly brighter fill plus an accent rail down
-   the left card edge. A rail reads as "this one is chosen" and cannot be
-   mistaken for the gold state ring the way a full border could. */
+/* Selection is the loudest thing in the list: a brighter fill, an accent rail
+   down the left card edge, and a full accent border around it. Waiting no
+   longer tints the card, so the border is the selection's alone and cannot be
+   read as anything else. */
 .session-item.active {
   background: var(--bg-active);
-  border-color: transparent;
+  border-color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);
 }
-/* Waiting owns a different channel: a warm tint plus the gold status dot, which
-   already glows (.si-status.attention). No card border, so "waiting" never
-   imitates "selected" - and an active, waiting card shows both at once (rail +
-   tint) without one state erasing the other. */
-.session-item.attention {
-  background: var(--attention-soft);
-  border-color: transparent;
-}
+/* Waiting is carried by the gold status dot alone (.si-status.attention, which
+   glows). The card keeps its own background - a tint here would compete with
+   the selected card's fill and border for the same "look at me". */
 
 .si-top {
   position: relative;
@@ -575,7 +571,9 @@ button:active { transform: translateY(0.5px); }
   transition: border-color var(--speed) var(--ease);
 }
 .grid-card:hover { border-color: var(--accent); }
-/* Same statement as .session-item.attention, and it outranks the hover border */
+/* Waiting shows as a gold border here, outranking the hover border. The grid is
+   a coarser overview than the session list, so the state rides the border the
+   card already has rather than the status dot the list carries. */
 .grid-card.attention, .grid-card.attention:hover { border-color: var(--attention); }
 .grid-card-header {
   display: flex;
@@ -1052,7 +1050,7 @@ button:active { transform: translateY(0.5px); }
   display: block;
   width: 100%;
   text-align: left;
-  padding: 12px 15px;
+  padding: 12px 15px 16px;
   border: none;
   border-top: 1px solid var(--border);
   background: none;
