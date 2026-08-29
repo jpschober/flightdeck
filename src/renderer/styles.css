@@ -393,6 +393,26 @@ button:active { transform: translateY(0.5px); }
   padding: 1px 6px;
   white-space: nowrap;
 }
+/* The step of a spec-driven workflow. Purple, not the agent chip's ice blue:
+   the two sit in the same row, and one signal reading as the other would make
+   both harder to trust at a glance. Like the agent chip, calm and unanimated -
+   it names where the work stands, not that something is happening. */
+.si-workflow {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--purple);
+  background: rgba(185, 166, 242, 0.14);
+  border-radius: 5px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+/* When both chips show, only the first one pushes off the title; the agent
+   chip then follows it directly instead of claiming the margin a second time.
+   Scoped to the visible workflow chip: while it is hidden the agent chip keeps
+   its own margin-left:auto and stays hard right. */
+.si-workflow:not(.hidden) + .si-agents { margin-left: 6px; }
 /* One line under the name: the branch if there is one, otherwise the directory.
    Both answer the same question - which working copy is this? - and two answers
    to it would push the subagents out of view. */

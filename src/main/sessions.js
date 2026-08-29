@@ -11,6 +11,7 @@ const { extractCwd } = require('./osc');
 const { applyStateFromData, updateAgentBinding } = require('./session-state');
 const { getGitInfo, getPrInfo } = require('./gitinfo');
 const { getAgentView } = require('./agents');
+const { getWorkflowView } = require('./workflow');
 const { alive, getWindow, send } = require('./window');
 const log = require('./log');
 
@@ -226,6 +227,7 @@ function createSession(shellId, opts = {}) {
     bindingExact: false,     // ID reported by the wrapper instead of guessed via timestamps
     agentCwd: null,          // the agent's working directory (a worktree, if any)
     agents: null,            // running subagents (from the agent sensor)
+    workflow: null,          // detected methodology + step (from the workflow sensor)
     bindingBase: null,
     transcriptSnapshot: null,
     claudeStartedAt: 0,
@@ -387,6 +389,12 @@ async function doRefresh(session, force, cwdAtStart) {
     agentCwd: session.agentCwd,
     command: session.currentCmd,
     claudeSessionId: session.claudeSessionId,
+    // Git state the refresh already resolved for gitCwd (the agent's worktree,
+    // if any): the workflow sensor reads the step from branch, root and PR
+    // rather than shelling out to git a second time.
+    gitRoot: session.gitRoot,
+    branch: session.branch,
+    pr: session.pr,
   };
   // The binding can have moved on while the git and PR lookups above were
   // running. The resolved path only travels with the ID it was resolved for;
@@ -395,6 +403,11 @@ async function doRefresh(session, force, cwdAtStart) {
     ctx.claudeTranscript = session.transcript.path;
   }
   session.agents = await getAgentView(ctx);
+  if (session.cwd !== cwdAtStart || session.exited) return;
+
+  // Does the session follow a spec-driven workflow, and which step is it in?
+  // A methodology is orthogonal to the agent CLI, so it has its own sensor.
+  session.workflow = await getWorkflowView(ctx);
   if (session.cwd !== cwdAtStart || session.exited) return;
 
   const shell = availableShells.find((s) => s.id === session.shellId);
@@ -410,6 +423,7 @@ async function doRefresh(session, force, cwdAtStart) {
     agentCwd: session.agentCwd,
     worktree: session.agentCwd ? path.basename(session.agentCwd) : null,
     agents: session.agents,
+    workflow: session.workflow,
     files: session.files,
     pr: session.pr,
     exited: session.exited,

@@ -47,6 +47,19 @@ module.exports = {
   'session.agents': { one: '{count} agente al lavoro', other: '{count} agenti al lavoro' },
   'session.agents.more': { one: '+{count} altro', other: '+{count} altri' },
 
+  // --- workflow chip (spec-driven development) ---
+  'workflow.sdd.step.spec': 'Spec',
+  'workflow.sdd.step.gate1': '🚦 Gate 1',
+  'workflow.sdd.step.build': 'Impl.',
+  'workflow.sdd.step.gate2': '🚦 Gate 2',
+  'workflow.sdd.step.merge': 'Merge',
+  'workflow.sdd.full.spec': 'Specifica (passi 0–2)',
+  'workflow.sdd.full.gate1': 'Gate 1 — approvazione spec',
+  'workflow.sdd.full.build': 'Implementazione (passo 3)',
+  'workflow.sdd.full.gate2': 'Gate 2 — revisione e PR',
+  'workflow.sdd.full.merge': 'Uniti (passo 4)',
+  'workflow.sdd.tip': 'SDD · attività #{vorgang} · {phase}',
+
   // --- git panel ---
   'git.heading.pr': 'Pull request',
   'git.heading.files': 'File modificati',

@@ -311,6 +311,7 @@ function buildSessionItem(s) {
       <span class="si-status"></span>
       <span class="si-title"></span>
       <span class="si-label hidden"></span>
+      <span class="si-workflow hidden"></span>
       <span class="si-agents hidden"></span>
     </div>
     <div class="si-bottom">
@@ -354,6 +355,7 @@ export function updateSessionItem(s) {
   const labelEl = el.querySelector('.si-label');
   labelEl.classList.toggle('hidden', !s.label);
   labelEl.textContent = s.label || '';
+  updateWorkflowChip(el.querySelector('.si-workflow'), s.workflow);
   updateAgentChip(el.querySelector('.si-agents'), s.agents);
   // Branch and directory answer the same question - which working copy is
   // this? Two answers to it would push the subagent rows out of the card.
@@ -367,6 +369,22 @@ export function updateSessionItem(s) {
   cwdEl.title = s.cwd || '';
   syncAgentRows(s);
   updateDeckStatus();
+}
+
+// Which step of a spec-driven workflow is this session in? The chip only
+// appears while a run is active (an sdd-kit Vorgang on a feature branch); a
+// session merely sitting in an SDD repo shows nothing. It carries a colour of
+// its own so it never reads as the agent count next to it.
+function updateWorkflowChip(el, workflow) {
+  if (!el) return;
+  const step = workflow && workflow.step;
+  el.classList.toggle('hidden', !step);
+  if (!step) { el.textContent = ''; el.title = ''; return; }
+  el.textContent = t('workflow.sdd.step.' + step.id);
+  el.title = t('workflow.sdd.tip', {
+    vorgang: step.vorgang,
+    phase: t('workflow.sdd.full.' + step.id),
+  });
 }
 
 // How many agents are working in this session? The chip only appears while
