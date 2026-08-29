@@ -64,6 +64,7 @@ function splitStatements(sql) {
     }
 
     if (ch === '$') {
+      // eslint-disable-next-line security/detect-unsafe-regex -- anchored, run against a 64-char slice, the identifier group is bounded by a literal $ on both sides
       const tag = /^\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$/.exec(sql.slice(i, i + 64));
       if (tag) {
         const close = sql.indexOf(tag[0], i + tag[0].length);
@@ -253,6 +254,7 @@ function normalizeType(raw) {
   // The base group ends on a non-whitespace char (`[^([\s]`) so the following `\s*`
   // has no whitespace to backtrack over — linear regardless of the input, without
   // relying on squash() above having collapsed it.
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; the base group ends on a non-space char, so the following \s* has no whitespace run to backtrack over (see #45)
   const m = /^([^([]*[^([\s])\s*((?:\(.*\))?(?:\s*\[[^\]]*\])*)$/.exec(t);
   if (!m) return t.toLowerCase();
   let base = squash(m[1]);
@@ -503,6 +505,7 @@ function parseColumnConstraints(text, column) {
       s = id ? id.rest.trimStart() : '';
       continue;
     }
+    // eslint-disable-next-line security/detect-unsafe-regex -- each alternative is anchored and matches a fixed keyword sequence; the \s+ between keywords is bounded by required literals, nothing ambiguous to backtrack over
     if ((m = /^(?:NOT\s+)?DEFERRABLE|^INITIALLY\s+(?:DEFERRED|IMMEDIATE)|^NO\s+INHERIT/i.exec(s))) {
       s = s.slice(m[0].length).trimStart();
       continue;
@@ -519,6 +522,7 @@ function parseColumnConstraints(text, column) {
 // ---------------------------------------------------------------------------
 // Table-level constraints
 // ---------------------------------------------------------------------------
+// eslint-disable-next-line security/detect-unsafe-regex -- anchored; the quoted-name group "(?:[^"]|"")*" has disjoint alternatives (quote vs. non-quote) closed by a required ", and the keyword alternation is a fixed set
 const TABLE_CONSTRAINT_RE = /^(?:CONSTRAINT\s+(?:"(?:[^"]|"")*"|[A-Za-z_][A-Za-z_0-9$]*)\s+)?(?:PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK|EXCLUDE)\b/i;
 
 function parseTableConstraint(text) {
@@ -538,6 +542,7 @@ function parseTableConstraint(text) {
     const list = readColumnList(s.slice(m[0].length));
     return list ? { kind: 'pk', name, columns: list.columns } : null;
   }
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; the optional NULLS DISTINCT clause is a fixed keyword sequence with \s+ bounded by required literals
   if ((m = /^UNIQUE(?:\s+NULLS\s+(?:NOT\s+)?DISTINCT)?/i.exec(s))) {
     const list = readColumnList(s.slice(m[0].length));
     return list ? { kind: 'unique', name, columns: list.columns } : null;
@@ -646,6 +651,7 @@ function alterTable(model, rest) {
 
   // RENAME is not an action list, it stands on its own
   let m;
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; optional clauses over a fixed keyword set, each \s+ bounded by required literals — no ambiguous whitespace to backtrack over
   if ((m = /^RENAME\s+(?:COLUMN\s+)?(?!TO\b|CONSTRAINT\b)/i.exec(s))) {
     const from = readIdent(s.slice(m[0].length));
     const to = from && readIdent(from.rest.trimStart().replace(/^TO\s+/i, ''));
@@ -711,6 +717,7 @@ function applyAlterAction(model, table, action) {
   const s = action.trimStart();
   let m;
 
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; optional clauses over a fixed keyword set, each \s+ bounded by required literals — no ambiguous whitespace to backtrack over
   if ((m = /^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?/i.exec(s))) {
     const body = s.slice(m[0].length);
     // ADD CONSTRAINT / ADD PRIMARY KEY is recognised by the keyword
@@ -734,12 +741,14 @@ function applyAlterAction(model, table, action) {
     return;
   }
 
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; optional clauses over a fixed keyword set, each \s+ bounded by required literals — no ambiguous whitespace to backtrack over
   if ((m = /^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?/i.exec(s))) {
     const id = readIdent(s.slice(m[0].length));
     if (id) table.constraints = table.constraints.filter((c) => c.name !== id.name);
     return;
   }
 
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; optional clauses over a fixed keyword set, each \s+ bounded by required literals — no ambiguous whitespace to backtrack over
   if ((m = /^DROP\s+(?:COLUMN\s+)?(?:IF\s+EXISTS\s+)?/i.exec(s))) {
     const id = readIdent(s.slice(m[0].length));
     if (!id) return;
@@ -752,6 +761,7 @@ function applyAlterAction(model, table, action) {
     return;
   }
 
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; optional clauses over a fixed keyword set, each \s+ bounded by required literals — no ambiguous whitespace to backtrack over
   if ((m = /^ALTER\s+(?:COLUMN\s+)?/i.exec(s))) {
     const id = readIdent(s.slice(m[0].length));
     if (!id) return;
@@ -759,6 +769,7 @@ function applyAlterAction(model, table, action) {
     if (!col) return;
     const tail = id.rest.trimStart();
     let a;
+    // eslint-disable-next-line security/detect-unsafe-regex -- anchored; optional clauses over a fixed keyword set, each \s+ bounded by required literals — no ambiguous whitespace to backtrack over
     if ((a = /^(?:SET\s+DATA\s+)?TYPE\s+/i.exec(tail))) {
       const after = tail.slice(a[0].length);
       const using = findTopLevel(after, /\bUSING\b/i);
@@ -804,6 +815,7 @@ function alterType(model, rest) {
     || [...model.enums.values()].find((x) => !q.schema && x.name === q.name);
   if (!e) return;
   let m;
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; optional clauses over a fixed keyword set, each \s+ bounded by required literals — no ambiguous whitespace to backtrack over
   if ((m = /^\s*ADD\s+VALUE\s+(?:IF\s+NOT\s+EXISTS\s+)?/i.exec(q.rest))) {
     const tail = q.rest.slice(m[0].length);
     const lit = /^'((?:[^']|'')*)'/.exec(tail.trimStart());
@@ -999,12 +1011,15 @@ function applyStatement(model, statement) {
   const s = statement.trimStart();
   let m;
 
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; the repeated group is a fixed keyword set each followed by a required \s+, terminated by the literal TABLE — no ambiguous whitespace to backtrack over
   if ((m = /^CREATE\s+(?:(?:UNLOGGED|TEMP|TEMPORARY|GLOBAL|LOCAL)\s+)*TABLE\b/i.exec(s))) return createTable(model, s.slice(m[0].length));
   if ((m = /^ALTER\s+TABLE\b/i.exec(s))) return alterTable(model, s.slice(m[0].length));
   if ((m = /^DROP\s+TABLE\b/i.exec(s))) return dropTable(model, s.slice(m[0].length));
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; the optional OR REPLACE clause is a fixed keyword sequence with \s+ bounded by required literals — no ambiguous whitespace to backtrack over
   if ((m = /^CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\b/i.exec(s))) return createType(model, s.slice(m[0].length));
   if ((m = /^ALTER\s+TYPE\b/i.exec(s))) return alterType(model, s.slice(m[0].length));
   if ((m = /^DROP\s+TYPE\b/i.exec(s))) return dropType(model, s.slice(m[0].length));
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored; the optional UNIQUE clause is a fixed keyword with \s+ bounded by required literals — no ambiguous whitespace to backtrack over
   if ((m = /^CREATE\s+(UNIQUE\s+)?INDEX\b/i.exec(s))) return createIndex(model, s.slice(m[0].length), Boolean(m[1]));
   if ((m = /^DROP\s+INDEX\b/i.exec(s))) return dropIndex(model, s.slice(m[0].length));
   if ((m = /^CREATE\s+POLICY\b/i.exec(s))) return createPolicy(model, s.slice(m[0].length));
