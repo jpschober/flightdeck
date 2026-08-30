@@ -23,7 +23,11 @@
 //   Stop     a <task-notification> in the transcript of the caller. The
 //            tool_result of the agent call is no good for this: agents run
 //            asynchronously, it only reports "launched successfully" and is
-//            already there three seconds after the start.
+//            already there three seconds after the start. The notification
+//            reaches the transcript in more than one shape - as a plain
+//            message when the caller was idle, or, when it was busy, queued
+//            and recorded as a `queue-operation` or a `queued_command`
+//            attachment. notificationText() reads all of them.
 //   Resume   a SendMessage to the same agent. Afterwards it is working again,
 //            and the previous completion message is spent.
 //
@@ -151,6 +155,22 @@ function messageText(entry) {
   return out;
 }
 
+// The <task-notification> that carries the stop signal does not always sit in
+// a message: when the caller is busy at the moment the agent finishes, the
+// harness queues the notification instead of delivering it, and it is recorded
+// as a `queue-operation` (text in `content`) or as an attachment of type
+// `queued_command` (text in `attachment.prompt`). All three carriers are read;
+// which one a given notification lands in depends only on timing, so relying on
+// the message form alone loses the stop for every agent that finishes mid-turn.
+function notificationText(entry) {
+  const msg = messageText(entry);
+  if (msg.includes('<task-notification>')) return msg;
+  if (typeof entry.content === 'string' && entry.content.includes('<task-notification>')) return entry.content;
+  const att = entry.attachment;
+  if (att && typeof att.prompt === 'string' && att.prompt.includes('<task-notification>')) return att.prompt;
+  return msg;
+}
+
 function applyLine(state, line) {
   // Pre-filter before parsing: the vast majority of lines are of no interest
   // to us, and running JSON.parse on each would be the most expensive part.
@@ -162,7 +182,7 @@ function applyLine(state, line) {
   const at = Date.parse(entry.timestamp) || Date.now();
 
   if (notif) {
-    const text = messageText(entry);
+    const text = notificationText(entry);
     const m = NOTIF_TASK_RE.exec(text);
     if (m) {
       // Every notification means "stops" - the status only says how. An agent
