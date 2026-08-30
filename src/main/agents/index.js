@@ -133,15 +133,7 @@ async function onSessionInput(session, text) {
   return controlFor(sessionControlContext(session), 'onInput', text);
 }
 
-async function commandForLabel(session, label) {
-  return controlFor(sessionControlContext(session), 'commandForLabel', label);
-}
-
-async function observeSession(session) {
-  return controlFor(sessionControlContext(session), 'observeSession');
-}
-
 module.exports = {
   getAgentView, isAgentCommand, PLUGINS,
-  onSessionInput, commandForLabel, observeSession,
+  onSessionInput,
 };

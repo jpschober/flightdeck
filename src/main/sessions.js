@@ -10,7 +10,7 @@ const { availableShells, shellName, spawnArgsFor } = require('./shells');
 const { extractCwd } = require('./osc');
 const { applyStateFromData, updateAgentBinding } = require('./session-state');
 const { getGitInfo, getPrInfo } = require('./gitinfo');
-const { getAgentView, observeSession } = require('./agents');
+const { getAgentView } = require('./agents');
 const { getWorkflowView } = require('./workflow');
 const { alive, getWindow, send } = require('./window');
 const log = require('./log');
@@ -212,8 +212,7 @@ function createSession(shellId, opts = {}) {
     proc,
     cwd,
     title: null,   // manually set title
-    label: null,   // manually set label
-    agentLabelPending: null, // tab label sent to an agent, awaiting its confirmation
+    label: null,   // manually set label - Flightdeck-local, not coupled to the agent
     oscTail: '',
     cwdCandidate: null,      // a reported directory whose stat is still running
     lastInfoJson: '',
@@ -410,21 +409,6 @@ async function doRefresh(session, force, cwdAtStart) {
   // A methodology is orthogonal to the agent CLI, so it has its own sensor.
   session.workflow = await getWorkflowView(ctx);
   if (session.cwd !== cwdAtStart || session.exited) return;
-
-  // A plugin may mirror agent-owned session metadata into Flightdeck. This is
-  // read-only from Flightdeck's side: in particular, a Claude /rename wins
-  // over the label currently shown on the tab.
-  const sessionEffect = await observeSession(session);
-  if (session.cwd !== cwdAtStart || session.exited) return;
-  if (sessionEffect && Object.prototype.hasOwnProperty.call(sessionEffect, 'label')) {
-    // A just-issued /rename can take a refresh interval to reach Claude's
-    // transcript. Keep the user's label meanwhile; a different later rename
-    // (including an automatic /rename) still takes effect normally.
-    if (!session.agentLabelPending || sessionEffect.label === session.agentLabelPending) {
-      session.label = sessionEffect.label || null;
-      session.agentLabelPending = null;
-    }
-  }
 
   const shell = availableShells.find((s) => s.id === session.shellId);
   const info = {
