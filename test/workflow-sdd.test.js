@@ -3,7 +3,12 @@
 //
 //   detect  -> is this repo stamped for SDD (.sdd-contract)?
 //   read    -> the highest durable trace present, top down: merged PR, open
-//              PR, the Tor-1 marker, the Tor-1 record line, else spec.
+//              PR, the Tor-1 approval (record SHA or marker = build), the
+//              finished draft (plan.md + tasks.md = Tor 1), else spec.
+//
+// The mapping follows sdd-kit's own phase table: the approved SHA in record.md
+// §4 is the *build* phase, and Tor 1 is the state before it - draft complete,
+// approval still open.
 //
 //   node --test test/workflow-sdd.test.js
 //
@@ -33,6 +38,13 @@ function writeRecord(root, n, body) {
 function writeMarker(root, n) {
   fs.mkdirSync(path.join(root, 'work', String(n)), { recursive: true });
   fs.writeFileSync(path.join(root, 'work', String(n), '.tor1-freigegeben'), '');
+}
+
+/** The finished spec draft: plan.md and tasks.md both present (Schritt 1c). */
+function writeDraft(root, n) {
+  fs.mkdirSync(path.join(root, 'work', String(n)), { recursive: true });
+  fs.writeFileSync(path.join(root, 'work', String(n), 'plan.md'), '# Plan\n');
+  fs.writeFileSync(path.join(root, 'work', String(n), 'tasks.md'), '# Tasks\n');
 }
 
 function step(ctx) {
@@ -74,30 +86,40 @@ test('read: a feature branch with nothing yet is Spec, and carries the Vorgang n
   assert.equal(s.vorgang, 42);
 });
 
-test('read: a work/<N>/ without the record line is still Spec', () => {
+test('read: a drafting Vorgang (no plan/tasks yet) is still Spec', () => {
   const root = tmpRepo();
-  writeRecord(root, 42, '# Record\n\n## §1 Auftrag\n...\n'); // no "Freigegebener Stand:"
+  writeRecord(root, 42, '# Record\n\n## §1 Auftrag\n...\n'); // record.md exists from the start; the draft does not stand yet
   assert.equal(step({ branch: 'feature/42-thing', gitRoot: root }).id, 'spec');
 });
 
-test('read: the Tor-1 record line places the session at Tor 1 before any marker', () => {
+test('read: the finished draft (plan + tasks), approval still open, is Tor 1', () => {
   const root = tmpRepo();
-  writeRecord(root, 42, '## §4 Freigabe\n\nFreigegebener Stand: a1b2c3d\nFreigabe: durch den Menschen\n');
+  writeDraft(root, 42);
+  writeRecord(root, 42, '## §4\n\n- **Freigegebener Stand:** … (noch offen)\n'); // the template placeholder, no SHA
   const s = step({ branch: 'feature/42-thing', gitRoot: root });
   assert.equal(s.id, 'gate1');
   assert.equal(s.index, 2);
 });
 
-test('read: a merely quoted record line does not count as the record', () => {
+test('read: the approved SHA in the record is Build, not Tor 1', () => {
   const root = tmpRepo();
-  writeRecord(root, 42, '> Freigegebener Stand: a1b2c3d\n'); // a quotation, not the record
-  assert.equal(step({ branch: 'feature/42-thing', gitRoot: root }).id, 'spec');
+  writeDraft(root, 42);
+  writeRecord(root, 42, '## §4 Freigabe\n\nFreigegebener Stand: a1b2c3d\nFreigabe: durch den Menschen\n');
+  const s = step({ branch: 'feature/42-thing', gitRoot: root });
+  assert.equal(s.id, 'build');
+  assert.equal(s.index, 3);
 });
 
-test('read: the Tor-1 marker lifts the step to Build, over the record', () => {
+test('read: a merely quoted record line is not the approval, so a finished draft stays at Tor 1', () => {
   const root = tmpRepo();
-  writeRecord(root, 42, 'Freigegebener Stand: a1b2c3d\n');
-  writeMarker(root, 42);
+  writeDraft(root, 42);
+  writeRecord(root, 42, '> Freigegebener Stand: a1b2c3d\n'); // a quotation, not the approval
+  assert.equal(step({ branch: 'feature/42-thing', gitRoot: root }).id, 'gate1');
+});
+
+test('read: the Tor-1 marker alone is the approval and lifts the step to Build', () => {
+  const root = tmpRepo();
+  writeMarker(root, 42); // the marker is the approval by a second route; no SHA needed
   assert.equal(step({ branch: 'feature/42-thing', gitRoot: root }).id, 'build');
 });
 
@@ -115,9 +137,10 @@ test('read: a draft PR does not lift the step by itself', () => {
 });
 
 test('read: the ladder takes the highest trace even when a lower one is also present', () => {
-  // Marker present (build) and the record line present (gate1): the higher of
-  // the two wins, and the merged PR above both wins over the marker.
+  // Draft, approval and PR all present: the merged PR at the top of the ladder
+  // wins over the build traces (marker/SHA) below it.
   const root = tmpRepo();
+  writeDraft(root, 42);
   writeRecord(root, 42, 'Freigegebener Stand: a1b2c3d\n');
   writeMarker(root, 42);
   assert.equal(step({ branch: 'feature/42-thing', gitRoot: root, pr: { state: 'MERGED' } }).id, 'merge');
