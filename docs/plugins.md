@@ -17,7 +17,7 @@ one wins, and a plugin that throws is skipped instead of taking the run down.
 | Agents | Claude Code | recognises itself by the bound session; counts running subagents and names their tasks |
 | Agents | Codex | command pattern only — keeps the busy/attention detection, counts nothing |
 | Agents | Aider | command pattern only |
-| Workflow | SDD (sdd-kit) | detects `.sdd-contract`; reads the current step of a `feature/<N>-` Vorgang from the disk markers and the phase file last read |
+| Workflow | SDD (sdd-kit) | detects `.sdd-contract`; reads the current step of a `feature/<N>-` Vorgang from the highest durable trace on disk / in the PR |
 | DB schema | Supabase | detects `supabase/config.toml` or `supabase/migrations/`, reads the schema by replaying the Postgres migrations |
 
 An agent plugin brings two things: the pattern that says its CLI is an agent at
@@ -150,35 +150,38 @@ interface:
 `ctx` is what the refresh has already resolved for the terminal: `cwd`,
 `agentCwd`, `gitRoot`, `branch`, `pr`, and the bound Claude session and
 transcript. Like the agents sensor and unlike the schema sensor, nothing is
-cached here — "which step right now" is about this very moment, and the only
-expensive part (the incremental transcript scan) the plugin keeps to itself.
-`step` is `null` for a recognised workflow with no active run. Adding another
-workflow means: create a file under `plugins/`, register it in `PLUGINS`, done.
+cached here — "which step right now" is about this very moment, read fresh from
+disk and the PR. `step` is `null` for a recognised workflow with no active run.
+Adding another workflow means: create a file under `plugins/`, register it in
+`PLUGINS`, done.
 
 ### SDD plugin
 
 sdd-kit stamps a project with `.sdd-contract` at the repo root (`/sdd-init`);
 that file is the detection signal. A change runs as a *Vorgang* on a
-`feature/<N>-` branch and passes through five steps, each with a marker on disk
-and its own phase file that the orchestrator reads:
+`feature/<N>-` branch and passes through five steps, each leaving a *durable*
+trace on disk or in the PR — one that outlives the session that made it:
 
-| # | Step | Phase file | Disk marker |
-| --- | --- | --- | --- |
-| 1 | Spec (Schritt 0–2) | `phases/step-0-2.md` | `feature/<N>-`, `work/<N>/`, no marker, no PR |
-| 2 | Tor 1 | `phases/gate-1.md` | (the transcript alone places this) |
-| 3 | Build (Schritt 3) | `phases/step-3.md` | `work/<N>/.tor1-freigegeben` exists |
-| 4 | Tor 2 | `phases/gate-2.md` | PR open (non-draft) |
-| 5 | Merge (Schritt 4) | `phases/step-4.md` | PR merged |
+| # | Step | Durable trace |
+| --- | --- | --- |
+| 1 | Spec (Schritt 0–2) | `feature/<N>-`, `work/<N>/`, nothing below yet |
+| 2 | Tor 1 | `work/<N>/record.md` carries a `Freigegebener Stand: <sha>` line |
+| 3 | Build (Schritt 3) | `work/<N>/.tor1-freigegeben` exists |
+| 4 | Tor 2 | PR open (non-draft) — `work/<N>/` is deleted on entry |
+| 5 | Merge (Schritt 4) | PR merged |
 
-The step is a hybrid, taken as the **max** of two monotonic signals. The
-filesystem sets a *floor* — facts that have happened: the Tor-1 approval marker
-(`.tor1-freigegeben`, created only through a permission dialog), the open PR, the
-merge. The transcript sets the *live* position — the phase file the orchestrator
-last read, found by scanning for a `Read` of `implement-work-item/phases/*.md`.
-The transcript is what reveals "standing at Tor 1" before the marker exists and
-"entering Tor 2" before the PR does; the floor is what holds the step where a
-long stretch of implementation has pushed the last phase read far up the
-transcript. Their max moves the chip forward and never back.
+The step is the **highest trace present**, read as a priority ladder from the
+top down. Every trace is a fact that stays put once the flow passes it — the
+record line, the Tor-1 approval marker (`.tor1-freigegeben`, created only
+through a permission dialog), the open PR, the merge — so the ladder only moves
+forward without remembering a previous position. The Tor-1 line is recognised
+the same way sdd-kit's own `check-process-integrity.py` recognises it (a
+`Freigegebener Stand:` line, not a `>`-quotation of it).
+
+An earlier version read the live phase from the phase file the bound transcript
+last opened. A Vorgang runs across several sessions (spec in one, build in
+another, the gates in a third), so that signal dropped whenever the reading
+session was not the one on screen — the disk trace does not.
 
 If sdd-kit changes its layout, `detect` stops matching and the chip disappears
 rather than turning wrong. The step logic is pinned in

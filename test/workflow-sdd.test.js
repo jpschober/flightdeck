@@ -2,15 +2,13 @@
 // The step an sdd-kit session is in, read the way the tab reads it:
 //
 //   detect  -> is this repo stamped for SDD (.sdd-contract)?
-//   read    -> filesystem floor (marker, PR, merge) lifted by the transcript
-//              (the phase file the orchestrator last read), their max.
+//   read    -> the highest durable trace present, top down: merged PR, open
+//              PR, the Tor-1 marker, the Tor-1 record line, else spec.
 //
 //   node --test test/workflow-sdd.test.js
 //
 // The plugin touches the disk, so the fixtures are real: a temp repo root for
-// the contract and the Tor-1 marker, and a real JSONL transcript for the phase
-// reads. Passing `claudeTranscript` explicitly keeps it off the user's actual
-// ~/.claude tree.
+// the contract, the work/<N>/ artifacts and the Tor-1 marker.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -25,32 +23,20 @@ function tmpRepo() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sdd-'));
 }
 
-/** A transcript with one assistant Read per phase file named, in order. */
-function transcriptReading(...phaseNames) {
-  const file = path.join(tmpRepo(), 'session.jsonl');
-  appendReads(file, ...phaseNames);
-  return file;
+/** Write work/<N>/record.md with the given body, creating the dir. */
+function writeRecord(root, n, body) {
+  fs.mkdirSync(path.join(root, 'work', String(n)), { recursive: true });
+  fs.writeFileSync(path.join(root, 'work', String(n), 'record.md'), body);
 }
 
-function appendReads(file, ...phaseNames) {
-  const lines = phaseNames.map((name, i) => JSON.stringify({
-    type: 'assistant',
-    timestamp: new Date(2026, 0, 1, 0, 0, i).toISOString(),
-    message: {
-      role: 'assistant',
-      content: [{
-        type: 'tool_use',
-        name: 'Read',
-        input: { file_path: `/kit/plugins/sdd/skills/implement-work-item/phases/${name}` },
-      }],
-    },
-  }));
-  fs.appendFileSync(file, lines.join('\n') + '\n');
+/** Lay down the Tor-1 approval marker for Vorgang N. */
+function writeMarker(root, n) {
+  fs.mkdirSync(path.join(root, 'work', String(n)), { recursive: true });
+  fs.writeFileSync(path.join(root, 'work', String(n), '.tor1-freigegeben'), '');
 }
 
-/** A step read with no transcript in play - the filesystem floor alone. */
-function stepFromFs(ctx) {
-  return sdd.read({ claudeTranscript: null, ...ctx }).step;
+function step(ctx) {
+  return sdd.read(ctx).step;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,98 +57,70 @@ test('detect: no contract, no responsibility', () => {
 });
 
 // ---------------------------------------------------------------------------
-// read - filesystem floor
+// read - the durable ladder
 // ---------------------------------------------------------------------------
 
 test('read: off a feature branch there is no active Vorgang', () => {
-  assert.equal(stepFromFs({ branch: 'main', gitRoot: tmpRepo() }), null);
-  assert.equal(stepFromFs({ branch: 'fix/some-bug', gitRoot: tmpRepo() }), null);
-  assert.equal(stepFromFs({ branch: null, gitRoot: tmpRepo() }), null);
+  assert.equal(step({ branch: 'main', gitRoot: tmpRepo() }), null);
+  assert.equal(step({ branch: 'fix/some-bug', gitRoot: tmpRepo() }), null);
+  assert.equal(step({ branch: null, gitRoot: tmpRepo() }), null);
 });
 
 test('read: a feature branch with nothing yet is Spec, and carries the Vorgang number', () => {
-  const step = stepFromFs({ branch: 'feature/42-thing', gitRoot: tmpRepo() });
-  assert.equal(step.id, 'spec');
-  assert.equal(step.index, 1);
-  assert.equal(step.total, 5);
-  assert.equal(step.vorgang, 42);
+  const s = step({ branch: 'feature/42-thing', gitRoot: tmpRepo() });
+  assert.equal(s.id, 'spec');
+  assert.equal(s.index, 1);
+  assert.equal(s.total, 5);
+  assert.equal(s.vorgang, 42);
 });
 
-test('read: the Tor-1 marker lifts the floor to Build', () => {
+test('read: a work/<N>/ without the record line is still Spec', () => {
   const root = tmpRepo();
-  fs.mkdirSync(path.join(root, 'work', '42'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'work', '42', '.tor1-freigegeben'), '');
-  assert.equal(stepFromFs({ branch: 'feature/42-thing', gitRoot: root }).id, 'build');
+  writeRecord(root, 42, '# Record\n\n## §1 Auftrag\n...\n'); // no "Freigegebener Stand:"
+  assert.equal(step({ branch: 'feature/42-thing', gitRoot: root }).id, 'spec');
+});
+
+test('read: the Tor-1 record line places the session at Tor 1 before any marker', () => {
+  const root = tmpRepo();
+  writeRecord(root, 42, '## §4 Freigabe\n\nFreigegebener Stand: a1b2c3d\nFreigabe: durch den Menschen\n');
+  const s = step({ branch: 'feature/42-thing', gitRoot: root });
+  assert.equal(s.id, 'gate1');
+  assert.equal(s.index, 2);
+});
+
+test('read: a merely quoted record line does not count as the record', () => {
+  const root = tmpRepo();
+  writeRecord(root, 42, '> Freigegebener Stand: a1b2c3d\n'); // a quotation, not the record
+  assert.equal(step({ branch: 'feature/42-thing', gitRoot: root }).id, 'spec');
+});
+
+test('read: the Tor-1 marker lifts the step to Build, over the record', () => {
+  const root = tmpRepo();
+  writeRecord(root, 42, 'Freigegebener Stand: a1b2c3d\n');
+  writeMarker(root, 42);
+  assert.equal(step({ branch: 'feature/42-thing', gitRoot: root }).id, 'build');
 });
 
 test('read: an open non-draft PR is Tor 2; a merged PR is Merge', () => {
   const base = { branch: 'feature/42-thing', gitRoot: tmpRepo() };
-  assert.equal(stepFromFs({ ...base, pr: { state: 'OPEN', isDraft: false } }).id, 'gate2');
-  assert.equal(stepFromFs({ ...base, pr: { state: 'MERGED' } }).id, 'merge');
+  assert.equal(step({ ...base, pr: { state: 'OPEN', isDraft: false } }).id, 'gate2');
+  assert.equal(step({ ...base, pr: { state: 'MERGED' } }).id, 'merge');
 });
 
-test('read: a draft PR does not lift the floor by itself', () => {
-  // A draft PR can stand open for the Tor-1 approval; the transcript, not the
-  // PR, is what then places Tor 2.
-  const step = stepFromFs({ branch: 'feature/42-thing', gitRoot: tmpRepo(), pr: { state: 'OPEN', isDraft: true } });
-  assert.equal(step.id, 'spec');
+test('read: a draft PR does not lift the step by itself', () => {
+  // The PR that defines Tor 2 is opened non-draft in gate-2.md; a draft PR is
+  // not that signal, so the step still rests on the disk traces below it.
+  const s = step({ branch: 'feature/42-thing', gitRoot: tmpRepo(), pr: { state: 'OPEN', isDraft: true } });
+  assert.equal(s.id, 'spec');
 });
 
-// ---------------------------------------------------------------------------
-// read - transcript refinement, and the max of the two
-// ---------------------------------------------------------------------------
-
-test('read: reading gate-1.md places the session at Tor 1 before any marker', () => {
-  const step = sdd.read({
-    branch: 'feature/42-thing',
-    gitRoot: tmpRepo(),
-    claudeTranscript: transcriptReading('step-0-2.md', 'gate-1.md'),
-  }).step;
-  assert.equal(step.id, 'gate1');
-  assert.equal(step.index, 2);
-});
-
-test('read: reading gate-2.md shows Tor 2 even before the PR exists', () => {
+test('read: the ladder takes the highest trace even when a lower one is also present', () => {
+  // Marker present (build) and the record line present (gate1): the higher of
+  // the two wins, and the merged PR above both wins over the marker.
   const root = tmpRepo();
-  fs.mkdirSync(path.join(root, 'work', '42'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'work', '42', '.tor1-freigegeben'), ''); // floor = build
-  const step = sdd.read({
-    branch: 'feature/42-thing',
-    gitRoot: root,
-    claudeTranscript: transcriptReading('step-3.md', 'gate-2.md'),
-  }).step;
-  assert.equal(step.id, 'gate2');
-});
-
-test('read: the floor wins when the transcript points further back', () => {
-  // Marker present (build), but the last phase read is step-0-2 - the flow only
-  // moves forward, so the max keeps it at Build.
-  const root = tmpRepo();
-  fs.mkdirSync(path.join(root, 'work', '42'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'work', '42', '.tor1-freigegeben'), '');
-  const step = sdd.read({
-    branch: 'feature/42-thing',
-    gitRoot: root,
-    claudeTranscript: transcriptReading('gate-1.md', 'step-0-2.md'),
-  }).step;
-  assert.equal(step.id, 'build');
-});
-
-test('read: a later phase read advances the step on the next pass (incremental scan)', () => {
-  const file = transcriptReading('step-0-2.md');
-  const ctx = { branch: 'feature/42-thing', gitRoot: tmpRepo(), claudeTranscript: file };
-  assert.equal(sdd.read(ctx).step.id, 'spec');
-  appendReads(file, 'gate-1.md');
-  assert.equal(sdd.read(ctx).step.id, 'gate1');
-});
-
-test('read: a file merely named like a phase file elsewhere is ignored', () => {
-  const file = path.join(tmpRepo(), 'session.jsonl');
-  fs.writeFileSync(file, JSON.stringify({
-    message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/repo/notes/step-3.md' } }] },
-  }) + '\n');
-  const step = sdd.read({ branch: 'feature/42-thing', gitRoot: tmpRepo(), claudeTranscript: file }).step;
-  assert.equal(step.id, 'spec'); // not build
+  writeRecord(root, 42, 'Freigegebener Stand: a1b2c3d\n');
+  writeMarker(root, 42);
+  assert.equal(step({ branch: 'feature/42-thing', gitRoot: root, pr: { state: 'MERGED' } }).id, 'merge');
 });
 
 // ---------------------------------------------------------------------------
@@ -172,21 +130,21 @@ test('read: a file merely named like a phase file elsewhere is ignored', () => {
 test('getWorkflowView: a stamped repo on a feature branch reports plugin and step', async () => {
   const root = tmpRepo();
   fs.writeFileSync(path.join(root, '.sdd-contract'), '2');
-  const view = await getWorkflowView({ gitRoot: root, branch: 'feature/7-x', claudeTranscript: null });
+  const view = await getWorkflowView({ gitRoot: root, branch: 'feature/7-x' });
   assert.equal(view.plugin.id, 'sdd');
   assert.equal(view.step.id, 'spec');
   assert.equal(view.step.vorgang, 7);
 });
 
 test('getWorkflowView: a non-SDD repo is nobody\'s business', async () => {
-  const view = await getWorkflowView({ gitRoot: tmpRepo(), branch: 'feature/7-x', claudeTranscript: null });
+  const view = await getWorkflowView({ gitRoot: tmpRepo(), branch: 'feature/7-x' });
   assert.equal(view, null);
 });
 
 test('getWorkflowView: a stamped repo with no active Vorgang has a plugin but no step', async () => {
   const root = tmpRepo();
   fs.writeFileSync(path.join(root, '.sdd-contract'), '2');
-  const view = await getWorkflowView({ gitRoot: root, branch: 'main', claudeTranscript: null });
+  const view = await getWorkflowView({ gitRoot: root, branch: 'main' });
   assert.equal(view.plugin.id, 'sdd');
   assert.equal(view.step, null);
 });
