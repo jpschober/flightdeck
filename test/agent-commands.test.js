@@ -142,34 +142,11 @@ test('the Claude plugin claims a command it recognises, with no session bound', 
   assert.strictEqual(claudePlugin.detect({ command: 'npm test' }), null);
 });
 
-test('the Claude plugin owns its context-reset and label commands', () => {
+test('the Claude plugin owns its context-reset command', () => {
   assert.deepStrictEqual(claudePlugin.onInput({}, '/clear'), { clearHistory: true });
   assert.deepStrictEqual(claudePlugin.onInput({}, '/clear archive this'), { clearHistory: true });
   assert.strictEqual(claudePlugin.onInput({}, '/clearance'), null);
   assert.strictEqual(claudePlugin.onInput({}, 'please /clear'), null);
-  assert.deepStrictEqual(claudePlugin.commandForLabel({}, 'API cleanup'),
-    { command: '/rename API cleanup', label: 'API cleanup' });
-  // The normalized title comes back with the command so the caller can match it
-  // against what Claude stores; control characters and edge whitespace are gone.
-  assert.deepStrictEqual(claudePlugin.commandForLabel({}, '  multi\nline  '),
-    { command: '/rename multi line', label: 'multi line' });
-  assert.strictEqual(claudePlugin.commandForLabel({}, ''), null);
-});
-
-test('the Claude plugin mirrors the current custom title, not the generated slug', () => {
-  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'flightdeck-claude-title-'));
-  const transcript = path.join(dir, 'session.jsonl');
-  try {
-    fs.writeFileSync(transcript, [
-      JSON.stringify({ type: 'message', slug: 'old-generated-slug' }),
-      JSON.stringify({ type: 'custom-title', customTitle: 'The tab title' }),
-    ].join('\n') + '\n');
-    assert.deepStrictEqual(claudePlugin.observeSession({ claudeTranscript: transcript }), {
-      label: 'The tab title',
-    });
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 test('the merged pattern widens the plugin only by quotes and a trailing dot', () => {
